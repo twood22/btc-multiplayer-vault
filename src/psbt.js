@@ -1,14 +1,10 @@
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { AMOUNTS, RECOVERY_DELAY_BLOCKS } from './config.js';
-import { taggedHashHex } from './crypto.js';
+import { keyAggSecret, taggedHashHex } from './crypto.js';
 import { policyId, roundId } from './vault.js';
 
 bitcoin.initEccLib(ecc);
-
-const SECP_ORDER = BigInt(
-  '0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141',
-);
 
 export function buildFundingPsbt({ state, inputs, feeSats = 0 }) {
   const participantIds = state.participants.map((participant) => participant.id);
@@ -248,7 +244,13 @@ export function signSoloWithdrawalPsbt({ state, currentIds, leaverId, psbtBase64
     (item) => Buffer.from(item.script).toString('hex') === leaf.scriptHex,
   );
   if (!psbtLeaf) throw new Error(`PSBT does not contain ${leaverId} solo leaf for ${round}`);
-  psbt.signTaprootInput(0, taprootScriptSigner(participant.sigbash));
+  const roundSigbashKey = participant.sigbashByRound[round];
+  if (roundSigbashKey.isLiveKey) {
+    throw new Error(
+      `${leaverId} uses a live Sigbash leaf key for ${round}; sign with sigbash-sign-psbt instead of the local model`,
+    );
+  }
+  psbt.signTaprootInput(0, taprootScriptSigner(roundSigbashKey));
   const signaturesValid = psbt.validateSignaturesOfInput(0, (pubkey, hash, signature) =>
     ecc.verifySchnorr(hash, pubkey, signature),
   );
@@ -266,7 +268,14 @@ export function signSoloWithdrawalPsbt({ state, currentIds, leaverId, psbtBase64
   };
 }
 
-export function buildCooperativeExitPsbt({ state, currentIds, txid, vout, valueSats }) {
+export function buildCooperativeExitPsbt({
+  state,
+  currentIds,
+  txid,
+  vout,
+  valueSats,
+  feeSats = AMOUNTS.cooperativeFee,
+}) {
   const round = roundId(currentIds);
   const vault = state.vaults.get(round);
   if (!vault) throw new Error(`unknown vault round ${round}`);
@@ -275,6 +284,12 @@ export function buildCooperativeExitPsbt({ state, currentIds, txid, vout, valueS
     if (!participant) throw new Error(`unknown participant ${id}`);
     return participant;
   });
+  // The pot is split equally after a small miner fee (a zero-fee transaction
+  // is consensus-valid but will not relay). For the round-one vault this is
+  // each participant's full 1 BTC deposit minus ~300 sats; for a pair round it
+  // also returns the departed player's haircut instead of burning it to fees.
+  const refundSats = Math.floor((valueSats - feeSats) / current.length);
+  if (refundSats <= 0) throw new Error('cooperative refund is not positive after fee');
 
   const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
   psbt.addInput({
@@ -289,7 +304,7 @@ export function buildCooperativeExitPsbt({ state, currentIds, txid, vout, valueS
   for (const participant of current) {
     psbt.addOutput({
       address: participant.payoutAddress,
-      value: BigInt(AMOUNTS.deposit),
+      value: BigInt(refundSats),
     });
   }
 
@@ -303,9 +318,9 @@ export function buildCooperativeExitPsbt({ state, currentIds, txid, vout, valueS
       outputs: current.map((participant, index) => ({
         index,
         address: participant.payoutAddress,
-        valueSats: AMOUNTS.deposit,
+        valueSats: refundSats,
       })),
-      feeSats: valueSats - AMOUNTS.deposit * current.length,
+      feeSats: valueSats - refundSats * current.length,
     },
   };
 }
@@ -568,12 +583,40 @@ export function signRecoveryPsbt({
     ecc.verifySchnorr(hash, pubkey, signature),
   );
   if (!signaturesValid) throw new Error('recovery signature validation failed');
-  const signatureCount = psbt.data.inputs[0].tapScriptSig?.length || 0;
-  if (signatureCount < leaf.threshold) {
-    throw new Error(`recovery has ${signatureCount} signature(s), threshold is ${leaf.threshold}`);
+  const tapScriptSig = psbt.data.inputs[0].tapScriptSig || [];
+  const signatureByPubkey = new Map(
+    tapScriptSig.map((item) => [Buffer.from(item.pubkey).toString('hex'), Buffer.from(item.signature)]),
+  );
+  const availableCount = leaf.recoveryXonlyPubkeys.filter((pubkey) =>
+    signatureByPubkey.has(pubkey),
+  ).length;
+  if (availableCount < leaf.threshold) {
+    throw new Error(`recovery has ${availableCount} signature(s), threshold is ${leaf.threshold}`);
   }
 
-  psbt.finalizeTaprootInput(0);
+  // multi_a semantics: OP_NUMEQUAL requires *exactly* `threshold` valid
+  // signatures, missing signers get an empty stack element, and the first
+  // script key's signature must be on top of the initial stack (i.e. last
+  // in reverse key order). bitcoinjs' default tapscript finalizer does not
+  // build this witness shape, so it is constructed explicitly.
+  let remainingSlots = leaf.threshold;
+  const signaturesInKeyOrder = leaf.recoveryXonlyPubkeys.map((pubkey) => {
+    const signature = signatureByPubkey.get(pubkey);
+    if (signature && remainingSlots > 0) {
+      remainingSlots -= 1;
+      return signature;
+    }
+    return Buffer.alloc(0);
+  });
+  const witnessStack = [
+    ...[...signaturesInKeyOrder].reverse(),
+    Buffer.from(leaf.scriptHex, 'hex'),
+    Buffer.from(leaf.controlBlockHex, 'hex'),
+  ];
+  psbt.finalizeInput(0, () => ({
+    finalScriptSig: undefined,
+    finalScriptWitness: witnessStackToScriptWitness(witnessStack),
+  }));
   const transaction = psbt.extractTransaction();
   return {
     round,
@@ -646,109 +689,49 @@ function taprootKeySpendHash(psbt, inputIndex) {
   return Buffer.from(tx.hashForWitnessV1(inputIndex, signingScripts, values, bitcoin.Transaction.SIGHASH_DEFAULT));
 }
 
+// Demo-only cooperative signer. All current participants' personal keys are
+// available locally, so the BIP-327 aggregate secret is reconstructed, taproot
+// tweaked with the vault's merkle root, and the signature is produced by the
+// library's BIP-340 signer. The resulting signature is exactly what a real
+// interactive MuSig2 session between the participants would produce for the
+// same standard KeyAgg aggregate — but a production wallet must run the real
+// two-round MuSig2 protocol so no single machine ever holds all the keys.
 function cooperativeSignature({ participants, keyPath, tapMerkleRoot, message }) {
-  const signerState = participants.map((participant) => {
-    const point = Buffer.from(ecc.pointFromScalar(Buffer.from(participant.personal.privateKeyHex, 'hex'), true));
-    const evenPrivateKey =
-      point[0] === 0x03
-        ? Buffer.from(ecc.privateNegate(Buffer.from(participant.personal.privateKeyHex, 'hex')))
-        : Buffer.from(participant.personal.privateKeyHex, 'hex');
-    return {
-      participant,
-      evenPrivateKey,
-      xonlyPubkey: point.subarray(1).toString('hex'),
-      coefficient: cooperativeCoefficient(keyPath.aggregation, point.subarray(1).toString('hex')),
-    };
-  });
-
-  const internalPoint = Buffer.from(`02${keyPath.aggregateXonlyPubkey}`, 'hex');
-  const internalParity = Buffer.from(keyPath.aggregateCompressedPubkey, 'hex')[0] === 0x03 ? -1n : 1n;
-  const tweak = scalarFromHex(taggedHashHex(
-    'TapTweak',
-    Buffer.concat([
-      Buffer.from(keyPath.aggregateXonlyPubkey, 'hex'),
-      Buffer.from(tapMerkleRoot, 'hex'),
-    ]),
-  ));
-  const output = ecc.xOnlyPointAddTweak(Buffer.from(keyPath.aggregateXonlyPubkey, 'hex'), scalarToBuffer(tweak));
+  const privateKeysByPubkeyHex = Object.fromEntries(
+    participants.map((p) => [p.personal.publicKeyHex, p.personal.privateKeyHex]),
+  );
+  const internalSecret = keyAggSecret(keyPath.aggregation, privateKeysByPubkeyHex);
+  const tweak = Buffer.from(
+    taggedHashHex(
+      'TapTweak',
+      Buffer.concat([
+        Buffer.from(keyPath.aggregateXonlyPubkey, 'hex'),
+        Buffer.from(tapMerkleRoot, 'hex'),
+      ]),
+    ),
+    'hex',
+  );
+  const outputSecret = ecc.privateAdd(internalSecret, tweak);
+  if (!outputSecret) throw new Error('failed to tweak cooperative aggregate secret');
+  const output = ecc.xOnlyPointAddTweak(
+    Buffer.from(keyPath.aggregateXonlyPubkey, 'hex'),
+    tweak,
+  );
   if (!output) throw new Error('failed to derive cooperative Taproot output key');
-  const outputParity = output.parity === 1 ? -1n : 1n;
-
-  const nonces = signerState.map(({ participant }) => {
-    const nonce = deterministicScalar('VaultDemo MuSig nonce', Buffer.concat([
-      Buffer.from(participant.personal.privateKeyHex, 'hex'),
-      message,
-      Buffer.from(keyPath.aggregateXonlyPubkey, 'hex'),
-    ]));
-    const point = Buffer.from(ecc.pointFromScalar(scalarToBuffer(nonce), true));
-    return { nonce, point };
-  });
-  let aggregateNonce = null;
-  for (const { point } of nonces) {
-    if (aggregateNonce) {
-      const added = ecc.pointAdd(aggregateNonce, point, true);
-      if (!added) throw new Error('failed to aggregate cooperative nonces');
-      aggregateNonce = Buffer.from(added);
-    } else {
-      aggregateNonce = point;
-    }
-  }
-  const nonceParity = aggregateNonce[0] === 0x03 ? -1n : 1n;
-  const nonceXonly = aggregateNonce.subarray(1);
-  const challenge = scalarFromHex(taggedHashHex(
-    'BIP0340/challenge',
-    Buffer.concat([nonceXonly, Buffer.from(output.xOnlyPubkey), message]),
-  ));
-
-  let nonceSum = 0n;
-  nonces.forEach(({ nonce }) => {
-    nonceSum = modN(nonceSum + nonceParity * nonce);
-  });
-  let secretSum = 0n;
-  signerState.forEach(({ evenPrivateKey, coefficient }) => {
-    secretSum = modN(secretSum + coefficient * scalarFromHex(evenPrivateKey.toString('hex')));
-  });
-  const effectiveSecret = modN(outputParity * modN(internalParity * secretSum + tweak));
-  const s = modN(nonceSum + challenge * effectiveSecret);
-  const signature = Buffer.concat([nonceXonly, scalarToBuffer(s)]);
+  const signature = Buffer.from(ecc.signSchnorr(message, Buffer.from(outputSecret)));
   if (!ecc.verifySchnorr(message, Buffer.from(output.xOnlyPubkey), signature)) {
     throw new Error('local cooperative aggregate signature failed self-check');
   }
   return signature;
 }
 
-function cooperativeCoefficient(aggregation, xonlyPubkey) {
-  if (aggregation.type === 'single-key') return 1n;
-  if (xonlyPubkey === aggregation.secondUniqueXonlyPubkey) return 1n;
-  return scalarFromHex(taggedHashHex(
-    'KeyAgg coefficient',
-    Buffer.concat([
-      Buffer.from(aggregation.keyAggListHash, 'hex'),
-      Buffer.from(xonlyPubkey, 'hex'),
-    ]),
-  ));
-}
-
-function deterministicScalar(tag, seed) {
-  let counter = 0;
-  while (true) {
-    const scalar = scalarFromHex(taggedHashHex(tag, Buffer.concat([seed, scalarToBuffer(BigInt(counter))])));
-    if (scalar > 0n) return scalar;
-    counter += 1;
+function witnessStackToScriptWitness(stack) {
+  const parts = [Buffer.from([stack.length])];
+  for (const item of stack) {
+    if (item.length > 0xfc) throw new Error('witness item too large for compact size 1');
+    parts.push(Buffer.from([item.length]), item);
   }
-}
-
-function scalarFromHex(hex) {
-  return BigInt(`0x${hex}`) % SECP_ORDER;
-}
-
-function scalarToBuffer(value) {
-  return Buffer.from(modN(value).toString(16).padStart(64, '0'), 'hex');
-}
-
-function modN(value) {
-  const result = value % SECP_ORDER;
-  return result >= 0n ? result : result + SECP_ORDER;
+  return Buffer.concat(parts);
 }
 
 function taprootKeyPathSigner(privateKeyHex) {

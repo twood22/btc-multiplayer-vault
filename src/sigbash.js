@@ -1,3 +1,5 @@
+import { assertNonDefaultSeed } from './config.js';
+
 export async function createSigbashAdapter() {
   if (process.env.SIGBASH_MODE === 'live') {
     return LiveSigbashAdapter.create();
@@ -91,7 +93,10 @@ class LiveSigbashAdapter {
   }
 }
 
-export async function createLiveSigbashClient({ musig2PrivateKey } = {}) {
+export async function createLiveSigbashClient({ participantId, musig2PrivateKey } = {}) {
+  // Live Sigbash keys must never be bound to client shares derived from the
+  // public default demo seed — anyone could reproduce the "browser half".
+  assertNonDefaultSeed();
   let sdk;
   try {
     sdk = await import('@sigbash/sdk');
@@ -105,12 +110,23 @@ export async function createLiveSigbashClient({ musig2PrivateKey } = {}) {
   await sdk.loadWasm({ wasmUrl });
   const client = new sdk.SigbashClient({
     serverUrl: process.env.SIGBASH_SERVER_URL || 'https://www.sigbash.com',
-    apiKey: requiredEnv('SIGBASH_API_KEY'),
-    userKey: requiredEnv('SIGBASH_USER_KEY'),
-    userSecretKey: requiredEnv('SIGBASH_SECRET_KEY'),
+    apiKey: participantEnv('SIGBASH_API_KEY', participantId),
+    userKey: participantEnv('SIGBASH_USER_KEY', participantId),
+    userSecretKey: participantEnv('SIGBASH_SECRET_KEY', participantId),
     ...(musig2PrivateKey ? { musig2PrivateKey } : {}),
   });
   return { sdk, client };
+}
+
+// Each participant should hold their own Sigbash credential triplet
+// (SIGBASH_API_KEY_ALICE etc.). A shared triplet without suffix is accepted
+// for single-operator demo runs, with the trust caveat noted in the README.
+function participantEnv(name, participantId) {
+  if (participantId) {
+    const scoped = process.env[`${name}_${participantId.toUpperCase()}`];
+    if (scoped) return scoped;
+  }
+  return requiredEnv(name);
 }
 
 export function toPoetPolicy(sdk, policy) {
@@ -156,8 +172,14 @@ function evaluateNode(tx, node) {
     if (!compare(tx.outputs.length, node.operator, node.value)) {
       failures.push(`output count ${tx.outputs.length} failed ${node.operator} ${node.value}`);
     }
+  } else if (node.type === 'TX_INPUT_COUNT') {
+    const inputCount = tx.inputCount ?? (tx.input ? 1 : 0);
+    if (!compare(inputCount, node.operator, node.value)) {
+      failures.push(`input count ${inputCount} failed ${node.operator} ${node.value}`);
+    }
   } else if (node.type === 'REQKEY') {
-    if (tx.sigbashLeafKey !== node.key_identifier) {
+    const expectedKey = node.local_key_identifier || node.key_identifier;
+    if (tx.sigbashLeafKey !== expectedKey) {
       failures.push('required Sigbash tapscript key is missing');
     }
   } else {
@@ -166,6 +188,9 @@ function evaluateNode(tx, node) {
   return failures;
 }
 
+// Convert the repo's policy objects into the SDK's condition-config shorthand.
+// Fields that only exist for the local policy model (ids, round metadata, the
+// local REQKEY key material) are stripped so Sigbash receives a clean policy.
 function toConditionConfig(policy) {
   if (policy.logic) {
     return {
@@ -173,7 +198,8 @@ function toConditionConfig(policy) {
       conditions: policy.conditions.map((condition) => toConditionConfig(condition)),
     };
   }
-  return policy;
+  const { id, leaverId, roundIds, local_key_identifier, ...condition } = policy;
+  return condition;
 }
 
 function compare(actual, operator, expected) {

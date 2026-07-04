@@ -2,6 +2,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { AMOUNTS, RECOVERY_DELAY_BLOCKS } from './config.js';
 import { auditSpecState } from './audit.js';
+import { runBip327KeyAggVectors, verifyVaultTransaction } from './consensus.js';
+import { deriveXpubChildPubkey } from './crypto.js';
 import {
   combinePsbts,
   decodeRawTransaction,
@@ -37,6 +39,7 @@ import {
   buildSoloWithdrawal,
   consolidateDeposits,
   createDemoState,
+  participantLeaveRounds,
   policyId,
   roundId,
   verifyNoSigbashInKeyPath,
@@ -141,7 +144,7 @@ async function solo() {
   const vaultUtxo = consolidateDeposits(ledger, state);
   const currentIds = state.participants.map((p) => p.id);
   const tx = buildSoloWithdrawal({ state, currentUtxo: vaultUtxo, currentIds, leaverId: 'alice' });
-  const policy = state.sigbashPolicies.get('alice');
+  const policy = state.policies.get(policyId(currentIds, 'alice'));
   const verified = await adapter.verifyPSBT(tx, policy);
   assert(verified.success, `valid solo withdrawal rejected: ${verified.failures?.join('; ')}`);
   const signed = await adapter.signPSBT(tx, policy);
@@ -187,7 +190,7 @@ async function fullRun() {
 
   let currentIds = ['alice', 'bob', 'carol'];
   const first = buildSoloWithdrawal({ state, currentUtxo, currentIds, leaverId: 'alice' });
-  let policy = state.sigbashPolicies.get('alice');
+  let policy = state.policies.get(policyId(currentIds, 'alice'));
   let signed = await adapter.signPSBT(first, policy);
   assert(signed.success, signed.error || 'first withdrawal rejected');
   let committed = ledger.spend(currentUtxo.outpoint, signed.psbt);
@@ -213,7 +216,7 @@ async function fullRun() {
   );
   currentIds = ['bob', 'carol'];
   const second = buildSoloWithdrawal({ state, currentUtxo, currentIds, leaverId: 'bob' });
-  policy = state.sigbashPolicies.get('bob');
+  policy = state.policies.get(policyId(currentIds, 'bob'));
   signed = await adapter.signPSBT(second, policy);
   assert(signed.success, signed.error || 'second withdrawal rejected');
   committed = ledger.spend(currentUtxo.outpoint, signed.psbt);
@@ -296,7 +299,9 @@ async function fundingManifest() {
       depositSats: AMOUNTS.deposit,
       payoutAddress: participant.payoutAddress,
       personalXonlyPubkey: participant.personal.xonlyPubKeyHex,
-      sigbashLeafXonlyPubkey: participant.sigbash.xonlyPubKeyHex,
+      sigbashLeafXonlyPubkeysByRound: Object.fromEntries(
+        Object.entries(participant.sigbashByRound).map(([round, key]) => [round, key.xonlyPubKeyHex]),
+      ),
     })),
     roundOneFundingOutput: {
       address: roundOneVault.address,
@@ -415,7 +420,7 @@ async function signSoloPsbt() {
   const inspection = inspectPsbt(psbtBase64);
   const failures = evaluatePolicy(
     psbtInspectionToPolicyTx({ state, inspection }),
-    state.sigbashPolicies.get(leaverId),
+    state.policies.get(policyId(currentIds, leaverId)),
   );
   assert(failures.length === 0, `solo PSBT violates local policy: ${failures.join('; ')}`);
   const signed = signSoloWithdrawalPsbt({ state, currentIds, leaverId, psbtBase64 });
@@ -511,15 +516,18 @@ async function sigbashSignPsbt() {
   const args = parseArgs(process.argv.slice(3));
   const participantId = requireArg(args, 'participant');
   const psbtBase64 = requireArg(args, 'psbt-base64');
-  const keyId = args['key-id'] || process.env[`SIGBASH_KEY_ID_${participantId.toUpperCase()}`];
-  assert(keyId, `missing --key-id or SIGBASH_KEY_ID_${participantId.toUpperCase()}`);
 
   const state = createConfiguredState();
+  const inspection = inspectPsbt(psbtBase64);
+  const vault = vaultFromPsbtInspection(state, inspection);
+  assert(vault, 'PSBT input does not spend a known vault round scriptPubKey');
+  const keyId = args['key-id'] || process.env[sigbashKeyIdEnvName(participantId, vault.id)];
+  assert(keyId, `missing --key-id or ${sigbashKeyIdEnvName(participantId, vault.id)}`);
   const policy = {
-    ...state.sigbashPolicies.get(participantId),
+    ...state.policies.get(policyId(vault.participantIds, participantId)),
     keyId,
   };
-  assert(policy.conditions, `unknown participant policy ${participantId}`);
+  assert(policy.conditions, `unknown policy for ${participantId} in round ${vault.id}`);
   const adapter = await createSigbashAdapter();
   const tx = { psbtBase64 };
   const verification = await adapter.verifyPSBT(tx, policy);
@@ -547,13 +555,16 @@ async function policyCheckPsbt() {
   const participantId = requireArg(args, 'participant');
   const psbtBase64 = requireArg(args, 'psbt-base64');
   const state = createConfiguredState();
-  const policy = state.sigbashPolicies.get(participantId);
-  assert(policy, `unknown participant policy ${participantId}`);
   const inspection = inspectPsbt(psbtBase64);
+  const vault = vaultFromPsbtInspection(state, inspection);
+  assert(vault, 'PSBT input does not spend a known vault round scriptPubKey');
+  const policy = state.policies.get(policyId(vault.participantIds, participantId));
+  assert(policy, `unknown policy for ${participantId} in round ${vault.id}`);
   const tx = psbtInspectionToPolicyTx({ state, inspection });
   const failures = evaluatePolicy(tx, policy);
   printResult('local PSBT policy check', {
     participantId,
+    round: vault.id,
     success: failures.length === 0,
     failures,
     tx,
@@ -626,7 +637,10 @@ async function psbtAcceptance() {
     'solo re-vault destination mismatch',
   );
   assert(
-    evaluatePolicy(psbtInspectionToPolicyTx({ state, inspection: soloInspection }), state.sigbashPolicies.get('alice')).length === 0,
+    evaluatePolicy(
+      psbtInspectionToPolicyTx({ state, inspection: soloInspection }),
+      state.policies.get(policyId(roundOneIds, 'alice')),
+    ).length === 0,
     'solo PSBT does not satisfy Alice policy preflight',
   );
   const tamperedSoloInspection = structuredClone(soloInspection);
@@ -634,7 +648,7 @@ async function psbtAcceptance() {
   assert(
     evaluatePolicy(
       psbtInspectionToPolicyTx({ state, inspection: tamperedSoloInspection }),
-      state.sigbashPolicies.get('alice'),
+      state.policies.get(policyId(roundOneIds, 'alice')),
     ).length > 0,
     'tampered solo PSBT unexpectedly passed policy preflight',
   );
@@ -646,8 +660,46 @@ async function psbtAcceptance() {
     vout: 0,
     valueSats: 300_000_000,
   });
+  // Cross-round confusion regression: with one Sigbash key per (participant,
+  // round) there is no key that can take the round-two amount out of the
+  // round-one pot. A transaction spending the round-one vault with round-two
+  // shaped outputs must fail Alice's round-one policy on the amounts, and her
+  // round-two policies on the leaf key (her round-two keys are not in the
+  // round-one vault's tapscript tree).
+  const aliceParticipant = state.participants.find((p) => p.id === 'alice');
+  const bobParticipant = state.participants.find((p) => p.id === 'bob');
+  const crossRoundAttackTx = {
+    sigbashLeafKey: aliceParticipant.sigbashByRound[roundId(roundOneIds)].xonlyPubKeyHex,
+    inputCount: 1,
+    outputs: [
+      { address: aliceParticipant.payoutAddress, value: AMOUNTS.secondWithdrawal },
+      { address: bobParticipant.payoutAddress, value: 300_000_000 - AMOUNTS.secondWithdrawal - 1_000 },
+    ],
+  };
+  assert(
+    evaluatePolicy(crossRoundAttackTx, state.policies.get(policyId(roundOneIds, 'alice'))).length > 0,
+    'cross-round attack unexpectedly satisfied the round-one policy',
+  );
+  assert(
+    evaluatePolicy(crossRoundAttackTx, state.policies.get(policyId(['alice', 'bob'], 'alice'))).length > 0,
+    'cross-round attack unexpectedly satisfied the alice/bob round-two policy',
+  );
+  const multiInputAttackTx = {
+    sigbashLeafKey: aliceParticipant.sigbashByRound[roundId(roundOneIds)].xonlyPubKeyHex,
+    inputCount: 2,
+    outputs: [
+      { address: aliceParticipant.payoutAddress, value: AMOUNTS.firstWithdrawal },
+      { address: state.vaults.get(roundId(['bob', 'carol'])).address, value: 204_999_000 },
+    ],
+  };
+  assert(
+    evaluatePolicy(multiInputAttackTx, state.policies.get(policyId(roundOneIds, 'alice'))).length > 0,
+    'multi-input attack unexpectedly satisfied the round-one policy',
+  );
+
   const soloTamperChecks = soloTamperLocalChecks({
     state,
+    currentIds: roundOneIds,
     leaverId: 'alice',
     variants: soloTamperVariants,
   });
@@ -688,18 +740,27 @@ async function psbtAcceptance() {
     cooperativeInspection.inputs[0].tapLeafScript === undefined,
     'cooperative PSBT must not use a tapscript leaf',
   );
+  const expectedRefundSats = Math.floor((300_000_000 - AMOUNTS.cooperativeFee) / 3);
   assert(
-    cooperativeInspection.outputs.every((output) => output.valueSats === AMOUNTS.deposit),
-    'cooperative PSBT does not refund full deposits',
+    cooperativeInspection.outputs.every((output) => output.valueSats === expectedRefundSats),
+    'cooperative PSBT does not refund equal shares of the pot after the miner fee',
   );
-  const cooperativeReady = expectedCooperativeReadiness({ state, currentIds: roundOneIds });
+  assert(
+    300_000_000 - expectedRefundSats * 3 >= AMOUNTS.cooperativeFee,
+    'cooperative PSBT fee is below the configured miner fee',
+  );
+  const cooperativeReady = expectedCooperativeReadiness({
+    state,
+    currentIds: roundOneIds,
+    valueSats: 300_000_000,
+  });
   assert(cooperativeReady.keyPathContainsOnlyPersonalKeys, 'cooperative readiness key-path mismatch');
   assert(
     cooperativeReady.signerIds.join(',') === 'alice,bob,carol',
     'cooperative readiness signer set mismatch',
   );
   assert(
-    cooperativeReady.refundOutputs.every((output) => output.valueSats === AMOUNTS.deposit),
+    cooperativeReady.refundOutputs.every((output) => output.valueSats === expectedRefundSats),
     'cooperative readiness refund output mismatch',
   );
   const signedCooperative = signCooperativeExitPsbt({
@@ -879,13 +940,14 @@ async function psbtAcceptance() {
   assert(
     evaluatePolicy(
       {
-        sigbashLeafKey: alice.sigbash.xonlyPubKeyHex,
+        sigbashLeafKey: alice.sigbashByRound[roundId(roundOneIds)].xonlyPubKeyHex,
+        inputCount: 1,
         outputs: fakeSoloOutputs.map((output) => ({
           address: output.address,
           value: output.valueSats,
         })),
       },
-      state.sigbashPolicies.get('alice'),
+      state.policies.get(policyId(roundOneIds, 'alice')),
     ).length === 0,
     'solo audit local policy mismatch',
   );
@@ -1200,13 +1262,18 @@ async function liveReadiness() {
       'SIGBASH_USER_KEY',
       'SIGBASH_SECRET_KEY',
       'SIGBASH_WASM_URL',
-      'SIGBASH_KEY_ID_ALICE',
-      'SIGBASH_KEY_ID_BOB',
-      'SIGBASH_KEY_ID_CAROL',
-      'SIGBASH_LEAF_ALICE',
-      'SIGBASH_LEAF_BOB',
-      'SIGBASH_LEAF_CAROL',
+      'SIGBASH_LEAF_KEYS_JSON',
+      ...state.participants.flatMap((participant) =>
+        participantLeaveRounds(participant.id, roundOneIds).map((round) =>
+          sigbashKeyIdEnvName(participant.id, round),
+        ),
+      ),
     ].map(checkEnvPresent),
+    {
+      name: 'VAULT_DEMO_SEED is not the public default',
+      ok: process.env.VAULT_DEMO_SEED !== undefined,
+      actual: process.env.VAULT_DEMO_SEED ? 'set' : null,
+    },
   ];
   const sdkCheck = await checkSdkPolicyBuilder();
   const rpcCheck = await checkBitcoinRpc();
@@ -1597,15 +1664,16 @@ async function liveSoloWithdrawal() {
   const inspection = inspectPsbt(psbt.psbtBase64);
   const localPolicyFailures = evaluatePolicy(
     psbtInspectionToPolicyTx({ state, inspection }),
-    state.sigbashPolicies.get(leaverId),
+    state.policies.get(policyId(currentIds, leaverId)),
   );
   assert(localPolicyFailures.length === 0, `solo PSBT violates local policy: ${localPolicyFailures.join('; ')}`);
 
-  const keyId = args['key-id'] || process.env[`SIGBASH_KEY_ID_${leaverId.toUpperCase()}`];
+  const keyIdEnvName = sigbashKeyIdEnvName(leaverId, roundId(currentIds));
+  const keyId = args['key-id'] || process.env[keyIdEnvName];
   const checks = [
     ...utxoChecks,
     check('local Sigbash policy preflight passes', localPolicyFailures.length === 0),
-    check(`SIGBASH_KEY_ID_${leaverId.toUpperCase()} is available`, Boolean(keyId), { keyId: keyId || null }),
+    check(`${keyIdEnvName} is available`, Boolean(keyId), { keyId: keyId || null }),
     check('SIGBASH_MODE=live', process.env.SIGBASH_MODE === 'live', {
       actual: process.env.SIGBASH_MODE || null,
     }),
@@ -1617,7 +1685,7 @@ async function liveSoloWithdrawal() {
   if (checks.every((item) => item.ok)) {
     const adapter = await createSigbashAdapter();
     const policy = {
-      ...state.sigbashPolicies.get(leaverId),
+      ...state.policies.get(policyId(currentIds, leaverId)),
       keyId,
     };
     liveVerification = await adapter.verifyPSBT({ psbtBase64: psbt.psbtBase64 }, policy);
@@ -1677,13 +1745,13 @@ async function liveSoloTamperCheck() {
   const utxoChecks = compareVaultUtxo({ actual, expected });
   assert(utxoChecks.every((item) => item.ok), 'selected UTXO is not the expected vault round');
 
-  const keyId = args['key-id'] || process.env[`SIGBASH_KEY_ID_${leaverId.toUpperCase()}`];
-  assert(keyId, `missing --key-id or SIGBASH_KEY_ID_${leaverId.toUpperCase()}`);
+  const keyId = args['key-id'] || process.env[sigbashKeyIdEnvName(leaverId, roundId(currentIds))];
+  assert(keyId, `missing --key-id or ${sigbashKeyIdEnvName(leaverId, roundId(currentIds))}`);
   const policy = {
-    ...state.sigbashPolicies.get(leaverId),
+    ...state.policies.get(policyId(currentIds, leaverId)),
     keyId,
   };
-  assert(policy.conditions, `unknown participant policy ${leaverId}`);
+  assert(policy.conditions, `unknown policy for ${leaverId} in ${roundId(currentIds)}`);
 
   const variants = buildSoloWithdrawalTamperPsbts({
     state,
@@ -1693,7 +1761,7 @@ async function liveSoloTamperCheck() {
     vout,
     valueSats: btcToSats(actual.value),
   });
-  const localChecks = soloTamperLocalChecks({ state, leaverId, variants });
+  const localChecks = soloTamperLocalChecks({ state, currentIds, leaverId, variants });
   const adapter = await createSigbashAdapter();
   const liveValid = await adapter.verifyPSBT({ psbtBase64: variants.valid.psbtBase64 }, policy);
   const liveTampered = {};
@@ -1755,13 +1823,14 @@ async function liveSoloAudit() {
   const actualOutputs = tx.vout.map(transactionOutputSummary);
   const policyFailures = evaluatePolicy(
     {
-      sigbashLeafKey: participant.sigbash.xonlyPubKeyHex,
+      sigbashLeafKey: participant.sigbashByRound[roundId(currentIds)].xonlyPubKeyHex,
+      inputCount: 1,
       outputs: actualOutputs.map((output) => ({
         address: output.address,
         value: output.valueSats,
       })),
     },
-    state.sigbashPolicies.get(leaverId),
+    state.policies.get(policyId(currentIds, leaverId)),
   );
   const outputZero = actualOutputs[0];
   const outputOne = actualOutputs[1];
@@ -1823,7 +1892,11 @@ async function liveCooperativeAudit() {
   const currentIds = requireArg(args, 'round').split(',');
   const state = createConfiguredState();
   const tx = await getRawTransaction(txid, true);
-  const readiness = expectedCooperativeReadiness({ state, currentIds });
+  const readiness = expectedCooperativeReadiness({
+    state,
+    currentIds,
+    valueSats: args['value-sats'] === undefined ? undefined : Number(args['value-sats']),
+  });
   const input = findTransactionInput(tx, vaultTxid, vaultVout);
   const refundMatches = readiness.refundOutputs.map((output) => ({
     expected: output,
@@ -1846,7 +1919,7 @@ async function liveCooperativeAudit() {
       readiness.keyPath,
     ),
     check(
-      'all current participants receive exactly one full-deposit refund',
+      'all current participants receive exactly one equal refund of the pot',
       refundMatches.every((item) => item.matches.length === 1),
       refundMatches,
     ),
@@ -2028,6 +2101,7 @@ async function acceptance() {
   await audit();
   await sdkPolicyCheck();
   await psbtAcceptance();
+  await consensusAcceptance();
   await cooperative();
   await solo();
   await fullRun();
@@ -2048,6 +2122,137 @@ async function acceptance() {
   });
 }
 
+// Consensus-level verification of every transaction shape the vault can emit.
+// Each fully signed transaction is checked independently of the signing code:
+// control-block merkle commitment, BIP-341 sighash recomputation, Schnorr
+// signature verification, tapscript semantics (CHECKSIG / CHECKSIGADD /
+// NUMEQUAL / CSV), BIP-68 sequence encoding, and a 1 sat/vB relay-fee floor.
+async function consensusAcceptance() {
+  const vectors = runBip327KeyAggVectors();
+  assert(vectors.passed, `BIP-327 KeyAgg vectors failed: ${JSON.stringify(vectors.results)}`);
+
+  const state = createDemoState();
+  const roundOneIds = ['alice', 'bob', 'carol'];
+  const roundOneVault = state.vaults.get(roundId(roundOneIds));
+  const roundTwoVault = state.vaults.get(roundId(['bob', 'carol']));
+  const fundingTxid = '0000000000000000000000000000000000000000000000000000000000000001';
+  const verified = [];
+
+  // Solo withdrawals + final sweep chain.
+  const run = buildSignedLocalWithdrawalRun(state);
+  const prevoutsByStage = [
+    { scriptPubKeyHex: roundOneVault.outputScriptHex, valueSats: AMOUNTS.deposit * 3 },
+    {
+      scriptPubKeyHex: roundTwoVault.outputScriptHex,
+      valueSats: run.stages[0].outputs[1].valueSats,
+    },
+    {
+      scriptPubKeyHex: run.stages[1].outputs[1].scriptPubKeyHex,
+      valueSats: run.stages[1].outputs[1].valueSats,
+    },
+  ];
+  run.stages.forEach((stage, index) => {
+    const result = verifyVaultTransaction({
+      txHex: stage.transactionHex,
+      prevouts: [prevoutsByStage[index]],
+    });
+    verified.push({ transaction: stage.step, ...result });
+  });
+
+  // Cooperative exit via the MuSig2 key path.
+  const cooperativePsbtBuilt = buildCooperativeExitPsbt({
+    state,
+    currentIds: roundOneIds,
+    txid: fundingTxid,
+    vout: 0,
+    valueSats: AMOUNTS.deposit * 3,
+  });
+  const cooperativeSigned = signCooperativeExitPsbt({
+    state,
+    currentIds: roundOneIds,
+    psbtBase64: cooperativePsbtBuilt.psbtBase64,
+  });
+  verified.push({
+    transaction: 'cooperative exit (round one)',
+    ...verifyVaultTransaction({
+      txHex: cooperativeSigned.transactionHex,
+      prevouts: [{ scriptPubKeyHex: roundOneVault.outputScriptHex, valueSats: AMOUNTS.deposit * 3 }],
+    }),
+  });
+
+  // Timelocked recovery with a vanished participant (2-of-3 CHECKSIGADD with
+  // an empty witness slot) for round one, and 1-of-2 for a pair round.
+  const recoveryBuilt = buildRecoveryPsbt({
+    state,
+    currentIds: roundOneIds,
+    vanishedId: 'carol',
+    txid: fundingTxid,
+    vout: 0,
+    valueSats: AMOUNTS.deposit * 3,
+  });
+  const recoverySigned = signRecoveryPsbt({
+    state,
+    currentIds: roundOneIds,
+    vanishedId: 'carol',
+    psbtBase64: recoveryBuilt.psbtBase64,
+  });
+  verified.push({
+    transaction: 'timelocked recovery (carol vanished, 2-of-3)',
+    ...verifyVaultTransaction({
+      txHex: recoverySigned.transactionHex,
+      prevouts: [{ scriptPubKeyHex: roundOneVault.outputScriptHex, valueSats: AMOUNTS.deposit * 3 }],
+    }),
+  });
+
+  const pairRecoveryBuilt = buildRecoveryPsbt({
+    state,
+    currentIds: ['bob', 'carol'],
+    vanishedId: 'carol',
+    txid: fundingTxid,
+    vout: 0,
+    valueSats: 204_999_000,
+  });
+  const pairRecoverySigned = signRecoveryPsbt({
+    state,
+    currentIds: ['bob', 'carol'],
+    vanishedId: 'carol',
+    psbtBase64: pairRecoveryBuilt.psbtBase64,
+  });
+  verified.push({
+    transaction: 'timelocked recovery (pair round, 1-of-2)',
+    ...verifyVaultTransaction({
+      txHex: pairRecoverySigned.transactionHex,
+      prevouts: [{ scriptPubKeyHex: roundTwoVault.outputScriptHex, valueSats: 204_999_000 }],
+    }),
+  });
+
+  // Pair-round cooperative exit exercises 2-key MuSig2 aggregation.
+  const pairCooperativeBuilt = buildCooperativeExitPsbt({
+    state,
+    currentIds: ['bob', 'carol'],
+    txid: fundingTxid,
+    vout: 0,
+    valueSats: 204_999_000,
+  });
+  const pairCooperativeSigned = signCooperativeExitPsbt({
+    state,
+    currentIds: ['bob', 'carol'],
+    psbtBase64: pairCooperativeBuilt.psbtBase64,
+  });
+  verified.push({
+    transaction: 'cooperative exit (pair round)',
+    ...verifyVaultTransaction({
+      txHex: pairCooperativeSigned.transactionHex,
+      prevouts: [{ scriptPubKeyHex: roundTwoVault.outputScriptHex, valueSats: 204_999_000 }],
+    }),
+  });
+
+  printResult('consensus acceptance', {
+    bip327KeyAggVectors: vectors,
+    verifiedTransactions: verified,
+  });
+}
+
 async function audit() {
   const state = createDemoState();
   const report = auditSpecState(state);
@@ -2058,87 +2263,106 @@ async function audit() {
 async function sdkPolicyCheck() {
   const sdk = await import('@sigbash/sdk');
   const state = createDemoState();
-  const compiled = [...state.sigbashPolicies.values()].map((policy) => ({
-    participantId: policy.participantId,
-    poetPolicy: sdk.conditionConfigToPoetPolicy({
-      logic: policy.logic,
-      conditions: policy.conditions,
-    }),
+  const compiled = [...state.policies.values()].map((policy) => ({
+    policyId: policy.id,
+    leaverId: policy.leaverId,
+    poetPolicy: toPoetPolicy(sdk, policy),
   }));
   printResult('sdk policy conversion', {
     sdkVersion: sdk.SDK_VERSION || 'unknown',
-    participantPolicies: compiled.map(({ participantId, poetPolicy }) => ({
-      participantId,
+    policies: compiled.map(({ policyId: id, leaverId, poetPolicy }) => ({
+      policyId: id,
+      leaverId,
       version: poetPolicy.version,
       rootOperator: poetPolicy.policy?.operator,
-      branchCount: poetPolicy.policy?.children?.length,
+      conditionCount: poetPolicy.policy?.children?.length,
     })),
   });
 }
 
+// Creates one immutable Sigbash key per (participant, round-they-could-leave):
+// nine keys total. Pair-round keys are created first because their policies
+// reference only payout addresses; round-one policies then pin the pair-round
+// vault addresses computed from the pair keys. Nothing here needs the
+// admin-only `updateable` flag or updatePolicy() (which would also impose a
+// 24-hour signing cooldown) — every policy is final at creation time.
 async function sigbashLiveSetup() {
   assert(
     process.env.SIGBASH_MODE === 'live',
     'sigbash-live-setup mutates Sigbash server state; rerun with SIGBASH_MODE=live',
   );
   const bootstrapState = createDemoState();
+  const allIds = participantIds(bootstrapState);
+  const roundOne = roundId(allIds);
+  const leafOverrides = Object.fromEntries(allIds.map((id) => [id, {}]));
   const registrations = [];
 
-  for (const [index, participant] of bootstrapState.participants.entries()) {
+  const registerKey = async (state, participantId, round) => {
+    const participant = state.participants.find((item) => item.id === participantId);
+    const vault = state.vaults.get(round);
+    const policy = state.policies.get(policyId(vault.participantIds, participantId));
     const { sdk, client } = await createLiveSigbashClient({
-      musig2PrivateKey: participant.sigbash.privateKeyHex,
+      participantId,
+      musig2PrivateKey: participant.sigbashByRound[round].privateKeyHex,
     });
-    const bootstrapPolicy = impossibleBootstrapPolicy(participant.id);
-    const created = await client.createKey({
-      policy: toPoetPolicy(sdk, bootstrapPolicy),
+    const created = await createKeyWithAutoIndex(client, {
+      policy: toPoetPolicy(sdk, policy),
       network: 'signet',
       require2FA: false,
-      keyIndex: index,
-      updateable: true,
       verbose: true,
     });
-    assert(
-      created.aggregatePubKeyHex,
-      `Sigbash did not return aggregatePubKeyHex for ${participant.id}`,
-    );
+    assert(created.bip328Xpub, `Sigbash did not return bip328Xpub for ${participantId}:${round}`);
+    // Leaf-key assumption (see README): the SDK's documented multisig
+    // integration derives co-signer leaf keys from the BIP-328 xpub at child
+    // path 0/0. The tweaked aggregate is printed as the fallback candidate —
+    // if live verifyPSBT rejects REQKEY, swap SIGBASH_LEAF_KEYS_JSON to it.
+    const xpubChildLeaf = deriveXpubChildPubkey(created.bip328Xpub, [0, 0]).xonlyPubKeyHex;
+    leafOverrides[participantId][round] = xpubChildLeaf;
     registrations.push({
-      participantId: participant.id,
+      participantId,
+      round,
       keyId: created.keyId,
       keyIndex: created.keyIndex,
-      aggregatePubKeyHex: normalizeXonly(created.aggregatePubKeyHex),
+      keyIdEnvName: sigbashKeyIdEnvName(participantId, round),
       bip328Xpub: created.bip328Xpub,
+      leafXonlyPubkey: xpubChildLeaf,
+      leafKeyCandidates: {
+        xpubChild00: xpubChildLeaf,
+        tweakedAggregate: created.aggregatePubKeyHex
+          ? normalizeXonly(created.aggregatePubKeyHex)
+          : null,
+      },
       helperP2trAddressDoNotFund: created.p2trAddress,
-      bootstrapPolicyRoot: created.policyRoot,
+      policyRoot: created.policyRoot,
+      policyId: policy.id,
     });
+    client.disconnect?.();
+  };
+
+  for (const participant of bootstrapState.participants) {
+    for (const round of participantLeaveRounds(participant.id, allIds)) {
+      if (round === roundOne) continue;
+      await registerKey(bootstrapState, participant.id, round);
+    }
   }
 
-  const liveState = createDemoState({
-    sigbashLeafOverrides: Object.fromEntries(
-      registrations.map((registration) => [
-        registration.participantId,
-        registration.aggregatePubKeyHex,
-      ]),
-    ),
-  });
-
-  for (const registration of registrations) {
-    const participant = liveState.participants.find((item) => item.id === registration.participantId);
-    const { sdk, client } = await createLiveSigbashClient({
-      musig2PrivateKey: participant.sigbash.privateKeyHex,
-    });
-    const finalPolicy = liveState.sigbashPolicies.get(registration.participantId);
-    const result = await client.updatePolicy({
-      keyId: registration.keyId,
-      newPolicyJson: JSON.stringify(toPoetPolicy(sdk, finalPolicy)),
-    });
-    registration.finalPolicyUpdate = result;
+  const statePairs = createDemoState({ sigbashLeafOverrides: leafOverrides });
+  for (const participant of statePairs.participants) {
+    await registerKey(statePairs, participant.id, roundOne);
   }
 
+  const finalState = createDemoState({ sigbashLeafOverrides: leafOverrides });
   printResult('live Sigbash setup', {
     warning:
-      'Do not fund any helper p2trAddress. Fund only the printed round-one vault address after verifying the final policy updates succeeded.',
+      'Do not fund any helper p2trAddress. Fund only the printed round-one vault address, and only after verifying every key registration above succeeded.',
     registrations,
-    vaults: [...liveState.vaults.values()].map((vault) => ({
+    envExports: [
+      `SIGBASH_LEAF_KEYS_JSON='${JSON.stringify(leafOverrides)}'`,
+      ...registrations.map(
+        (registration) => `${registration.keyIdEnvName}=${registration.keyId}`,
+      ),
+    ],
+    vaults: [...finalState.vaults.values()].map((vault) => ({
       round: vault.id,
       participants: vault.participantIds,
       address: vault.address,
@@ -2146,8 +2370,24 @@ async function sigbashLiveSetup() {
       keyPath: vault.keyPath,
       tapscriptLeaves: vault.tapscriptLeaves,
     })),
-    participantPolicies: [...liveState.sigbashPolicies.values()],
+    policies: [...finalState.policies.values()],
   });
+}
+
+async function createKeyWithAutoIndex(client, options) {
+  let keyIndex = options.keyIndex ?? 0;
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    try {
+      return await client.createKey({ ...options, keyIndex });
+    } catch (error) {
+      if (error?.nextAvailableIndex !== undefined) {
+        keyIndex = error.nextAvailableIndex;
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error('could not find a free Sigbash keyIndex after 32 attempts');
 }
 
 function createDeposits(ledger, state) {
@@ -2164,7 +2404,9 @@ function printSetup(state) {
       payoutAddress: p.payoutAddress,
       payoutXonlyPubkey: p.payout.xonlyPubKeyHex,
       personalXonlyPubkey: p.personal.xonlyPubKeyHex,
-      sigbashLeafXonlyPubkey: p.sigbash.xonlyPubKeyHex,
+      sigbashLeafXonlyPubkeysByRound: Object.fromEntries(
+        Object.entries(p.sigbashByRound).map(([round, key]) => [round, key.xonlyPubKeyHex]),
+      ),
     })),
     vaults: [...state.vaults.values()].map((vault) => ({
       round: vault.id,
@@ -2176,7 +2418,6 @@ function printSetup(state) {
       tapscriptLeaves: vault.tapscriptLeaves,
     })),
     policies: [...state.policies.values()],
-    sigbashPolicies: [...state.sigbashPolicies.values()],
   });
 }
 
@@ -2185,14 +2426,18 @@ function printResult(title, value) {
   console.log(JSON.stringify(value, null, 2));
 }
 
+// Live leaf keys come in one env var as nested JSON, exactly as printed by
+// sigbash-live-setup: {"alice":{"alicebobcarol":"<xonly>","alicebob":"<xonly>",...},...}
 function createConfiguredState() {
-  return createDemoState({
-    sigbashLeafOverrides: {
-      ...(process.env.SIGBASH_LEAF_ALICE ? { alice: process.env.SIGBASH_LEAF_ALICE } : {}),
-      ...(process.env.SIGBASH_LEAF_BOB ? { bob: process.env.SIGBASH_LEAF_BOB } : {}),
-      ...(process.env.SIGBASH_LEAF_CAROL ? { carol: process.env.SIGBASH_LEAF_CAROL } : {}),
-    },
-  });
+  let sigbashLeafOverrides = {};
+  if (process.env.SIGBASH_LEAF_KEYS_JSON) {
+    try {
+      sigbashLeafOverrides = JSON.parse(process.env.SIGBASH_LEAF_KEYS_JSON);
+    } catch (error) {
+      throw new Error(`SIGBASH_LEAF_KEYS_JSON is not valid JSON: ${error.message}`);
+    }
+  }
+  return createDemoState({ sigbashLeafOverrides });
 }
 
 function assert(condition, message) {
@@ -2345,7 +2590,7 @@ function expectedTransactionOutput({ args, state }) {
   throw new Error('rpc-find-output requires --round, --participant, or --address');
 }
 
-function expectedCooperativeReadiness({ state, currentIds }) {
+function expectedCooperativeReadiness({ state, currentIds, valueSats }) {
   const round = roundId(currentIds);
   const vault = state.vaults.get(round);
   if (!vault) throw new Error(`unknown vault round ${round}`);
@@ -2354,6 +2599,8 @@ function expectedCooperativeReadiness({ state, currentIds }) {
     if (!participant) throw new Error(`unknown participant ${id}`);
     return participant;
   });
+  const potSats = valueSats === undefined ? expectedVaultValueSats(currentIds) : valueSats;
+  const refundSats = Math.floor((potSats - AMOUNTS.cooperativeFee) / participants.length);
   return {
     signerIds: participants.map((participant) => participant.id),
     signerPersonalXonlyPubkeys: participants.map((participant) => participant.personal.xonlyPubKeyHex),
@@ -2362,7 +2609,7 @@ function expectedCooperativeReadiness({ state, currentIds }) {
     refundOutputs: participants.map((participant, index) => ({
       index,
       address: participant.payoutAddress,
-      valueSats: AMOUNTS.deposit,
+      valueSats: refundSats,
     })),
   };
 }
@@ -2562,7 +2809,7 @@ function buildSignedLocalWithdrawalRun(state, { startingOutpoint } = {}) {
   const firstInspection = inspectPsbt(firstPsbt.psbtBase64);
   const firstFailures = evaluatePolicy(
     psbtInspectionToPolicyTx({ state, inspection: firstInspection }),
-    state.sigbashPolicies.get('alice'),
+    state.policies.get(policyId(['alice', 'bob', 'carol'], 'alice')),
   );
   assert(firstFailures.length === 0, `first withdrawal violates local policy: ${firstFailures.join('; ')}`);
   const firstSigned = signSoloWithdrawalPsbt({
@@ -2583,7 +2830,7 @@ function buildSignedLocalWithdrawalRun(state, { startingOutpoint } = {}) {
   const secondInspection = inspectPsbt(secondPsbt.psbtBase64);
   const secondFailures = evaluatePolicy(
     psbtInspectionToPolicyTx({ state, inspection: secondInspection }),
-    state.sigbashPolicies.get('bob'),
+    state.policies.get(policyId(['bob', 'carol'], 'bob')),
   );
   assert(secondFailures.length === 0, `second withdrawal violates local policy: ${secondFailures.join('; ')}`);
   const secondSigned = signSoloWithdrawalPsbt({
@@ -2646,6 +2893,7 @@ function signedRunStage({ step, input, inspection, signed }) {
       index: output.index,
       address: output.address,
       valueSats: output.valueSats,
+      scriptPubKeyHex: output.scriptPubKeyHex,
     })),
   };
 }
@@ -2671,12 +2919,12 @@ function normalizeSigbashSigningResult(result) {
   };
 }
 
-function soloTamperLocalChecks({ state, leaverId, variants }) {
+function soloTamperLocalChecks({ state, currentIds, leaverId, variants }) {
   const checkVariant = (psbt) => {
     const inspection = inspectPsbt(psbt.psbtBase64);
     const failures = evaluatePolicy(
       psbtInspectionToPolicyTx({ state, inspection }),
-      state.sigbashPolicies.get(leaverId),
+      state.policies.get(policyId(currentIds, leaverId)),
     );
     return {
       passed: failures.length === 0,
@@ -2821,11 +3069,24 @@ function psbtInspectionToPolicyTx({ state, inspection }) {
   const leaf = scriptHex ? findLeafByScriptHex(state, scriptHex) : null;
   return {
     sigbashLeafKey: leaf?.sigbashXonlyPubkey,
+    inputCount: inspection.inputCount,
     outputs: inspection.outputs.map((output) => ({
       address: output.address,
       value: output.valueSats,
     })),
   };
+}
+
+function vaultFromPsbtInspection(state, inspection) {
+  const scriptPubKeyHex = inspection.inputs[0]?.witnessUtxo?.scriptPubKeyHex;
+  if (!scriptPubKeyHex) return null;
+  return (
+    [...state.vaults.values()].find((vault) => vault.outputScriptHex === scriptPubKeyHex) || null
+  );
+}
+
+function sigbashKeyIdEnvName(participantId, round) {
+  return `SIGBASH_KEY_ID_${participantId.toUpperCase()}_${round.toUpperCase()}`;
 }
 
 function findLeafByScriptHex(state, scriptHex) {

@@ -7,7 +7,8 @@ import {
   RECOVERY_DELAY_BLOCKS,
 } from './config.js';
 import {
-  aggregateCompressedPubkeys,
+  keyAgg,
+  keySort,
   buildVaultTaproot,
   deterministicKeypair,
   hmacHex,
@@ -15,18 +16,44 @@ import {
   taprootAddress,
 } from './crypto.js';
 
+// Every participant has one Sigbash key *per round in which they could be the
+// leaver*: round one ({A,B,C}) plus each pair round they belong to. Keys are
+// never reused across rounds. This is what makes the policy set sound with
+// immutable Sigbash keys: a key's signature is only valid for the tapscript
+// leaf that contains that exact key, and that leaf exists in exactly one round
+// vault, so a round-two policy can never be satisfied by spending the round-one
+// coin (or vice versa). A single shared key with an OR-of-rounds policy does
+// not have that property.
+export function participantLeaveRounds(participantId, allIds) {
+  const others = allIds.filter((id) => id !== participantId);
+  return [
+    roundId(allIds),
+    ...others.map((otherId) => roundId([participantId, otherId])),
+  ];
+}
+
 export function createDemoState({ sigbashLeafOverrides = {} } = {}) {
+  const allIds = PARTICIPANTS.map((participant) => participant.id);
   const participants = PARTICIPANTS.map((participant) => {
     const personal = deterministicKeypair(DEMO_SEED, `${participant.id}:personal`);
-    const sigbash = deterministicKeypair(DEMO_SEED, `${participant.id}:sigbash-client-share`);
     const payoutKey = deterministicKeypair(DEMO_SEED, `${participant.id}:payout`);
+    const sigbashByRound = {};
+    for (const round of participantLeaveRounds(participant.id, allIds)) {
+      const localShare = deterministicKeypair(
+        DEMO_SEED,
+        `${participant.id}:sigbash-client-share:${round}`,
+      );
+      const override = sigbashLeafOverrides[participant.id]?.[round];
+      sigbashByRound[round] = {
+        ...localShare,
+        xonlyPubKeyHex: override || localShare.xonlyPubKeyHex,
+        isLiveKey: Boolean(override),
+      };
+    }
     return {
       ...participant,
       personal,
-      sigbash: {
-        ...sigbash,
-        xonlyPubKeyHex: sigbashLeafOverrides[participant.id] || sigbash.xonlyPubKeyHex,
-      },
+      sigbashByRound,
       payout: payoutKey,
       payoutAddress: taprootAddress(payoutKey.xonlyPubKeyHex),
     };
@@ -34,8 +61,7 @@ export function createDemoState({ sigbashLeafOverrides = {} } = {}) {
 
   const vaults = buildVaultTree(participants);
   const policies = buildPolicies(participants, vaults);
-  const sigbashPolicies = buildParticipantSigbashPolicies(participants, policies);
-  return { participants, vaults, policies, sigbashPolicies };
+  return { participants, vaults, policies };
 }
 
 export function buildVaultTree(participants) {
@@ -44,30 +70,30 @@ export function buildVaultTree(participants) {
   const rounds = new Map();
 
   for (const ids of [allIds, ...pairs(allIds)]) {
+    const round = roundId(ids);
     const current = ids.map((id) => byIds.get(id));
-    const keyPath = aggregateCompressedPubkeys(current.map((p) => p.personal.publicKeyHex));
+    const keyPath = keyAgg(keySort(current.map((p) => p.personal.publicKeyHex)));
     const taproot = buildVaultTaproot({
       internalXonlyPubkey: keyPath.xonlyPubKeyHex,
       soloLeafPubkeys: current.map((p) => ({
         participantId: p.id,
-        xonlyPubkey: p.sigbash.xonlyPubKeyHex,
+        xonlyPubkey: p.sigbashByRound[round].xonlyPubKeyHex,
       })),
       recoveryDelayBlocks: RECOVERY_DELAY_BLOCKS,
       recoveryXonlyPubkeys: current.map((p) => p.personal.xonlyPubKeyHex),
     });
-    const id = roundId(ids);
-    rounds.set(id, {
-      id,
+    rounds.set(round, {
+      id: round,
       participantIds: ids,
       address: taproot.address,
       outputScriptHex: taproot.outputScriptHex,
       tapMerkleRoot: taproot.tapMerkleRoot,
-      descriptor: `tr(musig2(${current
-        .map((p) => p.personal.xonlyPubKeyHex)
+      descriptor: `tr(musig(${current
+        .map((p) => p.personal.publicKeyHex)
         .join(',')}),{${current
-        .map((p) => `pk(${p.sigbash.xonlyPubKeyHex})`)
-        .join(',')},and(older(${RECOVERY_DELAY_BLOCKS}),thresh(${Math.max(1, current.length - 1)},${current
-        .map((p) => `pk(${p.personal.xonlyPubKeyHex})`)
+        .map((p) => `pk(${p.sigbashByRound[round].xonlyPubKeyHex})`)
+        .join(',')},and_v(v:older(${RECOVERY_DELAY_BLOCKS}),multi_a(${Math.max(1, current.length - 1)},${current
+        .map((p) => p.personal.xonlyPubKeyHex)
         .join(',')}))})`,
       keyPath: {
         type: 'MuSig2',
@@ -121,27 +147,18 @@ export function buildPolicies(participants, vaults) {
   return policies;
 }
 
-export function buildParticipantSigbashPolicies(participants, branchPolicies) {
-  const policiesByParticipant = new Map();
-  for (const participant of participants) {
-    const branches = [...branchPolicies.values()].filter(
-      (policy) => policy.leaverId === participant.id,
-    );
-    policiesByParticipant.set(participant.id, {
-      id: `sigbash:${participant.id}`,
-      participantId: participant.id,
-      network: NETWORK,
-      logic: 'OR',
-      conditions: branches.map((branch) => ({
-        id: branch.id,
-        logic: 'AND',
-        conditions: branch.conditions,
-      })),
-    });
-  }
-  return policiesByParticipant;
-}
-
+// The policy for one (round, leaver) Sigbash key. This is the whole policy for
+// that key — no OR across rounds. Every condition is known before the key is
+// created, so the key can be immutable (no admin-only `updateable` flag, no
+// 24-hour post-update signing cooldown):
+//   - payout amount and destination are pinned to output 0
+//   - the leftover destination is pinned to the next round's vault (round two
+//     keys are created first, so round-one policies can reference the round-two
+//     vault addresses)
+//   - the leftover floor bounds how much a malicious leaver can burn as fees
+//   - output count and input count are pinned
+//   - REQKEY in descriptor mode pins the tapscript leaf key to this Sigbash
+//     key's own xpub-derived child, without needing to know the key in advance
 export function soloPolicy({ roundIds, leaver, payoutSats, nextAddress, leftoverFloor }) {
   return {
     id: policyId(roundIds, leaver.id),
@@ -175,10 +192,15 @@ export function soloPolicy({ roundIds, leaver, payoutSats, nextAddress, leftover
         value: leftoverFloor,
       },
       { type: 'TX_OUTPUT_COUNT', operator: 'EQ', value: 2 },
+      { type: 'TX_INPUT_COUNT', operator: 'EQ', value: 1 },
       {
         type: 'REQKEY',
         key_type: 'TAP_LEAF_XONLY_PUBKEY',
-        key_identifier: leaver.sigbash.xonlyPubKeyHex,
+        use_descriptor: true,
+        descriptor_template: 'tr(SIGBASH_XPUB/0/*)',
+        // Local-model equivalent of the descriptor-derived key: the round
+        // specific leaf key. Stripped before the policy is sent to Sigbash.
+        local_key_identifier: leaver.sigbashByRound[roundId(roundIds)].xonlyPubKeyHex,
         selector: { type: 'ALL' },
       },
     ],
@@ -253,8 +275,10 @@ export function buildSoloWithdrawal({ state, currentUtxo, currentIds, leaverId }
     round: roundId(currentIds),
     signer: leaverId,
     input: currentUtxo.outpoint,
+    inputCount: 1,
     inputValue: currentUtxo.value,
-    sigbashLeafKey: participantById(state, leaverId).sigbash.xonlyPubKeyHex,
+    sigbashLeafKey: participantById(state, leaverId).sigbashByRound[roundId(currentIds)]
+      .xonlyPubKeyHex,
     outputs: [
       {
         address: participantById(state, leaverId).payoutAddress,
@@ -272,16 +296,19 @@ export function buildSoloWithdrawal({ state, currentUtxo, currentIds, leaverId }
 
 export function buildCooperativeExit({ state, currentUtxo, currentIds }) {
   const participants = currentIds.map((id) => participantById(state, id));
-  const feeShare = Math.floor(AMOUNTS.cooperativeFee / participants.length);
+  const refund = Math.floor(
+    (currentUtxo.value - AMOUNTS.cooperativeFee) / participants.length,
+  );
   return {
     kind: 'cooperative-exit',
     input: currentUtxo.outpoint,
+    inputCount: 1,
     inputValue: currentUtxo.value,
     keyPath: state.vaults.get(roundId(currentIds)).keyPath,
     signatures: participants.map((p) => simulatedSignature(p.personal.privateKeyHex, currentUtxo.outpoint)),
     outputs: participants.map((p) => ({
       address: p.payoutAddress,
-      value: AMOUNTS.deposit - feeShare,
+      value: refund,
       label: `${p.id} cooperative refund`,
     })),
   };
@@ -292,6 +319,7 @@ export function buildFinalSweep({ state, currentUtxo, participantId }) {
   return {
     kind: 'final-sweep',
     input: currentUtxo.outpoint,
+    inputCount: 1,
     inputValue: currentUtxo.value,
     keyPath: {
       type: 'single-party-key-path',
@@ -317,6 +345,7 @@ export function buildRecovery({ state, currentUtxo, currentIds, vanishedId, bloc
   return {
     kind: 'timelocked-recovery',
     input: currentUtxo.outpoint,
+    inputCount: 1,
     inputValue: currentUtxo.value,
     vanishedId,
     signerIds: currentIds.filter((id) => id !== vanishedId),
@@ -343,7 +372,7 @@ export function roundId(ids) {
   return [...ids].sort().join('');
 }
 
-function pairs(ids) {
+export function pairs(ids) {
   const result = [];
   for (let i = 0; i < ids.length; i += 1) {
     for (let j = i + 1; j < ids.length; j += 1) {

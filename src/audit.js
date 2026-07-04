@@ -1,4 +1,4 @@
-import { AMOUNTS, PARTICIPANTS, POLICY_FLOORS, RECOVERY_DELAY_BLOCKS } from './config.js';
+import { AMOUNTS, PARTICIPANTS, POLICY_FLOORS, RECOVERY_DELAY_BLOCKS, SOLO_FEE_BUDGET_SATS } from './config.js';
 import { policyId, roundId, verifyNoSigbashInKeyPath } from './vault.js';
 
 export function auditSpecState(state) {
@@ -19,16 +19,18 @@ export function auditSpecState(state) {
     check('all vault addresses are signet taproot addresses', allVaultAddressesAreSignetTaproot(state)),
     check('all vault scriptPubKeys are v1 P2TR outputs', allVaultScriptsAreP2tr(state)),
     check('all cooperative key-paths exclude Sigbash keys', allKeyPathsExcludeSigbash(state)),
-    check('all cooperative key-paths use coefficient-weighted aggregation', allKeyPathsUseWeightedAggregation(state)),
+    check('all cooperative key-paths use standard BIP-327 KeyAgg', allKeyPathsUseBip327(state)),
     check('every vault has a timelocked recovery leaf', allVaultsHaveRecoveryLeaf(state)),
     check('recovery leaves require participant key threshold', allRecoveryLeavesRequireThreshold(state)),
-    check('one Sigbash policy exists per participant', state.sigbashPolicies.size === 3),
-    check('all participant Sigbash policies are OR-composed branch policies', allParticipantPoliciesAreOrs(state)),
-    check('all solo policy branches pin exactly two outputs', allBranchesPinOutputCount(state)),
-    check('all solo policy branches require the participant tapscript key', allBranchesRequireLeafKey(state)),
+    check('one immutable Sigbash policy exists per (round, leaver)', state.policies.size === 9),
+    check('no policy is an OR across rounds', noOrPolicies(state)),
+    check('Sigbash leaf keys are unique per (participant, round)', leafKeysAreRoundScoped(state)),
+    check('all solo policies pin exactly two outputs', allBranchesPinOutputCount(state)),
+    check('all solo policies pin exactly one input', allBranchesPinInputCount(state)),
+    check('all solo policies carry a descriptor-mode REQKEY', allBranchesRequireLeafKey(state)),
     check('round-one policies pin leftover to round-two vaults', roundOneLeftoversAreRevaulted(state)),
     check('round-two policies pin leftover to final participant payout address', roundTwoLeftoversGoToLastParticipant(state)),
-    check('leftover floors leave fee room', leftoverFloorsLeaveFeeRoom()),
+    check('leftover floors bound the fee burn to the configured budget', leftoverFloorsBoundFeeBurn()),
   ];
   return {
     passed: checks.every((item) => item.ok),
@@ -58,14 +60,13 @@ function allKeyPathsExcludeSigbash(state) {
   return [...state.vaults.values()].every((vault) => verifyNoSigbashInKeyPath(vault));
 }
 
-function allKeyPathsUseWeightedAggregation(state) {
+function allKeyPathsUseBip327(state) {
   return [...state.vaults.values()].every((vault) => {
     const aggregation = vault.keyPath.aggregation;
     return (
-      aggregation?.type === 'BIP327-keyagg' &&
-      aggregation.sortedXonlyPubkeys?.length === vault.participantIds.length &&
-      aggregation.secondUniqueXonlyPubkey !== null &&
-      /^[0-9a-f]{64}$/.test(aggregation.keyAggListHash)
+      aggregation?.type === 'BIP327-KeyAgg' &&
+      aggregation.compressedPubkeys?.length === vault.participantIds.length &&
+      aggregation.coefficients?.length === vault.participantIds.length
     );
   });
 }
@@ -91,15 +92,24 @@ function allRecoveryLeavesRequireThreshold(state) {
   });
 }
 
-function allParticipantPoliciesAreOrs(state) {
-  return state.participants.every((participant) => {
-    const policy = state.sigbashPolicies.get(participant.id);
-    return (
-      policy?.logic === 'OR' &&
-      policy.conditions.length === 3 &&
-      policy.conditions.every((branch) => branch.logic === 'AND')
-    );
-  });
+function noOrPolicies(state) {
+  return [...state.policies.values()].every((policy) => policy.logic === 'AND');
+}
+
+function leafKeysAreRoundScoped(state) {
+  const seen = new Set();
+  for (const participant of state.participants) {
+    for (const [round, key] of Object.entries(participant.sigbashByRound)) {
+      if (seen.has(key.xonlyPubKeyHex)) return false;
+      seen.add(key.xonlyPubKeyHex);
+      const vault = state.vaults.get(round);
+      const leaf = vault?.tapscriptLeaves.find(
+        (item) => item.type === 'solo-withdrawal' && item.participantId === participant.id,
+      );
+      if (!leaf || leaf.sigbashXonlyPubkey !== key.xonlyPubKeyHex) return false;
+    }
+  }
+  return true;
 }
 
 function allBranchesPinOutputCount(state) {
@@ -113,14 +123,28 @@ function allBranchesPinOutputCount(state) {
   );
 }
 
+function allBranchesPinInputCount(state) {
+  return [...state.policies.values()].every((policy) =>
+    policy.conditions.some(
+      (condition) =>
+        condition.type === 'TX_INPUT_COUNT' &&
+        condition.operator === 'EQ' &&
+        condition.value === 1,
+    ),
+  );
+}
+
 function allBranchesRequireLeafKey(state) {
   return [...state.policies.values()].every((policy) => {
     const participant = state.participants.find((item) => item.id === policy.leaverId);
+    const roundKey = participant?.sigbashByRound[roundId(policy.roundIds)];
     return policy.conditions.some(
       (condition) =>
         condition.type === 'REQKEY' &&
         condition.key_type === 'TAP_LEAF_XONLY_PUBKEY' &&
-        condition.key_identifier === participant.sigbash.xonlyPubKeyHex,
+        condition.use_descriptor === true &&
+        condition.descriptor_template === 'tr(SIGBASH_XPUB/0/*)' &&
+        condition.local_key_identifier === roundKey?.xonlyPubKeyHex,
     );
   });
 }
@@ -160,10 +184,13 @@ function pinsOutputOneAddress(policy, address) {
   );
 }
 
-function leftoverFloorsLeaveFeeRoom() {
+function leftoverFloorsBoundFeeBurn() {
+  const potAfterFirst = 300_000_000 - AMOUNTS.firstWithdrawal;
+  const worstRoundTwoPot = POLICY_FLOORS.roundOneLeftover;
   return (
-    POLICY_FLOORS.roundOneLeftover < 300_000_000 - AMOUNTS.firstWithdrawal &&
-    POLICY_FLOORS.roundTwoLeftover < 205_000_000 - AMOUNTS.secondWithdrawal
+    potAfterFirst - POLICY_FLOORS.roundOneLeftover === SOLO_FEE_BUDGET_SATS &&
+    worstRoundTwoPot - AMOUNTS.secondWithdrawal - POLICY_FLOORS.roundTwoLeftover ===
+      SOLO_FEE_BUDGET_SATS
   );
 }
 
