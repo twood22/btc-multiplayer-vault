@@ -14,7 +14,8 @@ design fixes them.
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 20+ (the code is strict TypeScript, run via `tsx` with no build
+  step; `npm test` typechecks with `tsc --noEmit` before running the suite)
 - Nothing else for local mode. Live mode needs Sigbash signet credentials and
   a Bitcoin Core signet node for broadcast/audit commands.
 

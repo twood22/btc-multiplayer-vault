@@ -36,8 +36,10 @@ key being used is the leaf key registered for that round.
 
 ## How it's built
 
-Node.js + `bitcoinjs-lib` + `tiny-secp256k1`, with `@sigbash/sdk` for the
-co-signer half. Key design decisions:
+TypeScript on Node.js (strict mode, run via `tsx`, `tsc --noEmit` gating the
+test suite) + `bitcoinjs-lib` + `tiny-secp256k1`, with `@sigbash/sdk` for the
+co-signer half. Satoshi amounts use a branded `Sats` type validated at every
+input boundary. Key design decisions:
 
 - **One Sigbash key per (player, round)** — nine keys, not three. A key's
   signature is only valid in the one vault whose leaf contains it, making
