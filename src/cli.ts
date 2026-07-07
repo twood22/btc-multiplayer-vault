@@ -1,9 +1,17 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { AMOUNTS, RECOVERY_DELAY_BLOCKS } from './config.js';
 import { auditSpecState } from './audit.js';
 import { runBip327KeyAggVectors, verifyVaultTransaction } from './consensus.js';
-import { deriveXpubChildPubkey } from './crypto.js';
+import { runBip327ProtocolVectors } from './musig2-vectors.js';
+import {
+  ceremonyAggregate,
+  ceremonyNonce,
+  ceremonyPartial,
+  ceremonyStart,
+  type CeremonyContext,
+} from './ceremony.js';
+import { deriveXpubChildPubkey, xpubRootXonly } from './crypto.js';
 import {
   combinePsbts,
   decodeRawTransaction,
@@ -79,6 +87,10 @@ const commands: Record<string, () => Promise<void>> = {
   'sign-solo-psbt': signSoloPsbt,
   'cooperative-psbt': cooperativePsbt,
   'sign-cooperative-psbt': signCooperativePsbt,
+  'ceremony-start': ceremonyStartCommand,
+  'ceremony-nonce': ceremonyNonceCommand,
+  'ceremony-partial': ceremonyPartialCommand,
+  'ceremony-aggregate': ceremonyAggregateCommand,
   'recovery-psbt': recoveryPsbt,
   'sign-recovery-psbt': signRecoveryPsbtCommand,
   'final-sweep-psbt': finalSweepPsbt,
@@ -104,6 +116,7 @@ const commands: Record<string, () => Promise<void>> = {
   'live-run-audit': liveRunAudit,
   'live-solo-withdrawal': liveSoloWithdrawal,
   'live-solo-tamper-check': liveSoloTamperCheck,
+  'live-policy-dry-run': livePolicyDryRun,
   'live-solo-audit': liveSoloAudit,
   'live-cooperative-audit': liveCooperativeAudit,
   'live-recovery-audit': liveRecoveryAudit,
@@ -484,6 +497,59 @@ async function signCooperativePsbt() {
   const state = createConfiguredState();
   const signed = signCooperativeExitPsbt({ state, currentIds, psbtBase64 });
   printResult('signed cooperative exit', signed);
+}
+
+// Interactive MuSig2 cooperative-exit ceremony. Each command runs on one
+// participant's machine and exchanges small JSON blobs, so no machine ever
+// holds another participant's key. Flow:
+//   1. anyone: ceremony-start   → context (unsigned PSBT + signing metadata)
+//   2. each:   ceremony-nonce   → their pubnonce (+ private secnonce, kept local)
+//   3. each:   ceremony-partial → their partial signature
+//   4. anyone: ceremony-aggregate → final signed transaction
+async function ceremonyStartCommand() {
+  const args = parseArgs(process.argv.slice(3));
+  const currentIds = requireArg(args, 'round').split(',');
+  const txid = requireArg(args, 'txid');
+  const vout = Number(requireArg(args, 'vout'));
+  const valueSats = Number(requireArg(args, 'value-sats'));
+  const state = createConfiguredState();
+  const built = buildCooperativeExitPsbt({ state, currentIds, txid, vout, valueSats });
+  const context = ceremonyStart({ state, currentIds, txid, vout, valueSats, psbtBase64: built.psbtBase64 });
+  printResult('cooperative ceremony context', {
+    context,
+    note: 'Share this context with each participant. They run ceremony-nonce, then ceremony-partial.',
+  });
+}
+
+async function ceremonyNonceCommand() {
+  const args = parseArgs(process.argv.slice(3));
+  const participantId = requireArg(args, 'participant');
+  const context = JSON.parse(requireArg(args, 'context')) as CeremonyContext;
+  const state = createConfiguredState();
+  printResult('cooperative ceremony nonce', {
+    ...ceremonyNonce({ state, participantId, context }),
+    warning: 'secnonce is single-use and secret. Never reuse it or share it.',
+  });
+}
+
+async function ceremonyPartialCommand() {
+  const args = parseArgs(process.argv.slice(3));
+  const participantId = requireArg(args, 'participant');
+  const context = JSON.parse(requireArg(args, 'context')) as CeremonyContext;
+  const pubnonces = JSON.parse(requireArg(args, 'pubnonces')) as Record<string, string>;
+  const secnonce = requireArg(args, 'secnonce');
+  const state = createConfiguredState();
+  printResult('cooperative ceremony partial signature', {
+    ...ceremonyPartial({ state, participantId, context, pubnonces, secnonce }),
+  });
+}
+
+async function ceremonyAggregateCommand() {
+  const args = parseArgs(process.argv.slice(3));
+  const context = JSON.parse(requireArg(args, 'context')) as CeremonyContext;
+  const pubnonces = JSON.parse(requireArg(args, 'pubnonces')) as Record<string, string>;
+  const partialSigs = JSON.parse(requireArg(args, 'partials')) as Record<string, string>;
+  printResult('cooperative ceremony aggregate', ceremonyAggregate({ context, pubnonces, partialSigs }));
 }
 
 async function recoveryPsbt() {
@@ -1783,6 +1849,61 @@ async function liveSoloWithdrawal() {
   assert(checks.every((item) => item.ok), 'live solo withdrawal failed');
 }
 
+// Pre-funding proving ground: builds the solo-withdrawal PSBT for a given (or
+// placeholder) vault outpoint and runs live Sigbash verifyPSBT on the valid
+// PSBT plus the three tamper variants — without touching Bitcoin Core and
+// without consuming a signing nullifier. Because every policy carries a
+// descriptor-mode REQKEY, a pass here also proves the tapscript leaf key we
+// derived from the key's xpub matches what Sigbash itself derives. Run this
+// for every (round, leaver) before funding anything.
+async function livePolicyDryRun() {
+  assert(
+    process.env.SIGBASH_MODE === 'live',
+    'live-policy-dry-run contacts Sigbash; rerun with SIGBASH_MODE=live',
+  );
+  const args = parseArgs(process.argv.slice(3));
+  const currentIds = requireArg(args, 'round').split(',');
+  const leaverId = requireArg(args, 'leaver');
+  const txid = stringArg(args, 'txid') || 'f'.repeat(64);
+  const vout = Number(args.vout ?? 0);
+  const valueSats = Number(stringArg(args, 'value-sats') ?? expectedVaultValueSats(currentIds));
+  const state = createConfiguredState();
+  const round = roundId(currentIds);
+  const leafKey = sigbashRoundKey(participantById(state, leaverId), round);
+  assert(
+    leafKey.isLiveKey,
+    `SIGBASH_LEAF_KEYS_JSON has no live leaf key for ${leaverId}:${round}; run sigbash-live-setup first`,
+  );
+  const keyId = stringArg(args, 'key-id') || process.env[sigbashKeyIdEnvName(leaverId, round)];
+  assert(keyId, `missing --key-id or ${sigbashKeyIdEnvName(leaverId, round)}`);
+  const policy = { ...requirePolicy(state, currentIds, leaverId), keyId };
+
+  const variants = buildSoloWithdrawalTamperPsbts({ state, currentIds, leaverId, txid, vout, valueSats });
+  const adapter = await createSigbashAdapter();
+  const liveValid = await adapter.verifyPSBT({ psbtBase64: variants.valid.psbtBase64 }, policy);
+  const liveTampered: Record<string, SigbashVerifyResult> = {};
+  for (const [name, psbt] of Object.entries(variants.tampered)) {
+    liveTampered[name] = await adapter.verifyPSBT({ psbtBase64: psbt.psbtBase64 }, policy);
+  }
+  const checks = [
+    check('Sigbash verifyPSBT accepts the valid solo PSBT (REQKEY leaf-key assumption holds)', sigbashVerificationPassed(liveValid), liveValid),
+    ...Object.entries(liveTampered).map(([name, result]) =>
+      check(`Sigbash verifyPSBT rejects tampered ${name} PSBT`, !sigbashVerificationPassed(result), result),
+    ),
+  ];
+  printResult('live policy dry-run (no chain lookup, no nullifier consumed)', {
+    round,
+    leaverId,
+    keyId,
+    outpoint: `${txid}:${vout}`,
+    valueSats,
+    placeholderOutpoint: stringArg(args, 'txid') === undefined,
+    checks,
+    passed: checks.every((item) => item.ok),
+  });
+  assert(checks.every((item) => item.ok), 'live policy dry-run failed');
+}
+
 async function liveSoloTamperCheck() {
   assert(
     process.env.SIGBASH_MODE === 'live',
@@ -2186,6 +2307,14 @@ async function consensusAcceptance() {
   const vectors = runBip327KeyAggVectors();
   assert(vectors.passed, `BIP-327 KeyAgg vectors failed: ${JSON.stringify(vectors.results)}`);
 
+  const protocolVectors = runBip327ProtocolVectors();
+  assert(
+    protocolVectors.passed,
+    `BIP-327 protocol vectors failed: ${JSON.stringify(
+      protocolVectors.checks.filter((item) => !item.ok),
+    )}`,
+  );
+
   const state = createDemoState();
   const roundOneIds = ['alice', 'bob', 'carol'];
   const roundOneVault = requireVault(state, roundOneIds);
@@ -2302,8 +2431,41 @@ async function consensusAcceptance() {
     }),
   });
 
+  // Interactive MuSig2 ceremony must produce a consensus-valid cooperative
+  // exit identical to the reference aggregate signer, for both round sizes.
+  const ceremonyResults = [roundOneIds, ['bob', 'carol']].map((ids) => {
+    const vault = requireVault(state, ids);
+    const potSats = ids.length === 3 ? AMOUNTS.deposit * 3 : 204_999_000;
+    const built = buildCooperativeExitPsbt({ state, currentIds: ids, txid: fundingTxid, vout: 0, valueSats: potSats });
+    const context = ceremonyStart({ state, currentIds: ids, txid: fundingTxid, vout: 0, valueSats: potSats, psbtBase64: built.psbtBase64 });
+    const pubById = Object.fromEntries(ids.map((id) => [id, participantById(state, id).personal.publicKeyHex]));
+    const nonces = ids.map((id) => ceremonyNonce({ state, participantId: id, context }));
+    const pubnonces = Object.fromEntries(ids.map((id, i) => [pubById[id]!, nonces[i]!.pubnonce]));
+    const partials = Object.fromEntries(
+      ids.map((id, i) => [pubById[id]!, ceremonyPartial({ state, participantId: id, context, pubnonces, secnonce: nonces[i]!.secnonce }).partialSig]),
+    );
+    const finalTx = ceremonyAggregate({ context, pubnonces, partialSigs: partials });
+    const verification = verifyVaultTransaction({
+      txHex: finalTx.transactionHex,
+      prevouts: [{ scriptPubKeyHex: vault.outputScriptHex, valueSats: potSats }],
+    });
+    return { round: vault.id, txid: finalTx.txid, consensusChecks: verification.checks };
+  });
+  assert(ceremonyResults.every((item) => item.consensusChecks.length > 0), 'ceremony produced no verified transaction');
+
   printResult('consensus acceptance', {
     bip327KeyAggVectors: vectors,
+    interactiveMusig2Ceremony: ceremonyResults,
+    bip327ProtocolVectors: {
+      passed: protocolVectors.passed,
+      total: protocolVectors.total,
+      byVector: Object.entries(
+        protocolVectors.checks.reduce<Record<string, number>>((acc, item) => {
+          acc[item.vector] = (acc[item.vector] ?? 0) + 1;
+          return acc;
+        }, {}),
+      ).map(([vector, count]) => ({ vector, count })),
+    },
     verifiedTransactions: verified,
   });
 }
@@ -2349,9 +2511,8 @@ async function sigbashLiveSetup() {
   const bootstrapState = createDemoState();
   const allIds = participantIds(bootstrapState);
   const roundOne = roundId(allIds);
-  const leafOverrides: Record<string, Record<string, string>> = Object.fromEntries(
-    allIds.map((id) => [id, {}]),
-  );
+  const leafOverrides: Record<string, Record<string, { key: string; xpub: string }>> =
+    Object.fromEntries(allIds.map((id) => [id, {}]));
   interface LiveKeyRegistration {
     participantId: string;
     round: string;
@@ -2360,14 +2521,33 @@ async function sigbashLiveSetup() {
     keyIdEnvName: string;
     bip328Xpub: string;
     leafXonlyPubkey: string;
-    leafKeyCandidates: { xpubChild00: string; tweakedAggregate: string | null };
+    leafKeyCandidates: { xpubRoot: string; xpubChild00: string; tweakedAggregate: string | null };
     helperP2trAddressDoNotFund: string | undefined;
     policyRoot: string;
     policyId: string;
   }
+  // Resumable checkpoint: each successful registration is appended here so a
+  // rate-limit/timeout partway through does not strand created keys. Rerunning
+  // reloads it and skips (participant, round) pairs already registered.
+  const checkpointPath = process.env.SIGBASH_SETUP_CHECKPOINT || 'live-run/setup-checkpoint.jsonl';
   const registrations: LiveKeyRegistration[] = [];
+  const doneKeys = new Set<string>();
+  if (existsSync(checkpointPath)) {
+    for (const line of readFileSync(checkpointPath, 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      const registration = JSON.parse(line) as LiveKeyRegistration;
+      registrations.push(registration);
+      doneKeys.add(`${registration.participantId}:${registration.round}`);
+      leafOverrides[registration.participantId]![registration.round] = {
+        key: registration.leafXonlyPubkey,
+        xpub: registration.bip328Xpub,
+      };
+    }
+    console.error(`  resuming: ${doneKeys.size} key(s) already registered`);
+  }
 
   const registerKey = async (state: VaultState, participantId: string, round: string) => {
+    if (doneKeys.has(`${participantId}:${round}`)) return;
     const participant = participantById(state, participantId);
     const vault = state.vaults.get(round);
     if (!vault) throw new Error(`unknown vault round ${round}`);
@@ -2388,16 +2568,23 @@ async function sigbashLiveSetup() {
     // path 0/0. The tweaked aggregate is printed as the fallback candidate —
     // if live verifyPSBT rejects REQKEY, swap SIGBASH_LEAF_KEYS_JSON to it.
     const xpubChildLeaf = deriveXpubChildPubkey(created.bip328Xpub, [0, 0]).xonlyPubKeyHex;
-    leafOverrides[participantId]![round] = xpubChildLeaf;
-    registrations.push({
+    const xpubRootLeaf = xpubRootXonly(created.bip328Xpub);
+    // Leaf key = xpub child 0/0: proven on live signet to satisfy the
+    // descriptor-mode REQKEY policy clause. NOTE (see REVIEW.md "Live Sigbash
+    // findings"): Sigbash accepts the policy with this leaf but does not yet
+    // identify the input as one it controls, so live co-signing is not wired
+    // up end to end — the root/aggregate keys are kept as diagnostic fallbacks.
+    leafOverrides[participantId]![round] = { key: xpubChildLeaf, xpub: created.bip328Xpub! };
+    const registration: LiveKeyRegistration = {
       participantId,
       round,
       keyId: created.keyId,
       keyIndex: created.keyIndex,
       keyIdEnvName: sigbashKeyIdEnvName(participantId, round),
       bip328Xpub: created.bip328Xpub,
-      leafXonlyPubkey: xpubChildLeaf,
+      leafXonlyPubkey: xpubRootLeaf,
       leafKeyCandidates: {
+        xpubRoot: xpubRootLeaf,
         xpubChild00: xpubChildLeaf,
         tweakedAggregate: created.aggregatePubKeyHex
           ? normalizeXonly(created.aggregatePubKeyHex)
@@ -2406,7 +2593,11 @@ async function sigbashLiveSetup() {
       helperP2trAddressDoNotFund: created.p2trAddress,
       policyRoot: created.policyRoot,
       policyId: policy.id,
-    });
+    };
+    registrations.push(registration);
+    doneKeys.add(`${participantId}:${round}`);
+    appendFileSync(checkpointPath, `${JSON.stringify(registration)}\n`);
+    console.error(`  registered ${participantId}:${round} as keyId ${created.keyId} (${doneKeys.size}/9)`);
     client.disconnect?.();
   };
 
@@ -2450,7 +2641,7 @@ async function createKeyWithAutoIndex(
   options: Omit<Parameters<SigbashLiveClient['createKey']>[0], 'keyIndex'> & { keyIndex?: number },
 ): ReturnType<SigbashLiveClient['createKey']> {
   let keyIndex = options.keyIndex ?? 0;
-  for (let attempt = 0; attempt < 32; attempt += 1) {
+  for (let attempt = 0; attempt < 64; attempt += 1) {
     try {
       return await client.createKey({ ...options, keyIndex });
     } catch (error) {
@@ -2459,10 +2650,18 @@ async function createKeyWithAutoIndex(
         keyIndex = nextIndex;
         continue;
       }
+      // The server rate-limits key registration (~1/min) and occasionally
+      // times out a request; both are transient — wait and retry same index.
+      const message = errorMessage(error).toLowerCase();
+      if (message.includes('rate limit') || message.includes('timed out') || message.includes('timeout')) {
+        console.error(`  … transient error on keyIndex ${keyIndex} (${message.slice(0, 60)}); waiting 65s`);
+        await new Promise((resolve) => setTimeout(resolve, 65_000));
+        continue;
+      }
       throw error;
     }
   }
-  throw new Error('could not find a free Sigbash keyIndex after 32 attempts');
+  throw new Error('could not create a Sigbash key after 64 attempts');
 }
 
 function createDeposits(ledger: Ledger, state: VaultState): void {

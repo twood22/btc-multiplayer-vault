@@ -1,7 +1,7 @@
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { AMOUNTS, RECOVERY_DELAY_BLOCKS } from './config.js';
-import { keyAggSecret, taggedHashHex } from './crypto.js';
+import { keyAggSecret, taggedHashHex, tapLeafHash, xpubMasterFingerprint } from './crypto.js';
 import { participantById, policyId, roundId, sigbashRoundKey } from './vault.js';
 import type {
   Hex,
@@ -217,6 +217,17 @@ interface SoloContext {
   policy: SoloPolicy;
   outputs: Array<{ index?: number; address: string; valueSats: number }>;
   tamper?: string;
+  /**
+   * BIP-371 derivation for the Sigbash leaf key (live mode). Without this the
+   * Sigbash WASM wallet does not recognize the vault input as one it controls
+   * ("no Sigbash-controlled inputs found in PSBT").
+   */
+  tapBip32Derivation?: {
+    masterFingerprint: Buffer;
+    pubkey: Buffer;
+    path: string;
+    leafHashes: Buffer[];
+  };
 }
 
 function soloWithdrawalContext({ state, currentIds, leaverId, txid, vout, valueSats }: SoloPsbtParams): SoloContext {
@@ -237,6 +248,15 @@ function soloWithdrawalContext({ state, currentIds, leaverId, txid, vout, valueS
   if (leftover < floor) {
     throw new Error(`leftover ${leftover} sats is below policy floor ${floor}`);
   }
+  const roundKey = sigbashRoundKey(participantById(state, leaverId), round);
+  const tapBip32Derivation = roundKey.xpub
+    ? {
+        masterFingerprint: xpubMasterFingerprint(roundKey.xpub),
+        pubkey: Buffer.from(roundKey.xonlyPubKeyHex, 'hex'),
+        path: 'm/0/0',
+        leafHashes: [tapLeafHash(Buffer.from(leaf.scriptHex, 'hex'))],
+      }
+    : undefined;
   return {
     round,
     vault,
@@ -247,6 +267,7 @@ function soloWithdrawalContext({ state, currentIds, leaverId, txid, vout, valueS
     valueSats,
     fee,
     policy,
+    ...(tapBip32Derivation ? { tapBip32Derivation } : {}),
     outputs: [
       { index: 0, address: outputAddress(policy, 0), valueSats: payout },
       { index: 1, address: nextAddress, valueSats: leftover },
@@ -265,6 +286,7 @@ function buildSoloWithdrawalPsbtFromOutputs({
   fee,
   outputs,
   tamper = undefined,
+  tapBip32Derivation = undefined,
 }: SoloContext): BuiltPsbt {
   const outputTotal = outputs.reduce((sum, output) => sum + output.valueSats, 0);
   if (outputTotal >= valueSats) {
@@ -286,6 +308,7 @@ function buildSoloWithdrawalPsbtFromOutputs({
         controlBlock: Buffer.from(leaf.controlBlockHex, 'hex'),
       },
     ],
+    ...(tapBip32Derivation ? { tapBip32Derivation: [tapBip32Derivation] } : {}),
   });
   for (const output of outputs) {
     psbt.addOutput({ address: output.address, value: BigInt(output.valueSats) });

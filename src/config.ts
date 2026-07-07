@@ -21,14 +21,25 @@ export const PARTICIPANTS: ParticipantConfig[] = [
 // are ~150 vbytes, so 10k sats is a generous ceiling with a tight burn bound.
 export const SOLO_FEE_BUDGET_SATS: Sats = asSats(10_000);
 
+// Amounts are overridable so a live signet run can use faucet-sized deposits.
+// Set VAULT_DEPOSIT_SATS; the schedule scales with haircut = bonus = 5% of the
+// deposit (first = deposit - haircut, second = deposit + haircut/2), which
+// keeps first + second + second == 3 * deposit. The defaults are the spec's
+// 1 BTC / 0.95 / 1.025 schedule.
+const depositSats = Number(process.env.VAULT_DEPOSIT_SATS || 100_000_000);
+if (!Number.isSafeInteger(depositSats) || depositSats < 1_000_000) {
+  throw new Error('VAULT_DEPOSIT_SATS must be an integer >= 1,000,000 (0.01 BTC)');
+}
+const haircutSats = Math.round(depositSats * 0.05);
+
 export const AMOUNTS = {
-  deposit: asSats(100_000_000),
-  firstWithdrawal: asSats(95_000_000),
-  secondWithdrawal: asSats(102_500_000),
-  feePerSoloWithdrawal: asSats(1_000),
-  finalSweepFee: asSats(1_000),
-  cooperativeFee: asSats(900),
-  recoveryFee: asSats(1_500),
+  deposit: asSats(depositSats),
+  firstWithdrawal: asSats(depositSats - haircutSats),
+  secondWithdrawal: asSats(depositSats + Math.floor(haircutSats / 2)),
+  feePerSoloWithdrawal: asSats(Number(process.env.VAULT_SOLO_FEE_SATS || 1_000)),
+  finalSweepFee: asSats(Number(process.env.VAULT_SOLO_FEE_SATS || 1_000)),
+  cooperativeFee: asSats(Number(process.env.VAULT_COOP_FEE_SATS || 900)),
+  recoveryFee: asSats(Number(process.env.VAULT_RECOVERY_FEE_SATS || 1_500)),
 } satisfies Record<string, Sats>;
 
 // Leftover floors are derived from the schedule so the maximum a malicious

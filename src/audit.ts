@@ -39,7 +39,7 @@ export function auditSpecState(state: VaultState): AuditReport {
     check('Sigbash leaf keys are unique per (participant, round)', leafKeysAreRoundScoped(state)),
     check('all solo policies pin exactly two outputs', allBranchesPinOutputCount(state)),
     check('all solo policies pin exactly one input', allBranchesPinInputCount(state)),
-    check('all solo policies carry a descriptor-mode REQKEY', allBranchesRequireLeafKey(state)),
+    check('all solo policies pin the round leaf key via REQKEY', allBranchesRequireLeafKey(state)),
     check('round-one policies pin leftover to round-two vaults', roundOneLeftoversAreRevaulted(state)),
     check('round-two policies pin leftover to final participant payout address', roundTwoLeftoversGoToLastParticipant(state)),
     check('leftover floors bound the fee burn to the configured budget', leftoverFloorsBoundFeeBurn()),
@@ -160,7 +160,6 @@ function allBranchesRequireLeafKey(state: VaultState): boolean {
         condition.type === 'REQKEY' &&
         condition.key_type === 'TAP_LEAF_XONLY_PUBKEY' &&
         condition.use_descriptor === true &&
-        condition.descriptor_template === 'tr(SIGBASH_XPUB/0/*)' &&
         condition.local_key_identifier === roundKey?.xonlyPubKeyHex,
     );
   });

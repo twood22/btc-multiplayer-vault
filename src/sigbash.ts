@@ -4,7 +4,7 @@ import type { PolicyCondition, PolicyNode, PolicyTx, SoloPolicy } from './types.
 // The live SDK is imported dynamically (it needs WASM + credentials), so its
 // surface is typed here rather than pulled from the package at build time.
 export interface SigbashSdk {
-  loadWasm(options: { wasmUrl: string }): Promise<void>;
+  loadWasm(options: LoadWasmOptions): Promise<void>;
   SigbashClient: new (options: {
     serverUrl: string;
     apiKey: string;
@@ -14,6 +14,11 @@ export interface SigbashSdk {
   }) => SigbashLiveClient;
   conditionConfigToPoetPolicy(config: unknown): PoetPolicy;
   SDK_VERSION?: string;
+}
+
+interface LoadWasmOptions {
+  wasmUrl: string;
+  expectedHash?: string;
 }
 
 export interface PoetPolicy {
@@ -185,7 +190,10 @@ export async function createLiveSigbashClient({
   }
 
   const wasmUrl = process.env.SIGBASH_WASM_URL || 'https://www.sigbash.com/sigbash.wasm';
-  await sdk.loadWasm({ wasmUrl });
+  // Pin the WASM hash in production. The SDK computes SHA-384 of the download
+  // and aborts on mismatch — this is the defense against a swapped binary.
+  const expectedHash = process.env.SIGBASH_WASM_SHA384;
+  await sdk.loadWasm(expectedHash ? { wasmUrl, expectedHash } : { wasmUrl });
   const client = new sdk.SigbashClient({
     serverUrl: process.env.SIGBASH_SERVER_URL || 'https://www.sigbash.com',
     apiKey: participantEnv('SIGBASH_API_KEY', participantId),
@@ -257,8 +265,7 @@ function evaluateNode(tx: PolicyTx, node: PolicyNode): string[] {
       failures.push(`input count ${inputCount} failed ${node.operator} ${node.value}`);
     }
   } else if (node.type === 'REQKEY') {
-    const expectedKey = node.local_key_identifier;
-    if (tx.sigbashLeafKey !== expectedKey) {
+    if (tx.sigbashLeafKey !== node.local_key_identifier) {
       failures.push('required Sigbash tapscript key is missing');
     }
   } else {
@@ -277,10 +284,9 @@ function toConditionConfig(policy: PolicyNode | SoloPolicy): unknown {
       conditions: policy.conditions.map((condition) => toConditionConfig(condition)),
     };
   }
-  const {
-    local_key_identifier: _localKey,
-    ...condition
-  } = policy as PolicyCondition & { local_key_identifier?: string };
+  const { local_key_identifier: _local, ...condition } = policy as PolicyCondition & {
+    local_key_identifier?: string;
+  };
   return condition;
 }
 

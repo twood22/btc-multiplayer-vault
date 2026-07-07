@@ -1,5 +1,15 @@
+import {
+  esploraEnabled,
+  esploraGetBlockchainInfo,
+  esploraGetRawTransaction,
+  esploraGetTxOut,
+  esploraSendRawTransaction,
+} from './esplora.js';
+
 // Thin JSON-RPC client for Bitcoin Core on signet. RPC results are inherently
 // untyped JSON; the narrow result shapes the CLI relies on are declared here.
+// When BITCOIN_BACKEND=esplora, chain reads/broadcast are served by a public
+// Esplora API instead, so no local node is required.
 
 export interface RpcScriptPubKey {
   hex?: string;
@@ -96,10 +106,12 @@ export async function bitcoinRpc<T = unknown>(method: string, params: unknown[] 
 }
 
 export async function getTxOut(txid: string, vout: number): Promise<RpcTxOut | null> {
+  if (esploraEnabled()) return esploraGetTxOut(txid, vout);
   return bitcoinRpc<RpcTxOut | null>('gettxout', [txid, vout, true]);
 }
 
 export async function getBlockchainInfo(): Promise<{ chain: string; blocks: number; headers: number }> {
+  if (esploraEnabled()) return esploraGetBlockchainInfo();
   return bitcoinRpc('getblockchaininfo');
 }
 
@@ -120,6 +132,7 @@ export async function getRawTransaction(
   txid: string,
   verbose: boolean | number = true,
 ): Promise<RpcTransaction> {
+  if (esploraEnabled()) return esploraGetRawTransaction(txid);
   return bitcoinRpc('getrawtransaction', [txid, verbose]);
 }
 
@@ -155,5 +168,6 @@ export async function finalizePsbt(
 }
 
 export async function sendRawTransaction(rawTxHex: string): Promise<string> {
+  if (esploraEnabled()) return esploraSendRawTransaction(rawTxHex);
   return bitcoinRpc('sendrawtransaction', [rawTxHex]);
 }

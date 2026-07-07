@@ -53,7 +53,12 @@
     "audit": "tsx src/cli.ts audit",
     "sdk-policy-check": "tsx src/cli.ts sdk-policy-check",
     "sigbash-live-setup": "tsx src/cli.ts sigbash-live-setup",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "live-policy-dry-run": "tsx src/cli.ts live-policy-dry-run",
+    "ceremony-start": "tsx src/cli.ts ceremony-start",
+    "ceremony-nonce": "tsx src/cli.ts ceremony-nonce",
+    "ceremony-partial": "tsx src/cli.ts ceremony-partial",
+    "ceremony-aggregate": "tsx src/cli.ts ceremony-aggregate"
   },
   "engines": {
     "node": ">=20"

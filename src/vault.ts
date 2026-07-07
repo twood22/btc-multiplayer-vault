@@ -28,8 +28,13 @@ import {
   type VaultState,
 } from './types.js';
 
-/** Nested overrides: participantId -> roundId -> live leaf x-only pubkey. */
-export type SigbashLeafOverrides = Record<string, Record<string, string> | undefined>;
+/**
+ * Nested overrides: participantId -> roundId -> live leaf key. Either the
+ * bare x-only pubkey hex, or an object carrying the key plus its BIP-328
+ * xpub (as printed by sigbash-live-setup).
+ */
+export type SigbashLeafOverride = string | { key: string; xpub?: string };
+export type SigbashLeafOverrides = Record<string, Record<string, SigbashLeafOverride> | undefined>;
 
 // Every participant has one Sigbash key *per round in which they could be the
 // leaver*: round one ({A,B,C}) plus each pair round they belong to. Keys are
@@ -61,10 +66,13 @@ export function createDemoState({
         `${participant.id}:sigbash-client-share:${round}`,
       );
       const override = sigbashLeafOverrides[participant.id]?.[round];
+      const overrideKey = typeof override === 'string' ? override : override?.key;
+      const overrideXpub = typeof override === 'object' ? override.xpub : undefined;
       sigbashByRound[round] = {
         ...localShare,
-        xonlyPubKeyHex: override || localShare.xonlyPubKeyHex,
-        isLiveKey: Boolean(override),
+        xonlyPubKeyHex: overrideKey || localShare.xonlyPubKeyHex,
+        isLiveKey: Boolean(overrideKey),
+        ...(overrideXpub ? { xpub: overrideXpub } : {}),
       };
     }
     return {
@@ -243,12 +251,15 @@ export function soloPolicy({
       { type: 'TX_OUTPUT_COUNT', operator: 'EQ', value: 2 },
       { type: 'TX_INPUT_COUNT', operator: 'EQ', value: 1 },
       {
+        // Descriptor-mode REQKEY: proven on live Sigbash signet to satisfy the
+        // "signer key in required signer universe" clause when the tapscript
+        // leaf contains the xpub's child 0/0 key. The local model checks the
+        // equivalent round-scoped leaf key via local_key_identifier, which is
+        // stripped before the policy is sent to Sigbash.
         type: 'REQKEY',
         key_type: 'TAP_LEAF_XONLY_PUBKEY',
         use_descriptor: true,
         descriptor_template: 'tr(SIGBASH_XPUB/0/*)',
-        // Local-model equivalent of the descriptor-derived key: the round
-        // specific leaf key. Stripped before the policy is sent to Sigbash.
         local_key_identifier: sigbashRoundKey(leaver, roundId(roundIds)).xonlyPubKeyHex,
         selector: { type: 'ALL' },
       },

@@ -33,6 +33,12 @@ export interface Keypair {
  */
 export interface SigbashRoundKey extends Keypair {
   isLiveKey: boolean;
+  /**
+   * The key's BIP-328 xpub (live mode only). Solo PSBTs embed a BIP-371
+   * tapBip32Derivation from it so the Sigbash WASM wallet recognizes the
+   * vault input as one it controls.
+   */
+  xpub?: string;
 }
 
 export interface Participant {
@@ -127,7 +133,8 @@ export type PolicyCondition =
       descriptor_template: string;
       /**
        * Local policy model only: the round-scoped leaf key the descriptor
-       * template resolves to. Stripped before the policy is sent to Sigbash.
+       * resolves to (proven on live signet to satisfy the REQKEY clause).
+       * Stripped before the policy is sent to Sigbash.
        */
       local_key_identifier: Hex;
       selector: { type: 'ALL' };

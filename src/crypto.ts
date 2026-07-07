@@ -180,6 +180,38 @@ function base58CheckDecode(value: string): Buffer {
   return data;
 }
 
+// The xpub's own root public key (x-only). For a Sigbash key this is the
+// untweaked MuSig2 aggregate — the key that signs a tapscript-leaf input.
+export function xpubRootXonly(xpubBase58: string): Hex {
+  const data = base58CheckDecode(xpubBase58.replace(/^\[[0-9a-fA-F/h']*\]/, ''));
+  if (data.length !== 78) throw new Error('invalid extended public key length');
+  return data.subarray(46, 78).toString('hex');
+}
+
+export function tapLeafHash(script: Buffer, leafVersion = 0xc0): Buffer {
+  if (script.length > 0xfc) throw new Error('script too large for single-byte compact size');
+  return taggedHash(
+    'TapLeaf',
+    Buffer.concat([Buffer.from([leafVersion]), Buffer.from([script.length]), script]),
+  );
+}
+
+// Master fingerprint for BIP-371 derivation fields: prefer the BIP-380 key
+// origin prefix ([fingerprint]tpub...); otherwise, for a depth-0 xpub, the
+// fingerprint is hash160 of its own public key.
+export function xpubMasterFingerprint(xpubBase58: string): Buffer {
+  const origin = xpubBase58.match(/^\[([0-9a-fA-F]{8})/);
+  if (origin) return Buffer.from(origin[1]!, 'hex');
+  const data = base58CheckDecode(xpubBase58.replace(/^\[[0-9a-fA-F/h']*\]/, ''));
+  if (data.length !== 78) throw new Error('invalid extended public key length');
+  if (data[4] !== 0) {
+    throw new Error('xpub has no key origin prefix and is not a master key; cannot derive fingerprint');
+  }
+  const pubkey = data.subarray(45, 78);
+  const sha = createHash('sha256').update(pubkey).digest();
+  return createHash('ripemd160').update(sha).digest().subarray(0, 4);
+}
+
 // Non-hardened BIP32 public derivation, used to derive the Sigbash tapscript
 // leaf key from the BIP-328 xpub returned by createKey() (child path 0/0 by
 // default, matching the SDK's tr(SIGBASH_XPUB/0/*) descriptor convention).
@@ -187,7 +219,9 @@ export function deriveXpubChildPubkey(
   xpubBase58: string,
   path: number[] = [0, 0],
 ): { publicKeyHex: Hex; xonlyPubKeyHex: Hex } {
-  const data = base58CheckDecode(xpubBase58);
+  // Sigbash returns the xpub with a BIP-380 key-origin prefix: [fingerprint]tpub...
+  const stripped = xpubBase58.replace(/^\[[0-9a-fA-F/h']*\]/, '');
+  const data = base58CheckDecode(stripped);
   if (data.length !== 78) throw new Error('invalid extended public key length');
   let chainCode: Buffer = Buffer.from(data.subarray(13, 45));
   let publicKey: Buffer = Buffer.from(data.subarray(45, 78));
