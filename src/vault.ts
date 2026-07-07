@@ -89,6 +89,102 @@ export function createDemoState({
   return { participants, vaults, policies };
 }
 
+// ── Per-participant key custody ────────────────────────────────────────────
+// The demo derives every key from one shared seed. For real use each friend
+// runs vault-keygen on their own device with their own secret, generating
+// their personal key, payout key, and one Sigbash client share per round they
+// could leave in. They publish only public material (a "roster entry"); no one
+// ever sees another participant's secret. Everyone assembles the same roster,
+// derives the identical vault addresses, and confirms agreement before funding.
+
+export interface RosterEntry {
+  id: string;
+  label: string;
+  personalPublicKeyHex: string;
+  payoutAddress: string;
+  payoutXonlyPubkeyHex: string;
+  sigbashLeafByRound: Record<string, string>;
+}
+
+export function deriveParticipantKeys(participantId: string, secret: string, allIds: string[]) {
+  const config = PARTICIPANTS.find((p) => p.id === participantId);
+  if (!config) throw new Error(`unknown participant ${participantId}`);
+  const personal = deterministicKeypair(secret, `${participantId}:personal`);
+  const payout = deterministicKeypair(secret, `${participantId}:payout`);
+  const sigbashByRound: Record<string, SigbashRoundKey> = {};
+  for (const round of participantLeaveRounds(participantId, allIds)) {
+    sigbashByRound[round] = {
+      ...deterministicKeypair(secret, `${participantId}:sigbash-client-share:${round}`),
+      isLiveKey: false,
+    };
+  }
+  return { config, personal, payout, sigbashByRound };
+}
+
+export function rosterEntry(participantId: string, secret: string, allIds: string[]): RosterEntry {
+  const keys = deriveParticipantKeys(participantId, secret, allIds);
+  return {
+    id: participantId,
+    label: keys.config.label,
+    personalPublicKeyHex: keys.personal.publicKeyHex,
+    payoutAddress: taprootAddress(keys.payout.xonlyPubKeyHex),
+    payoutXonlyPubkeyHex: keys.payout.xonlyPubKeyHex,
+    sigbashLeafByRound: Object.fromEntries(
+      Object.entries(keys.sigbashByRound).map(([round, key]) => [round, key.xonlyPubKeyHex]),
+    ),
+  };
+}
+
+// Build vault state from a roster of public keys, optionally filling in one
+// participant's private keys (from their own secret) so that participant can
+// sign locally. With no secret, the state is public-only: enough to derive and
+// verify every vault address and policy, which is all a participant needs to
+// confirm the vault before funding.
+export function createRosterState(
+  roster: RosterEntry[],
+  localSecret?: { participantId: string; secret: string },
+): VaultState {
+  const allIds = roster.map((entry) => entry.id);
+  const participants: Participant[] = roster.map((entry) => {
+    const isLocal = localSecret?.participantId === entry.id;
+    const localKeys = isLocal
+      ? deriveParticipantKeys(entry.id, localSecret!.secret, allIds)
+      : null;
+    if (localKeys && localKeys.personal.publicKeyHex !== entry.personalPublicKeyHex) {
+      throw new Error(`local secret for ${entry.id} does not match the roster's public key`);
+    }
+    const sigbashByRound: Record<string, SigbashRoundKey> = {};
+    for (const [round, leafKey] of Object.entries(entry.sigbashLeafByRound)) {
+      const local = localKeys?.sigbashByRound[round];
+      sigbashByRound[round] = {
+        privateKeyHex: local?.privateKeyHex ?? '',
+        publicKeyHex: local?.publicKeyHex ?? `02${leafKey}`,
+        xonlyPubKeyHex: leafKey,
+        isLiveKey: false,
+      };
+    }
+    return {
+      id: entry.id,
+      label: entry.label,
+      personal: {
+        privateKeyHex: localKeys?.personal.privateKeyHex ?? '',
+        publicKeyHex: entry.personalPublicKeyHex,
+        xonlyPubKeyHex: Buffer.from(entry.personalPublicKeyHex, 'hex').subarray(1).toString('hex'),
+      },
+      payout: {
+        privateKeyHex: localKeys?.payout.privateKeyHex ?? '',
+        publicKeyHex: localKeys?.payout.publicKeyHex ?? `02${entry.payoutXonlyPubkeyHex}`,
+        xonlyPubKeyHex: entry.payoutXonlyPubkeyHex,
+      },
+      payoutAddress: entry.payoutAddress,
+      sigbashByRound,
+    };
+  });
+  const vaults = buildVaultTree(participants);
+  const policies = buildPolicies(participants, vaults);
+  return { participants, vaults, policies };
+}
+
 export function buildVaultTree(participants: Participant[]): Map<string, VaultRound> {
   const byIds = new Map(participants.map((p) => [p.id, p]));
   const allIds = participants.map((p) => p.id);
@@ -96,11 +192,16 @@ export function buildVaultTree(participants: Participant[]): Map<string, VaultRo
 
   for (const ids of [allIds, ...pairs(allIds)]) {
     const round = roundId(ids);
-    const current = ids.map((id) => {
-      const participant = byIds.get(id);
-      if (!participant) throw new Error(`unknown participant ${id}`);
-      return participant;
-    });
+    // Sort participants canonically by id so the vault (leaf order, tap tree,
+    // key aggregation) is identical regardless of the order participants were
+    // supplied in — a roster reordering must not change any vault address.
+    const current = [...ids]
+      .sort()
+      .map((id) => {
+        const participant = byIds.get(id);
+        if (!participant) throw new Error(`unknown participant ${id}`);
+        return participant;
+      });
     const keyPath = keyAgg(keySort(current.map((p) => p.personal.publicKeyHex)));
     const taproot = buildVaultTaproot({
       internalXonlyPubkey: keyPath.xonlyPubKeyHex,

@@ -58,7 +58,9 @@
     "ceremony-start": "tsx src/cli.ts ceremony-start",
     "ceremony-nonce": "tsx src/cli.ts ceremony-nonce",
     "ceremony-partial": "tsx src/cli.ts ceremony-partial",
-    "ceremony-aggregate": "tsx src/cli.ts ceremony-aggregate"
+    "ceremony-aggregate": "tsx src/cli.ts ceremony-aggregate",
+    "vault-keygen": "tsx src/cli.ts vault-keygen",
+    "verify-roster": "tsx src/cli.ts verify-roster"
   },
   "engines": {
     "node": ">=20"

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
-import { AMOUNTS, RECOVERY_DELAY_BLOCKS } from './config.js';
+import { AMOUNTS, PARTICIPANTS, RECOVERY_DELAY_BLOCKS } from './config.js';
 import { auditSpecState } from './audit.js';
 import { runBip327KeyAggVectors, verifyVaultTransaction } from './consensus.js';
 import { runBip327ProtocolVectors } from './musig2-vectors.js';
@@ -47,12 +47,15 @@ import {
   buildSoloWithdrawal,
   consolidateDeposits,
   createDemoState,
+  createRosterState,
   participantById,
   participantLeaveRounds,
   policyId,
+  rosterEntry,
   roundId,
   sigbashRoundKey,
   verifyNoSigbashInKeyPath,
+  type RosterEntry,
   type SigbashLeafOverrides,
 } from './vault.js';
 import {
@@ -73,6 +76,8 @@ const command = process.argv[2] || 'acceptance';
 
 const commands: Record<string, () => Promise<void>> = {
   setup,
+  'vault-keygen': vaultKeygen,
+  'verify-roster': verifyRoster,
   cooperative,
   solo,
   recovery,
@@ -143,6 +148,52 @@ try {
 async function setup() {
   const state = createConfiguredState();
   printSetup(state);
+}
+
+// Each participant runs this on their own device with their own secret. It
+// prints a public roster entry to share, and never prints private keys.
+async function vaultKeygen() {
+  const args = parseArgs(process.argv.slice(3));
+  const participantId = requireArg(args, 'participant');
+  const secret = stringArg(args, 'secret') || process.env.VAULT_PARTICIPANT_SECRET;
+  assert(
+    secret && secret.length >= 32,
+    'provide --secret or VAULT_PARTICIPANT_SECRET (>= 32 chars). Generate with: openssl rand -hex 32',
+  );
+  const allIds = PARTICIPANTS.map((p) => p.id);
+  assert(allIds.includes(participantId), `participant must be one of ${allIds.join(', ')}`);
+  const entry = rosterEntry(participantId, secret!, allIds);
+  printResult('vault keygen (public roster entry — safe to share)', {
+    rosterEntry: entry,
+    instructions: [
+      'Keep your --secret private and backed up; it derives all your keys.',
+      'Send the rosterEntry above to the other participants.',
+      'Collect all 3 roster entries into a JSON array and run verify-roster to confirm everyone derives the same vault addresses before funding.',
+    ],
+  });
+}
+
+// Anyone assembles the collected roster entries and confirms the derived vault
+// addresses. Every participant must see identical addresses before funding.
+async function verifyRoster() {
+  const args = parseArgs(process.argv.slice(3));
+  const roster = JSON.parse(requireArg(args, 'roster')) as RosterEntry[];
+  assert(Array.isArray(roster) && roster.length === 3, 'roster must be a JSON array of 3 entries');
+  const state = createRosterState(roster);
+  const audit = auditSpecState(state);
+  printResult('roster verification', {
+    participants: state.participants.map((p) => ({ id: p.id, payoutAddress: p.payoutAddress })),
+    vaultAddresses: [...state.vaults.values()].map((v) => ({
+      round: v.id,
+      participants: v.participantIds,
+      address: v.address,
+    })),
+    roundOneFundingAddress: requireVault(state, PARTICIPANTS.map((p) => p.id)).address,
+    specAudit: { passed: audit.passed, failed: audit.checks.filter((c) => !c.ok).map((c) => c.name) },
+    confirm:
+      'Every participant should run this with the same roster and see identical addresses. Fund only the roundOneFundingAddress.',
+  });
+  assert(audit.passed, 'roster-derived vault failed the spec audit');
 }
 
 async function cooperative() {
