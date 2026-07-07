@@ -95,9 +95,52 @@ that would never relay. All four are fixed in this revision (commit history:
 ## Verification added
 
 `npm test` now includes, beyond the original checks: official BIP-327 KeyAgg
-vectors; independent consensus verification (control-block merkle commitment,
-BIP-341 sighash recomputation, Schnorr verification, CHECKSIG/CHECKSIGADD/
-NUMEQUAL emulation, BIP-68 sequence rules, 1 sat/vB fee floor) of all seven
-transaction shapes the vault can emit; and policy regression tests for the
-cross-round and multi-input attacks. Negative tests confirm the verifier
-rejects corrupted signatures, wrong prevouts, and wrong scripts.
+and full-protocol vectors (nonce gen/agg, sign/verify, tweaked signing, sig
+agg — 28 cases); independent consensus verification (control-block merkle
+commitment, BIP-341 sighash recomputation, Schnorr verification, CHECKSIG/
+CHECKSIGADD/NUMEQUAL emulation, BIP-68 sequence rules, 1 sat/vB fee floor) of
+every transaction shape the vault can emit; an end-to-end interactive MuSig2
+cooperative-exit ceremony proven consensus-valid for both round sizes; and
+policy regression tests for the cross-round and multi-input attacks. Negative
+tests confirm the verifier rejects corrupted signatures, wrong prevouts, and
+wrong scripts.
+
+## Live Sigbash findings (signet proving ground)
+
+The demo was exercised against the real Sigbash signet server, not just the
+local model. What was confirmed on live infrastructure:
+
+- **Connectivity and provisioning work end to end.** WASM loads (with SHA-384
+  pinning available via `SIGBASH_WASM_SHA384`), `generateCredentials` and
+  `createKey` succeed, and the two-phase 9-key setup runs (now resumable via a
+  checkpoint file and tolerant of the server's ~1-key/min rate limit and
+  transient timeouts).
+- **Policy enforcement is real and correct.** Live `verifyPSBT` returns a
+  `satisfiedClause` showing every one of our constraints enforced: output
+  count == 2, input count == 1, output 0 pinned to the leaver's address and
+  amount, output 1 pinned to the next vault, and the leftover floor. This is
+  the security-critical half of the design, and it works.
+- **Tamper rejection works.** Wrong-amount, wrong-address, and extra-output
+  PSBTs are all rejected live as "policy not satisfied." A malicious withdrawal
+  cannot get a Sigbash signature.
+- **Leaf-key derivation resolved.** The tapscript leaf key that satisfies the
+  descriptor-mode `REQKEY` clause is the xpub's child `0/0` (not the tweaked
+  aggregate, which was the documented fallback guess). The xpub also arrives
+  with a BIP-380 key-origin prefix that the parser now strips.
+
+**The one remaining live gap:** getting Sigbash to actually *co-sign* a
+withdrawal. `verifyPSBT` reports "policy satisfied but no Sigbash-controlled
+inputs found in PSBT" — Sigbash accepts the policy but does not yet recognize
+the vault input as one it controls when its key sits in a bare `pk(K)`
+tapscript leaf. Black-box probing (every KMC key as the leaf; every BIP-371
+derivation-path format; keypath vs script-path) localized this precisely but
+did not crack it. The most likely resolution is Sigbash's multi-party
+`clientKeys` create-key parameter plus a `sortedmulti_a` leaf structure (the
+integration its docs describe for combining a Sigbash key with co-signers),
+which needs Sigbash's multi-party example or support to pin down. Until that is
+closed, live solo withdrawals cannot be signed — so **the vault is not yet
+fundable on mainnet**, and this is the top remaining item.
+
+Everything that does not depend on Sigbash — the cooperative exit (now a real
+interactive MuSig2 ceremony), the timelocked recovery, and the final sweep —
+is consensus-verified and independent of this gap.
