@@ -128,18 +128,30 @@ local model. What was confirmed on live infrastructure:
   aggregate, which was the documented fallback guess). The xpub also arrives
   with a BIP-380 key-origin prefix that the parser now strips.
 
-**The one remaining live gap:** getting Sigbash to actually *co-sign* a
-withdrawal. `verifyPSBT` reports "policy satisfied but no Sigbash-controlled
-inputs found in PSBT" — Sigbash accepts the policy but does not yet recognize
-the vault input as one it controls when its key sits in a bare `pk(K)`
-tapscript leaf. Black-box probing (every KMC key as the leaf; every BIP-371
-derivation-path format; keypath vs script-path) localized this precisely but
-did not crack it. The most likely resolution is Sigbash's multi-party
-`clientKeys` create-key parameter plus a `sortedmulti_a` leaf structure (the
-integration its docs describe for combining a Sigbash key with co-signers),
-which needs Sigbash's multi-party example or support to pin down. Until that is
-closed, live solo withdrawals cannot be signed — so **the vault is not yet
-fundable on mainnet**, and this is the top remaining item.
+**Input identification — solved (dual-leaf).** Sigbash runs two independent
+checks on a script-path input, and they want *different* keys:
+- the **policy** `REQKEY` clause is satisfied by the xpub's child `0/0` key;
+- **input identification** ("aggregate key found in tapscript leaf") is
+  satisfied by the KMC's `internal_public_key` (the xpub's own root key).
+
+A tap tree containing *both* leaves — `pk(child0/0)` for the policy and
+`pk(internal_root)` for identification, with a BIP-371 `tapBip32Derivation`
+for the child — makes live `verifyPSBT` return **passed=true** while still
+rejecting every tampered variant (wrong amount / address / extra output). This
+was the missing piece and it is confirmed on the live server.
+
+**The one remaining live gap — server-side signing.** With the dual-leaf
+structure, live `signPSBT` gets all the way through the client pipeline
+("Policy evaluation PASSED", then "sign tapscript input 0") and fails only at
+the server: `WebSocket error requesting server signature: server_error:
+Signing service error`. This is identical with real and fake outpoints and is
+consistent across retries, so it is not the outpoint and not transient — it is
+inside Sigbash's server signing service, which is a black box from the client.
+This is the boundary where Sigbash's input is required (see the questions in
+the README / handoff). Until it is resolved, live solo withdrawals cannot be
+signed, so **the vault is not yet fundable on mainnet** — but everything up to
+the server signature (provisioning, policy enforcement, tamper rejection,
+input identification) is proven working.
 
 Everything that does not depend on Sigbash — the cooperative exit (now a real
 interactive MuSig2 ceremony), the timelocked recovery, and the final sweep —
