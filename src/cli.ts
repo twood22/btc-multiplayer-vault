@@ -55,8 +55,12 @@ import {
   createLiveSigbashClient,
   createSigbashAdapter,
   evaluatePolicy,
+  normalizeSigbashSigningResult,
+  resolveSigbashCredentials,
+  sigbashVerificationPassed,
   toPoetPolicy,
 } from './sigbash.js';
+import { runSigbashOfflineChecks } from './sigbash-contract.js';
 import {
   Ledger,
   buildCooperativeExit,
@@ -86,7 +90,7 @@ import {
   type VaultState,
 } from './types.js';
 import type { RpcTransaction, RpcTxInput, RpcTxOut, RpcTxOutput } from './bitcoin-rpc.js';
-import type { SigbashLiveClient, SigbashSignResult, SigbashVerifyResult } from './sigbash.js';
+import type { SigbashLiveClient, SigbashVerifyResult } from './sigbash.js';
 
 loadDotenv();
 
@@ -148,6 +152,7 @@ const commands: Record<string, () => Promise<void>> = {
   'rpc-broadcast': rpcBroadcast,
   audit,
   'sdk-policy-check': sdkPolicyCheck,
+  'sigbash-sdk-contract': sigbashSdkContract,
   'sigbash-live-setup': sigbashLiveSetup,
   acceptance,
 };
@@ -710,7 +715,7 @@ async function sigbashSignPsbt() {
   const adapter = await createSigbashAdapter({ participantId });
   const tx = { psbtBase64 };
   const verification = await adapter.verifyPSBT(tx, policy);
-  if (verification.passed === false || verification.success === false) {
+  if (!sigbashVerificationPassed(verification)) {
     printResult('Sigbash PSBT verification failed', verification);
     throw new Error('Sigbash rejected PSBT in dry-run');
   }
@@ -1837,14 +1842,30 @@ async function liveReadiness() {
   const state = createConfiguredState();
   const roundOneIds = state.participants.map((participant) => participant.id);
   const expected = expectedVaultOutput(state, roundOneIds);
+  const participantCredentialChecks = state.participants.map((participant) => {
+    const warnings: string[] = [];
+    try {
+      const credentials = resolveSigbashCredentials(process.env, participant.id, (message) =>
+        warnings.push(message),
+      );
+      return check(
+        `${participant.id} has an isolated Sigbash credential triplet`,
+        credentials.source === 'participant',
+        { source: credentials.source, warnings },
+      );
+    } catch (error) {
+      return check(`${participant.id} has an isolated Sigbash credential triplet`, false, {
+        error: errorMessage(error),
+      });
+    }
+  });
   const envChecks = [
     checkEnvEquals('SIGBASH_MODE', 'live'),
+    ...participantCredentialChecks,
     ...[
       'SIGBASH_SERVER_URL',
-      'SIGBASH_API_KEY',
-      'SIGBASH_USER_KEY',
-      'SIGBASH_SECRET_KEY',
       'SIGBASH_WASM_URL',
+      'SIGBASH_WASM_SHA384',
       'SIGBASH_LEAF_KEYS_JSON',
       ...state.participants.flatMap((participant) =>
         participantLeaveRounds(participant.id, roundOneIds).map((round) =>
@@ -2280,8 +2301,7 @@ async function liveSoloWithdrawal() {
       keyId,
     };
     liveVerification = await adapter.verifyPSBT({ psbtBase64: psbt.psbtBase64 }, policy);
-    const verificationPassed =
-      liveVerification.passed !== false && liveVerification.success !== false;
+    const verificationPassed = sigbashVerificationPassed(liveVerification);
     checks.push(check('Sigbash live verifyPSBT passes', verificationPassed, liveVerification));
     if (verificationPassed && args.sign !== 'false') {
       liveSignature = await adapter.signPSBT({ psbtBase64: psbt.psbtBase64 }, policy);
@@ -2776,6 +2796,7 @@ async function rpcBroadcast() {
 async function acceptance() {
   await audit();
   await sdkPolicyCheck();
+  await sigbashSdkContract();
   await psbtAcceptance();
   await dualLeafAcceptance();
   await consensusAcceptance();
@@ -2996,6 +3017,18 @@ async function sdkPolicyCheck() {
       conditionCount: poetPolicy.policy?.children?.length,
     })),
   });
+}
+
+// Offline proof of the pinned @sigbash/sdk 0.7.1 surface plus the fail-closed
+// result gates, credential atomicity, and WASM-hash validation. No network,
+// no credentials, no WASM loading — safe to run inside `npm test`.
+async function sigbashSdkContract() {
+  const { passed, checks } = await runSigbashOfflineChecks();
+  printResult('sigbash sdk contract (offline)', { checks, passed });
+  assert(
+    passed,
+    `sigbash sdk contract checks failed: ${JSON.stringify(checks.filter((item) => !item.ok))}`,
+  );
 }
 
 interface LiveKeyRegistration {
@@ -3817,48 +3850,6 @@ function signedRunStage({ step, input, inspection, signed }: SignedRunStageInput
   };
 }
 
-interface NormalizedSigningResult {
-  success: boolean;
-  txHex: string | null;
-  signedPsbtBase64: string | null;
-  pathId: string | null;
-  policyRootHex: string | null;
-  satisfiedClause: string | null;
-  error: string | null;
-  raw: unknown;
-}
-
-// The SDK's signing result shape has drifted across versions; probe every
-// field name it has used for the signed PSBT and final transaction hex.
-function normalizeSigbashSigningResult(rawResult: SigbashSignResult | null | undefined): NormalizedSigningResult {
-  const result = (rawResult ?? {}) as Record<string, unknown>;
-  const psbtField = result.psbt;
-  const signedPsbtBase64 =
-    (result.signedPSBT as string | undefined) ||
-    (result.signedPsbt as string | undefined) ||
-    (result.signedPsbtBase64 as string | undefined) ||
-    (result.psbtBase64 as string | undefined) ||
-    (typeof psbtField === 'string'
-      ? psbtField
-      : ((psbtField as { psbtBase64?: string } | undefined)?.psbtBase64)) ||
-    null;
-  const txHex =
-    (result.txHex as string | undefined) ||
-    (result.transactionHex as string | undefined) ||
-    (result.hex as string | undefined) ||
-    null;
-  return {
-    success: result.success !== false && result.error === undefined,
-    txHex,
-    signedPsbtBase64,
-    pathId: (result.pathId as string | undefined) || (result.satisfiedPath as string | undefined) || null,
-    policyRootHex: (result.policyRootHex as string | undefined) || null,
-    satisfiedClause: (result.satisfiedClause as string | undefined) || null,
-    error: (result.error as string | undefined) || null,
-    raw: rawResult,
-  };
-}
-
 function soloTamperLocalChecks({
   state,
   currentIds,
@@ -3888,10 +3879,6 @@ function soloTamperLocalChecks({
       Object.entries(variants.tampered).map(([name, psbt]) => [name, checkVariant(psbt)]),
     ),
   };
-}
-
-function sigbashVerificationPassed(result: SigbashVerifyResult | null | undefined): boolean {
-  return result?.passed !== false && result?.success !== false && result?.error === undefined;
 }
 
 function evidenceItem({

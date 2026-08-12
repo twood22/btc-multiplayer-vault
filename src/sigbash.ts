@@ -77,6 +77,63 @@ export interface SigbashSignResult {
   [extra: string]: unknown;
 }
 
+/**
+ * Fail-closed gate over the SDK's verifyPSBT result: only an explicit
+ * passed === true with no error string counts as a pass. An absent boolean, a
+ * legacy success-only shape, or any unexpected server reply is a rejection.
+ */
+export function sigbashVerificationPassed(
+  result: SigbashVerifyResult | { passed?: boolean; error?: string } | null | undefined,
+): boolean {
+  return result?.passed === true && result.error === undefined;
+}
+
+export interface NormalizedSigningResult {
+  success: boolean;
+  txHex: string | null;
+  signedPsbtBase64: string | null;
+  pathId: string | null;
+  policyRootHex: string | null;
+  satisfiedClause: string | null;
+  error: string | null;
+  raw: unknown;
+}
+
+// The SDK's signing result shape has drifted across versions; probe every
+// field name it has used for the signed PSBT and final transaction hex.
+// success is fail-closed: only an explicit success === true with no error
+// counts — an absent or non-boolean success field never does.
+export function normalizeSigbashSigningResult(
+  rawResult: SigbashSignResult | { success?: boolean; error?: string } | null | undefined,
+): NormalizedSigningResult {
+  const result = (rawResult ?? {}) as Record<string, unknown>;
+  const psbtField = result.psbt;
+  const signedPsbtBase64 =
+    (result.signedPSBT as string | undefined) ||
+    (result.signedPsbt as string | undefined) ||
+    (result.signedPsbtBase64 as string | undefined) ||
+    (result.psbtBase64 as string | undefined) ||
+    (typeof psbtField === 'string'
+      ? psbtField
+      : ((psbtField as { psbtBase64?: string } | undefined)?.psbtBase64)) ||
+    null;
+  const txHex =
+    (result.txHex as string | undefined) ||
+    (result.transactionHex as string | undefined) ||
+    (result.hex as string | undefined) ||
+    null;
+  return {
+    success: result.success === true && result.error === undefined,
+    txHex,
+    signedPsbtBase64,
+    pathId: (result.pathId as string | undefined) || (result.satisfiedPath as string | undefined) || null,
+    policyRootHex: (result.policyRootHex as string | undefined) || null,
+    satisfiedClause: (result.satisfiedClause as string | undefined) || null,
+    error: (result.error as string | undefined) || null,
+    raw: rawResult,
+  };
+}
+
 /** What the adapters accept: a local policy-model tx or a real PSBT wrapper. */
 export type AdapterTx = PolicyTx | { psbtBase64: string };
 
@@ -209,30 +266,106 @@ export async function createLiveSigbashClient({
     );
   }
 
+  const credentials = resolveSigbashCredentials(process.env, participantId);
   const wasmUrl = process.env.SIGBASH_WASM_URL || 'https://www.sigbash.com/sigbash.wasm';
-  // Pin the WASM hash in production. The SDK computes SHA-384 of the download
-  // and aborts on mismatch — this is the defense against a swapped binary.
-  const expectedHash = process.env.SIGBASH_WASM_SHA384;
-  await sdk.loadWasm(expectedHash ? { wasmUrl, expectedHash } : { wasmUrl });
+  // The SDK computes SHA-384 of the downloaded WASM and aborts on mismatch —
+  // this is the defense against a swapped binary, so the pin is mandatory in
+  // live mode and always passed to loadWasm.
+  const expectedHash = validateWasmSha384(process.env.SIGBASH_WASM_SHA384);
+  await sdk.loadWasm({ wasmUrl, expectedHash });
   const client = new sdk.SigbashClient({
     serverUrl: process.env.SIGBASH_SERVER_URL || 'https://www.sigbash.com',
-    apiKey: participantEnv('SIGBASH_API_KEY', participantId),
-    userKey: participantEnv('SIGBASH_USER_KEY', participantId),
-    userSecretKey: participantEnv('SIGBASH_SECRET_KEY', participantId),
+    apiKey: credentials.apiKey,
+    userKey: credentials.userKey,
+    userSecretKey: credentials.userSecretKey,
     ...(musig2PrivateKey ? { musig2PrivateKey } : {}),
   });
   return { sdk, client };
 }
 
-// Each participant should hold their own Sigbash credential triplet
-// (SIGBASH_API_KEY_ALICE etc.). A shared triplet without suffix is accepted
-// for single-operator demo runs, with the trust caveat noted in the README.
-function participantEnv(name: string, participantId?: string): string {
+export interface SigbashCredentials {
+  apiKey: string;
+  userKey: string;
+  userSecretKey: string;
+  source: 'participant' | 'shared';
+}
+
+const SIGBASH_CREDENTIAL_ENV_NAMES = [
+  'SIGBASH_API_KEY',
+  'SIGBASH_USER_KEY',
+  'SIGBASH_SECRET_KEY',
+] as const;
+
+/**
+ * Each participant should hold their own Sigbash credential triplet
+ * (SIGBASH_API_KEY_ALICE etc.). The triplet is atomic: if any suffixed
+ * variable is set, all three must be — a partial triplet is an error, never
+ * silently mixed with the shared unsuffixed variables. Only when no suffixed
+ * variable exists does the participant fall back to the shared triplet (the
+ * single-operator demo setup, with the trust caveat noted in the README), and
+ * that fallback is warned about by variable name only — values are never
+ * echoed anywhere.
+ */
+export function resolveSigbashCredentials(
+  env: Record<string, string | undefined>,
+  participantId?: string,
+  warn: (message: string) => void = (message) => console.warn(message),
+): SigbashCredentials {
   if (participantId) {
-    const scoped = process.env[`${name}_${participantId.toUpperCase()}`];
-    if (scoped) return scoped;
+    const suffix = `_${participantId.toUpperCase()}`;
+    const scopedNames = SIGBASH_CREDENTIAL_ENV_NAMES.map((name) => `${name}${suffix}`);
+    const [apiName, userName, secretName] = scopedNames;
+    const missing = scopedNames.filter((name) => !env[name]);
+    if (missing.length === 0) {
+      return {
+        apiKey: env[apiName!]!,
+        userKey: env[userName!]!,
+        userSecretKey: env[secretName!]!,
+        source: 'participant',
+      };
+    }
+    if (missing.length < scopedNames.length) {
+      throw new Error(
+        `partial Sigbash credential triplet for participant ${participantId}: missing ` +
+          `${missing.join(', ')}. Set all three of ${scopedNames.join(', ')} or none — a ` +
+          'partial triplet is never mixed with the shared SIGBASH_API_KEY/SIGBASH_USER_KEY/' +
+          'SIGBASH_SECRET_KEY variables.',
+      );
+    }
+    warn(
+      `no ${scopedNames.join('/')} set; participant ${participantId} is using the shared ` +
+        'SIGBASH_API_KEY/SIGBASH_USER_KEY/SIGBASH_SECRET_KEY triplet (single-operator demo ' +
+        'setup — unacceptable for real funds)',
+    );
   }
-  return requiredEnv(name);
+  const missingShared = SIGBASH_CREDENTIAL_ENV_NAMES.filter((name) => !env[name]);
+  if (missingShared.length > 0) {
+    throw new Error(`${missingShared.join(', ')} required in SIGBASH_MODE=live`);
+  }
+  return {
+    apiKey: env.SIGBASH_API_KEY!,
+    userKey: env.SIGBASH_USER_KEY!,
+    userSecretKey: env.SIGBASH_SECRET_KEY!,
+    source: 'shared',
+  };
+}
+
+/**
+ * SIGBASH_WASM_SHA384 is mandatory in live mode: without the pin a swapped
+ * WASM binary would be loaded and trusted silently. SHA-384 is 48 bytes, so
+ * the value must be exactly 96 hex characters. The rejected value is never
+ * echoed back in the error.
+ */
+export function validateWasmSha384(value: string | undefined): string {
+  if (!value) {
+    throw new Error(
+      'SIGBASH_WASM_SHA384 is required in SIGBASH_MODE=live: pin the expected SHA-384 of the Sigbash WASM binary (96 hex characters)',
+    );
+  }
+  if (!/^[0-9a-fA-F]{96}$/.test(value)) {
+    throw new Error('SIGBASH_WASM_SHA384 must be exactly 96 hex characters (SHA-384 of the WASM binary)');
+  }
+  return value;
 }
 
 export function toPoetPolicy(sdk: SigbashSdk, policy: SoloPolicy): PoetPolicy {
@@ -327,10 +460,4 @@ function compare(actual: number, operator: string, expected: number): boolean {
     default:
       throw new Error(`unsupported operator ${operator}`);
   }
-}
-
-function requiredEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new Error(`${name} is required in SIGBASH_MODE=live`);
-  return value;
 }

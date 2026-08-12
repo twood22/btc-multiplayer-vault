@@ -53,6 +53,7 @@
     "rpc-broadcast": "tsx src/cli.ts rpc-broadcast",
     "audit": "tsx src/cli.ts audit",
     "sdk-policy-check": "tsx src/cli.ts sdk-policy-check",
+    "sigbash-sdk-contract": "tsx src/cli.ts sigbash-sdk-contract",
     "sigbash-live-setup": "tsx src/cli.ts sigbash-live-setup",
     "typecheck": "tsc --noEmit",
     "live-policy-dry-run": "tsx src/cli.ts live-policy-dry-run",
