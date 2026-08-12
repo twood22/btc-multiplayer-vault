@@ -80,6 +80,7 @@ rejected by the release report.
    the exact consensus transaction:
 
    ```bash
+   npm run sigbash-bootstrap
    npm run sigbash-org-id -- --participant alice
    SIGBASH_MODE=live npm run live-predeployment-proof -- \
      --round alice,bob,carol --leaver alice

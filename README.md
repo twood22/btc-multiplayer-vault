@@ -244,6 +244,17 @@ input scriptPubKey, so you only pass `--participant`.
    triplets automatically, but it cannot grant that external entitlement; all
    three independent participant organization hashes must be enabled.
 
+   For the separate command-line predeployment proof credential, create a new
+   owner-only file without printing or overwriting secrets:
+
+   ```bash
+   npm run sigbash-bootstrap
+   ```
+
+   This exclusively creates `.env` with mode `0600` and prints only its
+   non-secret `apikeyHash`. It refuses to overwrite an existing file. Back up
+   that file before asking Sigbash to enable the hash for mainnet.
+
    For command-line credentials, print only the non-secret activation value
    without exposing the triplet:
 

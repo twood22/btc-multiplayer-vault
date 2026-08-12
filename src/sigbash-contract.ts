@@ -1,12 +1,12 @@
 /**
  * Offline contract and fail-closed checks for the pinned @sigbash/sdk 0.7.1.
  *
- * Everything here runs without network access, credentials, or WASM loading:
- * the SDK module is imported only to inspect its exports, and every other
- * check exercises pure functions with synthetic inputs. The type imports are
- * the SDK's real published 0.7.1 declarations, so a future SDK bump that
- * changes the verify/sign result shapes fails `tsc --noEmit` here instead of
- * failing open at signing time.
+ * Everything here runs without network access or WASM loading. Credential-file
+ * checks use a fresh temporary directory and delete their throwaway values;
+ * the remaining checks use synthetic inputs. The type imports are the SDK's
+ * real published 0.7.1 declarations, so a future SDK bump that changes the
+ * verify/sign result shapes fails `tsc --noEmit` here instead of failing open
+ * at signing time.
  */
 import type {
   SigbashClientOptions,
@@ -14,6 +14,10 @@ import type {
   VerifyPSBTResult,
   WasmLoaderOptions,
 } from '@sigbash/sdk';
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createSigbashCredentialFile } from './sigbash-credentials.js';
 import {
   normalizeSigbashSigningResult,
   resolveSigbashCredentials,
@@ -67,9 +71,60 @@ export async function runSigbashOfflineChecks(): Promise<{
     ...verificationGateChecks(),
     ...signingNormalizationChecks(),
     ...credentialChecks(),
+    ...(await credentialFileChecks()),
     ...wasmHashChecks(),
   ];
   return { passed: checks.every((item) => item.ok), checks };
+}
+
+async function credentialFileChecks(): Promise<ContractCheck[]> {
+  const directory = mkdtempSync(join(tmpdir(), 'btc-vault-sigbash-credentials-'));
+  const credentialFile = join(directory, '.env');
+  try {
+    const created = await createSigbashCredentialFile(credentialFile);
+    const contentBefore = readFileSync(credentialFile, 'utf8');
+    const values = Object.fromEntries(contentBefore.trim().split('\n').map((line) => {
+      const separator = line.indexOf('=');
+      return [line.slice(0, separator), line.slice(separator + 1)];
+    }));
+    const secrets = [
+      values.SIGBASH_API_KEY,
+      values.SIGBASH_USER_KEY,
+      values.SIGBASH_SECRET_KEY,
+    ];
+    let overwriteRejected = false;
+    try {
+      await createSigbashCredentialFile(credentialFile);
+    } catch {
+      overwriteRejected = true;
+    }
+    const contentAfter = readFileSync(credentialFile, 'utf8');
+    let exampleRejected = false;
+    try {
+      await createSigbashCredentialFile(join(directory, '.env.example'));
+    } catch {
+      exampleRejected = true;
+    }
+    return [
+      check(
+        'credential bootstrap exclusively creates three distinct 256-bit values with mode 0600',
+        (statSync(credentialFile).mode & 0o777) === 0o600 &&
+          secrets.every((value) => /^[0-9a-f]{64}$/u.test(value ?? '')) &&
+          new Set(secrets).size === 3,
+      ),
+      check(
+        'credential bootstrap returns only the non-secret organization hash',
+        /^[0-9a-f]{64}$/u.test(created.apikeyHash) &&
+          secrets.every((value) => value !== undefined && !JSON.stringify(created).includes(value)),
+      ),
+      check(
+        'credential bootstrap refuses overwrite and the tracked example file',
+        overwriteRejected && contentAfter === contentBefore && exampleRejected,
+      ),
+    ];
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 function sdkContractChecks(sdk: typeof import('@sigbash/sdk')): ContractCheck[] {

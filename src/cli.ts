@@ -1,6 +1,11 @@
 #!/usr/bin/env node
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  readFileSync,
+} from 'node:fs';
 import { assertReviewedNodeRuntime } from './runtime-version.js';
+import { createSigbashCredentialFile } from './sigbash-credentials.js';
 import {
   AMOUNTS,
   DEFAULT_DEMO_SEED,
@@ -179,6 +184,7 @@ const commands: Record<string, () => Promise<void>> = {
   audit,
   'sdk-policy-check': sdkPolicyCheck,
   'sigbash-sdk-contract': sigbashSdkContract,
+  'sigbash-bootstrap': sigbashBootstrap,
   'sigbash-org-id': sigbashOrgId,
   'sigbash-live-setup': sigbashLiveSetup,
   acceptance,
@@ -3494,6 +3500,16 @@ async function sigbashOrgId() {
     apikeyHash,
     secretValuesPrinted: false,
     note: 'Share only apikeyHash with Sigbash; never share the raw credential triplet.',
+  });
+}
+
+/** Create one CLI proof credential without exposing or permissively overwriting it. */
+async function sigbashBootstrap() {
+  const args = parseArgs(process.argv.slice(3));
+  const created = await createSigbashCredentialFile(stringArg(args, 'output') ?? '.env');
+  printResult('Sigbash CLI proof credential created', {
+    ...created,
+    next: 'Back up the credential file securely, request mainnet activation for apikeyHash, then run live-predeployment-proof.',
   });
 }
 

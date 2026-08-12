@@ -72,6 +72,7 @@
     "audit": "tsx src/cli.ts audit",
     "sdk-policy-check": "tsx src/cli.ts sdk-policy-check",
     "sigbash-sdk-contract": "tsx src/cli.ts sigbash-sdk-contract",
+    "sigbash-bootstrap": "tsx src/cli.ts sigbash-bootstrap",
     "sigbash-org-id": "tsx src/cli.ts sigbash-org-id",
     "sigbash-live-setup": "tsx src/cli.ts sigbash-live-setup",
     "typecheck": "tsc --noEmit",
