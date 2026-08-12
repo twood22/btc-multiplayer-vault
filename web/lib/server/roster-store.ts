@@ -13,6 +13,7 @@ import {
 import { participantLeaveRounds, type RosterEntry, type SigbashRosterRegistration } from '@/src/vault';
 import { db, transaction } from './db';
 import type { StoredCredential } from './webauthn-store';
+import { consumeRateLimit } from './rate-limit';
 
 export interface RosterCeremonyStatus {
   participantId: string;
@@ -132,6 +133,12 @@ export async function createRosterConfirmationChallenge(input: {
   credentialId: string;
   challenge: string;
 }): Promise<RosterConfirmationChallenge> {
+  await consumeRateLimit({
+    action: 'roster_confirmation',
+    subject: input.userId,
+    limit: 10,
+    windowSeconds: 900,
+  });
   const membership = await membershipForUser(input.userId);
   const built = await getOrCreateRoster(membership.vault_id);
   if (!built.artifact) throw new Error(`roster is not ready: ${built.missing.join('; ')}`);

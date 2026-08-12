@@ -12,6 +12,7 @@ import {
   submitApprovedBroadcast,
 } from '@/web/lib/server/vault-runtime-store';
 import { asWebAuthnCredential } from '@/web/lib/server/webauthn-store';
+import { consumeRateLimit } from '@/web/lib/server/rate-limit';
 
 export const runtime = 'nodejs';
 
@@ -28,6 +29,12 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const input = Input.parse(await request.json());
     const userId = await requireSessionUser();
+    await consumeRateLimit({
+      action: 'broadcast_submission',
+      subject: userId,
+      limit: 5,
+      windowSeconds: 900,
+    });
     const challenge = await getBroadcastApprovalChallenge({
       approvalId: input.approvalId,
       userId,

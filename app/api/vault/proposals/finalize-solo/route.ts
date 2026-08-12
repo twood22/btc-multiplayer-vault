@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { assertSameOrigin, jsonError } from '@/web/lib/server/http';
 import { requireSessionUser } from '@/web/lib/server/session';
 import { finalizeStoredSoloProposal } from '@/web/lib/server/vault-runtime-store';
+import { consumeRateLimit } from '@/web/lib/server/rate-limit';
 
 export const runtime = 'nodejs';
 
@@ -17,6 +18,12 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const parsed = Input.parse(await request.json());
     const userId = await requireSessionUser();
+    await consumeRateLimit({
+      action: 'vault_signature_submission',
+      subject: userId,
+      limit: 30,
+      windowSeconds: 900,
+    });
     return Response.json(await finalizeStoredSoloProposal({ userId, ...parsed }));
   } catch (error) {
     return jsonError(error, error instanceof Error && error.message.includes('authentication') ? 401 : 400);

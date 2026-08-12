@@ -72,6 +72,11 @@ participant-only MuSig2 path, or the timelocked recovery path.
 - A private scheduler entry point resumes only previously passkey-approved
   submissions and advances protocol state only when the configured mainnet
   backend returns the exact stored bytes with a confirmed block height.
+- Database-atomic fixed-window rate limits cover unauthenticated credential
+  ceremonies and authenticated unlock, Sigbash provisioning/readiness,
+  proposal/signature, observation, and broadcast boundaries. Subjects are
+  stored only as action-scoped SHA-256 digests; attacker-chosen invite values
+  cannot create unbounded counter rows.
 - Confirmed broadcast transactions can atomically spend the old coordinator
   coin, derive the exact surviving pair or final-owner coin after a solo exit,
   or close the vault after a terminal cooperative, recovery, or final sweep.
@@ -130,10 +135,11 @@ offline-roster rejection, xpub/leaf binding, deterministic roster digests,
 proposal replay resistance, exact confirmed-state advancement, fresh recovery
 observations, no funding address or output-script disclosure before unanimity,
 and database-enforced one-time broadcast approvals. The complete migrations
-through 007 have also been applied and re-applied idempotently on an isolated
+through 008 have also been applied and re-applied idempotently on an isolated
 PostgreSQL 16 instance. The database acceptance test proves one-winner
 concurrent approval creation and submission claims, required passkey-consumed
-state, auditable retry after failure, and proposal-digest foreign-key binding;
+state, auditable retry after failure, proposal-digest foreign-key binding, and
+atomic concurrent rate-limit counting/reset without raw subject storage;
 that is not a substitute for the selected production database and a complete
 real-authenticator/backend run.
 

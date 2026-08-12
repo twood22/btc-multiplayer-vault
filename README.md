@@ -36,6 +36,7 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | User-facing solo/cooperative/recovery/final signing | ✅ implemented and server re-authorized |
 | Explicit passkey-approved broadcast + confirmation watcher | ✅ implemented; real backend execution still required |
 | PostgreSQL broadcast approval replay/concurrency checks | ✅ verified on disposable PostgreSQL 16 |
+| Database-atomic sensitive-operation rate limits | ✅ implemented and concurrency-verified |
 | Runs without local Bitcoin Core | ✅ `BITCOIN_BACKEND=esplora` |
 
 ## Requirements

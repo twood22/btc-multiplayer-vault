@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { webConfig } from '@/web/lib/server/config';
 import { createRegistrationChallenge } from '@/web/lib/server/webauthn-store';
 import { assertSameOrigin, jsonError } from '@/web/lib/server/http';
+import { consumeRateLimit } from '@/web/lib/server/rate-limit';
 
 export const runtime = 'nodejs';
 
@@ -16,6 +17,14 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const input = Input.parse(await request.json());
+    await consumeRateLimit({
+      action: 'passkey_registration',
+      // This endpoint is unauthenticated. A fixed subject bounds database
+      // growth without creating one counter row per attacker-chosen token.
+      subject: 'private_beta',
+      limit: 60,
+      windowSeconds: 600,
+    });
     const config = webConfig();
     const userId = randomUUID();
     const options = await generateRegistrationOptions({

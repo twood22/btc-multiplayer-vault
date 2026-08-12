@@ -2,6 +2,7 @@ import 'server-only';
 import type { AuthenticatorTransportFuture, Base64URLString, WebAuthnCredential } from '@simplewebauthn/server';
 import { db, transaction } from './db';
 import { tokenHash } from './encoding';
+import { consumeRateLimit } from './rate-limit';
 
 export interface RegistrationChallenge {
   id: string;
@@ -311,6 +312,12 @@ export async function createAssertionChallenge(input: {
   prfSalt: Buffer;
   credentialId?: string;
 }): Promise<AssertionChallenge> {
+  await consumeRateLimit({
+    action: 'passkey_envelope_setup',
+    subject: input.userId,
+    limit: 10,
+    windowSeconds: 900,
+  });
   const credentials = await db()<Array<{
     credential_id: string;
     credential_name: string;
@@ -361,6 +368,10 @@ export async function createAssertionChallenge(input: {
 }
 
 export async function createLoginChallenge(challenge: string): Promise<string> {
+  await db()`
+    DELETE FROM webauthn_challenges
+    WHERE kind = 'login' AND expires_at <= now()
+  `;
   const rows = await db()<Array<{ id: string }>>`
     INSERT INTO webauthn_challenges (kind, challenge, expires_at)
     VALUES ('login', ${challenge}, now() + interval '5 minutes')
@@ -446,6 +457,13 @@ export async function createUnlockChallenge(input: {
   credentialId: string;
   kind?: 'unlock' | 'recovery_authorize' | 'sigbash_custody';
 }): Promise<AssertionChallenge> {
+  const kind = input.kind ?? 'unlock';
+  await consumeRateLimit({
+    action: `passkey_${kind}`,
+    subject: input.userId,
+    limit: 20,
+    windowSeconds: 900,
+  });
   const rows = await db()<Array<{
     credential_id: string;
     credential_name: string;
@@ -467,7 +485,6 @@ export async function createUnlockChallenge(input: {
   `;
   if (rows.length !== 1) throw new Error('selected passkey does not have a completed key envelope');
   const row = rows[0]!;
-  const kind = input.kind ?? 'unlock';
   const challenges = await db()<Array<{ id: string }>>`
     INSERT INTO webauthn_challenges (
       kind, challenge, user_id, credential_id, prf_salt, expires_at
@@ -643,6 +660,12 @@ export async function createRecoveryRegistrationChallenge(input: {
   enrollmentId: string;
   challenge: string;
 }): Promise<RecoveryRegistrationChallenge> {
+  await consumeRateLimit({
+    action: 'passkey_recovery_registration',
+    subject: input.userId,
+    limit: 10,
+    windowSeconds: 900,
+  });
   return transaction(async (sql) => {
     const enrollments = await sql<Array<{ display_name: string }>>`
       SELECT u.display_name
@@ -781,6 +804,12 @@ export async function createRecoveryEnvelopeChallenge(input: {
   challenge: string;
   prfSalt: Buffer;
 }): Promise<AssertionChallenge> {
+  await consumeRateLimit({
+    action: 'passkey_recovery_envelope',
+    subject: input.userId,
+    limit: 10,
+    windowSeconds: 900,
+  });
   const rows = await db()<Array<{
     credential_id: Base64URLString;
     credential_name: string;

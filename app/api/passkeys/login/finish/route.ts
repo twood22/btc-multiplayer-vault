@@ -5,6 +5,7 @@ import {
 import { z } from 'zod';
 import { webConfig } from '@/web/lib/server/config';
 import { assertSameOrigin, jsonError } from '@/web/lib/server/http';
+import { consumeRateLimit } from '@/web/lib/server/rate-limit';
 import { createSession } from '@/web/lib/server/session';
 import {
   asWebAuthnCredential,
@@ -22,6 +23,12 @@ export async function POST(request: Request) {
     const input = Input.parse(await request.json());
     const response = input.response as AuthenticationResponseJSON;
     const challenge = await getLoginChallenge(input.challengeId, response.id);
+    await consumeRateLimit({
+      action: 'passkey_login',
+      subject: challenge.credential.id,
+      limit: 10,
+      windowSeconds: 600,
+    });
     const config = webConfig();
     const verification = await verifyAuthenticationResponse({
       response,

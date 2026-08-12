@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import * as bitcoin from 'bitcoinjs-lib';
 import postgres from 'postgres';
 
@@ -40,6 +41,59 @@ try {
       WHERE tablename = 'vault_broadcast_approvals'
     `;
     assert(indexes.some((row) => row.indexname === 'vault_broadcast_approvals_one_live_idx'));
+  });
+
+  await check('migration 008 atomically counts concurrent attempts without storing raw subjects', async () => {
+    const action = 'acceptance_rate_limit';
+    const rawSubject = 'credential-secret-identifier';
+    const subjectHash = createHash('sha256').update(action).update('\0').update(rawSubject).digest();
+    const consume = () => sql<Array<{ attempts: number }>>`
+      INSERT INTO security_rate_limits (action, subject_hash, window_started, attempts)
+      VALUES (${action}, ${subjectHash}, now(), 1)
+      ON CONFLICT (action, subject_hash) DO UPDATE SET
+        attempts = security_rate_limits.attempts + 1,
+        updated_at = now()
+      RETURNING attempts
+    `;
+    const results = await Promise.all(Array.from({ length: 20 }, consume));
+    assert.deepEqual(
+      results.map((rows) => rows[0]!.attempts).sort((left, right) => left - right),
+      Array.from({ length: 20 }, (_, index) => index + 1),
+    );
+    const stored = await sql<Array<{ action: string; encoded: string; attempts: number }>>`
+      SELECT action, encode(subject_hash, 'hex') AS encoded, attempts
+      FROM security_rate_limits WHERE action = ${action}
+    `;
+    assert.equal(stored.length, 1);
+    assert.equal(stored[0]?.encoded, subjectHash.toString('hex'));
+    assert.equal(stored[0]?.attempts, 20);
+    assert(!JSON.stringify(stored).includes(rawSubject));
+  });
+
+  await check('an expired rate-limit window resets atomically to one attempt', async () => {
+    const action = 'acceptance_rate_limit';
+    const subjectHash = createHash('sha256')
+      .update(action)
+      .update('\0')
+      .update('credential-secret-identifier')
+      .digest();
+    await sql`
+      UPDATE security_rate_limits SET window_started = now() - interval '1 hour'
+      WHERE action = ${action} AND subject_hash = ${subjectHash}
+    `;
+    const reset = await sql<Array<{ attempts: number }>>`
+      INSERT INTO security_rate_limits (action, subject_hash, window_started, attempts)
+      VALUES (${action}, ${subjectHash}, now(), 1)
+      ON CONFLICT (action, subject_hash) DO UPDATE SET
+        attempts = CASE WHEN security_rate_limits.window_started <= now() - interval '15 minutes'
+          THEN 1 ELSE security_rate_limits.attempts + 1 END,
+        window_started = CASE
+          WHEN security_rate_limits.window_started <= now() - interval '15 minutes'
+          THEN now() ELSE security_rate_limits.window_started END,
+        updated_at = now()
+      RETURNING attempts
+    `;
+    assert.equal(reset[0]?.attempts, 1);
   });
 
   await check('only one concurrent live approval can exist for a finalized proposal', async () => {

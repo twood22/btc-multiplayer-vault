@@ -4,6 +4,7 @@ import { webConfig } from '@/web/lib/server/config';
 import { assertSameOrigin, jsonError } from '@/web/lib/server/http';
 import { requireSessionUser } from '@/web/lib/server/session';
 import { createCoinObservationChallenge } from '@/web/lib/server/vault-runtime-store';
+import { consumeRateLimit } from '@/web/lib/server/rate-limit';
 
 export const runtime = 'nodejs';
 
@@ -20,6 +21,12 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const input = Input.parse(await request.json());
     const userId = await requireSessionUser();
+    await consumeRateLimit({
+      action: 'coin_observation',
+      subject: userId,
+      limit: 20,
+      windowSeconds: 900,
+    });
     const options = await generateAuthenticationOptions({
       rpID: webConfig().rpID,
       userVerification: 'required',

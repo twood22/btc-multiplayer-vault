@@ -5,6 +5,7 @@ import { recordLiveSigbashRegistration } from '@/web/lib/server/roster-store';
 import { assertSigbashCustodyLease } from '@/web/lib/server/sigbash-custody-store';
 import { getSigbashProvisioningManifest } from '@/web/lib/server/sigbash-provisioning-store';
 import { requireSessionUser } from '@/web/lib/server/session';
+import { consumeRateLimit } from '@/web/lib/server/rate-limit';
 
 export const runtime = 'nodejs';
 
@@ -25,6 +26,12 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const input = Input.parse(await request.json());
     const userId = await requireSessionUser();
+    await consumeRateLimit({
+      action: 'sigbash_key_registration',
+      subject: userId,
+      limit: 6,
+      windowSeconds: 3600,
+    });
     await assertSigbashCustodyLease(userId, input.leaseToken);
     const manifest = await getSigbashProvisioningManifest(userId);
     if (!manifest.next || manifest.next.round !== input.round) {
