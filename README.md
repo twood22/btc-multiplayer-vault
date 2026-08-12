@@ -126,8 +126,8 @@ anyone else's keys:
 
 ```bash
 # Each participant, on their own machine, with their own secret:
-export MY_SECRET="$(openssl rand -hex 32)"   # back this up; it derives all your keys
-npm run vault-keygen -- --participant alice --secret "$MY_SECRET"
+export VAULT_PARTICIPANT_SECRET="$(openssl rand -hex 32)"   # back this up
+npm run vault-keygen -- --participant alice
 # → prints a PUBLIC roster entry (no private keys). Send it to the others.
 
 # Everyone collects the 3 roster entries and confirms identical addresses:
@@ -136,20 +136,38 @@ npm run verify-roster -- --roster '[<alice-entry>,<bob-entry>,<carol-entry>]'
 #   address (it is order-independent) before anyone funds it.
 ```
 
+`vault-keygen` currently emits offline Sigbash leaf fixtures alongside the
+real personal and payout public keys. Do not fund that roster as-is. The
+mainnet product still needs the live Sigbash setup phase to replace those
+fields with service-created leaf keys before the funding address is final.
+
 ## Cooperative exit ceremony (interactive MuSig2)
 
 The trust-minimized exit runs the real BIP-327 two-round protocol across the
 participants' devices, so no machine ever holds another's key:
 
 ```bash
-npm run ceremony-start -- --round alice,bob,carol --txid <vault_txid> --vout <n> --value-sats <sats>
+npm run ceremony-start -- --roster '<roster>' --round alice,bob,carol \
+  --txid <vault_txid> --vout <n> --value-sats <sats> --script-pubkey <hex>
 # → context. Each participant runs, on their own machine:
-npm run ceremony-nonce   -- --participant alice --context '<context>'
-npm run ceremony-partial -- --participant alice --context '<context>' --pubnonces '<all-pubnonces>' --secnonce '<their-secnonce>'
+export VAULT_PARTICIPANT_SECRET='<this-participant-secret>'
+npm run ceremony-nonce -- --roster '<roster>' --context '<context>' \
+  --txid <vault_txid> --vout <n> --value-sats <sats> --script-pubkey <hex> \
+  --secnonce-file ./cooperative-exit.secnonce
+npm run ceremony-partial -- --roster '<roster>' --context '<context>' \
+  --pubnonces '<all-pubnonces>' --txid <vault_txid> --vout <n> \
+  --value-sats <sats> --script-pubkey <hex> \
+  --secnonce-file ./cooperative-exit.secnonce
 # Then anyone aggregates:
-npm run ceremony-aggregate -- --context '<context>' --pubnonces '<all-pubnonces>' --partials '<all-partials>'
+npm run ceremony-aggregate -- --roster '<roster>' --context '<context>' \
+  --pubnonces '<all-pubnonces>' --partials '<all-partials>' \
+  --txid <vault_txid> --vout <n> --value-sats <sats> --script-pubkey <hex>
 # → final signed transaction, ready to broadcast.
 ```
+
+The secret nonce is never printed or accepted on the command line. It is
+created as a new owner-only file, bound to the participant, round, message,
+and public nonce, then destroyed before the partial signature is generated.
 
 ## Command reference
 
@@ -158,9 +176,11 @@ Everything is `npm run <command> [-- args]`. Offline: `setup`, `vault-keygen`,
 `solo`, `recovery`, `demo` (full-run), `signed-local-run`, `funding-manifest`,
 `watch-manifest`, `vault-output`, `funding-psbt`, `solo-psbt`,
 `sign-solo-psbt`, `cooperative-psbt`, `sign-cooperative-psbt`,
-`recovery-psbt`, `sign-recovery-psbt`, `final-sweep-psbt`,
+`recovery-psbt`, `recovery-share`, `recovery-aggregate`,
+`sign-recovery-psbt` (single-machine test harness only), `final-sweep-psbt`,
 `sign-final-sweep-psbt`, `policy-check-psbt`, `inspect-psbt`,
-`psbt-acceptance`, `audit`, `sdk-policy-check`.
+`psbt-acceptance`, `dual-leaf-acceptance`, `custody-acceptance`, `audit`,
+`sdk-policy-check`.
 
 Bitcoin Core signet RPC: `rpc-gettxout`, `rpc-decode-tx`,
 `rpc-testmempoolaccept`, `rpc-submit`, `rpc-broadcast`, `rpc-tx-status`,

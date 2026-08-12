@@ -18,8 +18,9 @@ import type {
 bitcoin.initEccLib(ecc);
 
 // bitcoinjs' Psbt keeps the unsigned transaction in a private cache; the
-// inspect/sighash helpers need it. Confined to this single accessor.
-function unsignedTx(psbt: bitcoin.Psbt): bitcoin.Transaction {
+// inspect/sighash/authorization helpers need it. Confined to this single
+// accessor, which custody.ts and ceremony.ts reuse rather than re-casting.
+export function unsignedTx(psbt: bitcoin.Psbt): bitcoin.Transaction {
   return (psbt as unknown as { __CACHE: { __TX: bitcoin.Transaction } }).__CACHE.__TX;
 }
 
@@ -1332,7 +1333,7 @@ function cooperativeSignature({
   return signature;
 }
 
-function witnessStackToScriptWitness(stack: Buffer[]): Buffer {
+export function witnessStackToScriptWitness(stack: Buffer[]): Buffer {
   const parts: Buffer[] = [Buffer.from([stack.length])];
   for (const item of stack) {
     if (item.length > 0xfc) throw new Error('witness item too large for compact size 1');

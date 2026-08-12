@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
-import { AMOUNTS, DEMO_SEED, PARTICIPANTS, RECOVERY_DELAY_BLOCKS } from './config.js';
+import {
+  AMOUNTS,
+  DEFAULT_DEMO_SEED,
+  DEMO_SEED,
+  PARTICIPANTS,
+  RECOVERY_DELAY_BLOCKS,
+} from './config.js';
 import { auditSpecState } from './audit.js';
 import { runBip327KeyAggVectors, verifyVaultTransaction } from './consensus.js';
 import { runBip327ProtocolVectors } from './musig2-vectors.js';
@@ -11,6 +17,16 @@ import {
   ceremonyStart,
   type CeremonyContext,
 } from './ceremony.js';
+import {
+  aggregateRecoveryShares,
+  authorizeFinalSweep,
+  createRecoveryShare,
+  loadLocalSigner,
+  loadPublicRoster,
+  type RecoveryShare,
+} from './custody.js';
+import { runCustodyAcceptance } from './custody-acceptance.js';
+import { loadAndBurnSecnonce, saveSecnonce } from './nonce-store.js';
 import {
   base58CheckEncode,
   deriveXpubChildPubkey,
@@ -82,10 +98,12 @@ import {
 } from './vault.js';
 import {
   asSats,
+  asTrustedVaultInput,
   type LedgerUtxo,
   type PolicyTx,
   type PsbtInspection,
   type SoloPolicy,
+  type TrustedVaultInput,
   type VaultRound,
   type VaultState,
 } from './types.js';
@@ -119,6 +137,8 @@ const commands: Record<string, () => Promise<void>> = {
   'ceremony-partial': ceremonyPartialCommand,
   'ceremony-aggregate': ceremonyAggregateCommand,
   'recovery-psbt': recoveryPsbt,
+  'recovery-share': recoveryShareCommand,
+  'recovery-aggregate': recoveryAggregateCommand,
   'sign-recovery-psbt': signRecoveryPsbtCommand,
   'final-sweep-psbt': finalSweepPsbt,
   'sign-final-sweep-psbt': signFinalSweepPsbtCommand,
@@ -127,6 +147,7 @@ const commands: Record<string, () => Promise<void>> = {
   'inspect-psbt': inspectPsbtCommand,
   'psbt-acceptance': psbtAcceptance,
   'dual-leaf-acceptance': dualLeafAcceptance,
+  'custody-acceptance': custodyAcceptance,
   'rpc-gettxout': rpcGetTxOut,
   'verify-vault-utxo': verifyVaultUtxo,
   'cooperative-readiness': cooperativeReadiness,
@@ -179,10 +200,16 @@ async function setup() {
 async function vaultKeygen() {
   const args = parseArgs(process.argv.slice(3));
   const participantId = requireArg(args, 'participant');
-  const secret = stringArg(args, 'secret') || process.env.VAULT_PARTICIPANT_SECRET;
+  // Secrets are only ever read from the environment: a --secret argument
+  // lands in shell history, `ps` output, and CI logs.
+  assert(
+    args['secret'] === undefined,
+    '--secret is not accepted; export VAULT_PARTICIPANT_SECRET instead so the secret never appears in argv',
+  );
+  const secret = process.env.VAULT_PARTICIPANT_SECRET;
   assert(
     secret && secret.length >= 32,
-    'provide --secret or VAULT_PARTICIPANT_SECRET (>= 32 chars). Generate with: openssl rand -hex 32',
+    'set VAULT_PARTICIPANT_SECRET (>= 32 chars) in this device\'s environment. Generate with: openssl rand -hex 32',
   );
   const allIds = PARTICIPANTS.map((p) => p.id);
   assert(allIds.includes(participantId), `participant must be one of ${allIds.join(', ')}`);
@@ -190,7 +217,8 @@ async function vaultKeygen() {
   printResult('vault keygen (public roster entry — safe to share)', {
     rosterEntry: entry,
     instructions: [
-      'Keep your --secret private and backed up; it derives all your keys.',
+      'Keep VAULT_PARTICIPANT_SECRET private and backed up; it derives your personal and payout keys and is never printed.',
+      'The printed Sigbash fields are offline fixtures until live Sigbash roster setup replaces them. Do not fund this entry as-is.',
       'Send the rosterEntry above to the other participants.',
       'Collect all 3 roster entries into a JSON array and run verify-roster to confirm everyone derives the same vault addresses before funding.',
     ],
@@ -201,9 +229,7 @@ async function vaultKeygen() {
 // addresses. Every participant must see identical addresses before funding.
 async function verifyRoster() {
   const args = parseArgs(process.argv.slice(3));
-  const roster = JSON.parse(requireArg(args, 'roster')) as RosterEntry[];
-  assert(Array.isArray(roster) && roster.length === 3, 'roster must be a JSON array of 3 entries');
-  const state = createRosterState(roster);
+  const { roster, state, custodyChecks } = loadPublicRoster(requireArg(args, 'roster'));
   const audit = auditSpecState(state);
   printResult('roster verification', {
     participants: state.participants.map((p) => ({ id: p.id, payoutAddress: p.payoutAddress })),
@@ -212,7 +238,8 @@ async function verifyRoster() {
       participants: v.participantIds,
       address: v.address,
     })),
-    roundOneFundingAddress: requireVault(state, PARTICIPANTS.map((p) => p.id)).address,
+    roundOneFundingAddress: requireVault(state, roster.map((entry) => entry.id)).address,
+    custodyChecks,
     specAudit: { passed: audit.passed, failed: audit.checks.filter((c) => !c.ok).map((c) => c.name) },
     confirm:
       'Every participant should run this with the same roster and see identical addresses. Fund only the roundOneFundingAddress.',
@@ -583,70 +610,170 @@ async function signCooperativePsbt() {
 
 // Interactive MuSig2 cooperative-exit ceremony. Each command runs on one
 // participant's machine and exchanges small JSON blobs, so no machine ever
-// holds another participant's key. Flow:
+// holds another participant's key. Every command takes the *public* roster;
+// the two signing steps additionally take the operator's own trusted outpoint
+// (--txid/--vout/--value-sats/--script-pubkey) and read the one local secret
+// from VAULT_PARTICIPANT_SECRET. Flow:
 //   1. anyone: ceremony-start   → context (unsigned PSBT + signing metadata)
-//   2. each:   ceremony-nonce   → their pubnonce (+ private secnonce, kept local)
+//   2. each:   ceremony-nonce   → their pubnonce; secret nonce goes only to a
+//                                  new owner-only single-use file
 //   3. each:   ceremony-partial → their partial signature
 //   4. anyone: ceremony-aggregate → final signed transaction
 async function ceremonyStartCommand() {
   const args = parseArgs(process.argv.slice(3));
+  const { state } = loadPublicRoster(requireArg(args, 'roster'));
   const currentIds = requireArg(args, 'round').split(',');
-  const txid = requireArg(args, 'txid');
-  const vout = Number(requireArg(args, 'vout'));
-  const valueSats = Number(requireArg(args, 'value-sats'));
-  const state = createConfiguredState();
-  const built = buildCooperativeExitPsbt({ state, currentIds, txid, vout, valueSats });
-  const context = ceremonyStart({ state, currentIds, txid, vout, valueSats, psbtBase64: built.psbtBase64 });
+  const trustedInput = trustedInputFromArgs(args);
+  const context = ceremonyStart({ state, currentIds, trustedInput });
   printResult('cooperative ceremony context', {
     context,
-    note: 'Share this context with each participant. They run ceremony-nonce, then ceremony-partial.',
+    trustedInput,
+    note:
+      'Share this context with each participant. They independently supply the same trusted outpoint ' +
+      'and run ceremony-nonce, then ceremony-partial.',
   });
 }
 
 async function ceremonyNonceCommand() {
   const args = parseArgs(process.argv.slice(3));
-  const participantId = requireArg(args, 'participant');
+  const signer = loadLocalSigner(requireArg(args, 'roster'));
   const context = JSON.parse(requireArg(args, 'context')) as CeremonyContext;
-  const state = createConfiguredState();
+  const secnonceFile = requireArg(args, 'secnonce-file');
+  const trustedInput = trustedInputFromArgs(args);
+  const { authorization, participantId, pubnonce, secnonce } = ceremonyNonce({
+    state: signer.state,
+    participantId: signer.participantId,
+    context,
+    trustedInput,
+  });
+  saveSecnonce(secnonceFile, {
+    version: 1,
+    participantId,
+    round: context.round,
+    message: context.message,
+    pubnonce,
+    secnonce,
+  });
   printResult('cooperative ceremony nonce', {
-    ...ceremonyNonce({ state, participantId, context }),
-    warning: 'secnonce is single-use and secret. Never reuse it or share it.',
+    participantId,
+    pubnonce,
+    secnonceFile,
+    custodyChecks: signer.custodyChecks,
+    authorization,
+    note: 'Share only the pubnonce. The secret nonce was saved in an owner-only file and was not printed.',
   });
 }
 
 async function ceremonyPartialCommand() {
   const args = parseArgs(process.argv.slice(3));
-  const participantId = requireArg(args, 'participant');
+  const signer = loadLocalSigner(requireArg(args, 'roster'));
   const context = JSON.parse(requireArg(args, 'context')) as CeremonyContext;
   const pubnonces = JSON.parse(requireArg(args, 'pubnonces')) as Record<string, string>;
-  const secnonce = requireArg(args, 'secnonce');
-  const state = createConfiguredState();
+  assert(args.secnonce === undefined, '--secnonce is forbidden because command-line secrets leak; use --secnonce-file');
+  const secnonceFile = requireArg(args, 'secnonce-file');
+  const trustedInput = trustedInputFromArgs(args);
+  const participant = participantById(signer.state, signer.participantId);
+  const pubnonce = pubnonces[participant.personal.publicKeyHex];
+  assert(typeof pubnonce === 'string', 'the pubnonce set is missing this participant\'s published nonce');
+  const stored = loadAndBurnSecnonce(secnonceFile, {
+    participantId: signer.participantId,
+    round: context.round,
+    message: context.message,
+    pubnonce,
+  });
+  const partial = ceremonyPartial({
+    state: signer.state,
+    participantId: signer.participantId,
+    context,
+    pubnonces,
+    secnonce: stored.secnonce,
+    trustedInput,
+  });
   printResult('cooperative ceremony partial signature', {
-    ...ceremonyPartial({ state, participantId, context, pubnonces, secnonce }),
+    ...partial,
+    custodyChecks: signer.custodyChecks,
+    note: 'The single-use secret nonce file was destroyed before signing and cannot be reused.',
   });
 }
 
 async function ceremonyAggregateCommand() {
   const args = parseArgs(process.argv.slice(3));
+  const { state } = loadPublicRoster(requireArg(args, 'roster'));
   const context = JSON.parse(requireArg(args, 'context')) as CeremonyContext;
   const pubnonces = JSON.parse(requireArg(args, 'pubnonces')) as Record<string, string>;
   const partialSigs = JSON.parse(requireArg(args, 'partials')) as Record<string, string>;
-  printResult('cooperative ceremony aggregate', ceremonyAggregate({ context, pubnonces, partialSigs }));
+  const trustedInput = trustedInputFromArgs(args);
+  printResult(
+    'cooperative ceremony aggregate',
+    ceremonyAggregate({ state, context, pubnonces, partialSigs, trustedInput }),
+  );
 }
 
+// Builders hold no secrets. Pass the public --roster for a real vault (the
+// participants' own published keys); without it the command falls back to the
+// demo-seed state, which only ever matches a local demo run — a signer will
+// refuse to sign a PSBT built from the wrong key material.
 async function recoveryPsbt() {
   const args = parseArgs(process.argv.slice(3));
-  const currentIds = requireArg(args, 'round').split(',');
+  const state = builderState(args);
+  const currentIds = requireArg(args, 'round').split(',').sort();
   const vanishedId = requireArg(args, 'vanished');
   const txid = requireArg(args, 'txid');
   const vout = Number(requireArg(args, 'vout'));
   const valueSats = Number(requireArg(args, 'value-sats'));
-  const state = createConfiguredState();
   const psbt = buildRecoveryPsbt({ state, currentIds, vanishedId, txid, vout, valueSats });
   printResult('timelocked recovery PSBT', psbt);
 }
 
+// One rescuer, on their own device, with only their own secret. The share is
+// public material: a signature plus the bindings the aggregator re-derives.
+async function recoveryShareCommand() {
+  const args = parseArgs(process.argv.slice(3));
+  const signer = loadLocalSigner(requireArg(args, 'roster'));
+  const currentIds = requireArg(args, 'round').split(',');
+  const vanishedId = requireArg(args, 'vanished');
+  const psbtBase64 = requireArg(args, 'psbt-base64');
+  const trustedInput = trustedInputFromArgs(args);
+  const { share, authorization } = createRecoveryShare({
+    signer,
+    currentIds,
+    vanishedId,
+    psbtBase64,
+    trustedInput,
+  });
+  printResult('timelocked recovery share', {
+    share,
+    custodyChecks: signer.custodyChecks,
+    authorization: { round: authorization.round, checks: authorization.checks },
+    note: 'Send the share to whoever aggregates. It carries no private key material.',
+  });
+}
+
+// Anyone (no secret at all) combines the threshold of independent shares.
+async function recoveryAggregateCommand() {
+  const args = parseArgs(process.argv.slice(3));
+  const { state } = loadPublicRoster(requireArg(args, 'roster'));
+  const currentIds = requireArg(args, 'round').split(',');
+  const vanishedId = requireArg(args, 'vanished');
+  const psbtBase64 = requireArg(args, 'psbt-base64');
+  const shares = JSON.parse(requireArg(args, 'shares')) as RecoveryShare[];
+  assert(Array.isArray(shares), '--shares must be a JSON array of recovery shares');
+  const trustedInput = trustedInputFromArgs(args);
+  printResult(
+    'aggregated timelocked recovery',
+    aggregateRecoveryShares({ state, currentIds, vanishedId, psbtBase64, trustedInput, shares }),
+  );
+}
+
+// Demo-only: signs a recovery with every rescuer's key on one machine. Gated
+// on the public demo seed so it can never touch funded keys; production
+// recovery is recovery-share (one secret each) + recovery-aggregate.
 async function signRecoveryPsbtCommand() {
+  assert(
+    DEMO_SEED === DEFAULT_DEMO_SEED,
+    'sign-recovery-psbt is the single-machine demo signer and needs every rescuer\'s key. ' +
+      'With a real seed set, use recovery-share on each rescuer\'s device and then recovery-aggregate.',
+  );
   const args = parseArgs(process.argv.slice(3));
   const currentIds = requireArg(args, 'round').split(',');
   const vanishedId = requireArg(args, 'vanished');
@@ -660,17 +787,17 @@ async function signRecoveryPsbtCommand() {
     psbtBase64,
     signerIds,
   });
-  printResult('signed timelocked recovery', signed);
+  printResult('signed timelocked recovery (demo seed, all keys on one machine)', signed);
 }
 
 async function finalSweepPsbt() {
   const args = parseArgs(process.argv.slice(3));
+  const state = builderState(args);
   const participantId = requireArg(args, 'participant');
   const txid = requireArg(args, 'txid');
   const vout = Number(requireArg(args, 'vout'));
   const valueSats = Number(requireArg(args, 'value-sats'));
   const feeSats = args['fee-sats'] === undefined ? AMOUNTS.finalSweepFee : Number(args['fee-sats']);
-  const state = createConfiguredState();
   const psbt = buildFinalSweepPsbt({
     state,
     participantId,
@@ -683,13 +810,45 @@ async function finalSweepPsbt() {
   printResult('final participant sweep PSBT', psbt);
 }
 
+// The last participant sweeping their own payout output. Roster + this
+// device's one secret; the participant is whoever the secret belongs to, and
+// the sweep is authorized against the operator's own trusted outpoint before
+// a signature exists, then re-verified independently afterwards.
 async function signFinalSweepPsbtCommand() {
   const args = parseArgs(process.argv.slice(3));
-  const participantId = requireArg(args, 'participant');
+  const signer = loadLocalSigner(requireArg(args, 'roster'));
   const psbtBase64 = requireArg(args, 'psbt-base64');
-  const state = createConfiguredState();
-  const signed = signFinalSweepPsbt({ state, participantId, psbtBase64 });
-  printResult('signed final participant sweep', signed);
+  const trustedInput = trustedInputFromArgs(args);
+  const feeSats = args['fee-sats'] === undefined ? AMOUNTS.finalSweepFee : Number(args['fee-sats']);
+  const authorization = authorizeFinalSweep({
+    state: signer.state,
+    participantId: signer.participantId,
+    psbtBase64,
+    trustedInput,
+    destinationAddress: stringArg(args, 'destination'),
+    feeSats,
+  });
+  const signed = signFinalSweepPsbt({
+    state: signer.state,
+    participantId: signer.participantId,
+    psbtBase64,
+  });
+  const consensus = verifyVaultTransaction({
+    txHex: signed.transactionHex,
+    prevouts: [
+      { scriptPubKeyHex: trustedInput.scriptPubKeyHex, valueSats: trustedInput.valueSats },
+    ],
+  });
+  assert(
+    signed.txid === authorization.unsignedTxid,
+    'signed final sweep is not the transaction that was authorized',
+  );
+  printResult('signed final participant sweep', {
+    ...signed,
+    custodyChecks: signer.custodyChecks,
+    authorization,
+    consensus,
+  });
 }
 
 async function sigbashSignPsbt() {
@@ -2800,6 +2959,7 @@ async function acceptance() {
   await psbtAcceptance();
   await dualLeafAcceptance();
   await consensusAcceptance();
+  await custodyAcceptance();
   await cooperative();
   await solo();
   await fullRun();
@@ -2958,15 +3118,24 @@ async function consensusAcceptance() {
   const ceremonyResults = [roundOneIds, ['bob', 'carol']].map((ids) => {
     const vault = requireVault(state, ids);
     const potSats = ids.length === 3 ? AMOUNTS.deposit * 3 : 204_999_000;
-    const built = buildCooperativeExitPsbt({ state, currentIds: ids, txid: fundingTxid, vout: 0, valueSats: potSats });
-    const context = ceremonyStart({ state, currentIds: ids, txid: fundingTxid, vout: 0, valueSats: potSats, psbtBase64: built.psbtBase64 });
+    const trustedInput = asTrustedVaultInput({
+      txid: fundingTxid,
+      vout: 0,
+      valueSats: potSats,
+      scriptPubKeyHex: vault.outputScriptHex,
+    });
+    const context = ceremonyStart({ state, currentIds: ids, trustedInput });
     const pubById = Object.fromEntries(ids.map((id) => [id, participantById(state, id).personal.publicKeyHex]));
-    const nonces = ids.map((id) => ceremonyNonce({ state, participantId: id, context }));
+    const nonces = ids.map((id) => ceremonyNonce({ state, participantId: id, context, trustedInput }));
     const pubnonces = Object.fromEntries(ids.map((id, i) => [pubById[id]!, nonces[i]!.pubnonce]));
     const partials = Object.fromEntries(
-      ids.map((id, i) => [pubById[id]!, ceremonyPartial({ state, participantId: id, context, pubnonces, secnonce: nonces[i]!.secnonce }).partialSig]),
+      ids.map((id, i) => [
+        pubById[id]!,
+        ceremonyPartial({ state, participantId: id, context, pubnonces, secnonce: nonces[i]!.secnonce, trustedInput })
+          .partialSig,
+      ]),
     );
-    const finalTx = ceremonyAggregate({ context, pubnonces, partialSigs: partials });
+    const finalTx = ceremonyAggregate({ state, context, pubnonces, partialSigs: partials, trustedInput });
     const verification = verifyVaultTransaction({
       txHex: finalTx.transactionHex,
       prevouts: [{ scriptPubKeyHex: vault.outputScriptHex, valueSats: potSats }],
@@ -2990,6 +3159,19 @@ async function consensusAcceptance() {
     },
     verifiedTransactions: verified,
   });
+}
+
+// Offline adversarial proof of the distributed-custody boundary: one secret
+// per device, independent MuSig2/recovery participation, and fail-closed
+// rejection of every hostile artifact we could think to build. No network, no
+// credentials, no real secrets.
+async function custodyAcceptance() {
+  const report = runCustodyAcceptance();
+  printResult('custody acceptance (offline, adversarial)', report);
+  assert(
+    report.passed,
+    `custody acceptance failed: ${JSON.stringify(report.checks.filter((item) => !item.ok))}`,
+  );
 }
 
 async function audit() {
@@ -3384,6 +3566,25 @@ function requireArg(args: CliArgs, name: string): string {
     throw new Error(`missing required --${name}`);
   }
   return value;
+}
+
+// The coin a signer independently vouches for. Every signing command requires
+// it: without it, "sign this PSBT" is a request to trust whoever built it
+// about which outpoint and how many sats are being spent.
+function trustedInputFromArgs(args: CliArgs): TrustedVaultInput {
+  return asTrustedVaultInput({
+    txid: requireArg(args, 'txid'),
+    vout: Number(requireArg(args, 'vout')),
+    valueSats: Number(requireArg(args, 'value-sats')),
+    scriptPubKeyHex: requireArg(args, 'script-pubkey'),
+  });
+}
+
+// Builder commands need vault state but no keys. --roster is the real thing;
+// the demo-seed fallback keeps the offline demo flows working unchanged.
+function builderState(args: CliArgs): VaultState {
+  const roster = stringArg(args, 'roster');
+  return roster ? loadPublicRoster(roster).state : createConfiguredState();
 }
 
 // Non-null lookups: rounds and policies in the precomputed tree are total for

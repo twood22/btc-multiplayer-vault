@@ -153,10 +153,11 @@ export function createDemoState({
 // ── Per-participant key custody ────────────────────────────────────────────
 // The demo derives every key from one shared seed. For real use each friend
 // runs vault-keygen on their own device with their own secret, generating
-// their personal key, payout key, and one Sigbash client share per round they
-// could leave in. They publish only public material (a "roster entry"); no one
-// ever sees another participant's secret. Everyone assembles the same roster,
-// derives the identical vault addresses, and confirms agreement before funding.
+// their personal and payout keys. The roster also carries the public Sigbash
+// leaf material for every round, but live Sigbash controls those signing
+// shares independently of the participant secret. No one ever sees another
+// participant's secret. Everyone assembles the same public roster, derives
+// identical vault addresses, and confirms agreement before funding.
 
 export interface RosterEntry {
   id: string;
@@ -215,10 +216,11 @@ export function rosterEntry(participantId: string, secret: string, allIds: strin
 }
 
 // Build vault state from a roster of public keys, optionally filling in one
-// participant's private keys (from their own secret) so that participant can
-// sign locally. With no secret, the state is public-only: enough to derive and
-// verify every vault address and policy, which is all a participant needs to
-// confirm the vault before funding.
+// participant's personal and payout private keys so that participant can sign
+// cooperative exits, recovery shares, and their final sweep locally. Sigbash
+// leaf keys are always public-only here: live leaf keys are created and held by
+// Sigbash, not derived from (or recoverable through) the participant secret.
+// With no secret, the entire state is public-only.
 export function createRosterState(
   roster: RosterEntry[],
   localSecret?: { participantId: string; secret: string },
@@ -232,9 +234,15 @@ export function createRosterState(
     if (localKeys && localKeys.personal.publicKeyHex !== entry.personalPublicKeyHex) {
       throw new Error(`local secret for ${entry.id} does not match the roster's public key`);
     }
+    if (
+      localKeys &&
+      (localKeys.payout.xonlyPubKeyHex !== entry.payoutXonlyPubkeyHex ||
+        taprootAddress(localKeys.payout.xonlyPubKeyHex) !== entry.payoutAddress)
+    ) {
+      throw new Error(`local secret for ${entry.id} does not match the roster's payout key`);
+    }
     const sigbashByRound: Record<string, SigbashRoundKey> = {};
     for (const [round, leafKey] of Object.entries(entry.sigbashLeafByRound)) {
-      const local = localKeys?.sigbashByRound[round];
       const identificationKey = entry.sigbashIdentificationLeafByRound?.[round];
       if (!identificationKey) {
         throw new Error(
@@ -243,8 +251,8 @@ export function createRosterState(
         );
       }
       sigbashByRound[round] = {
-        privateKeyHex: local?.privateKeyHex ?? '',
-        publicKeyHex: local?.publicKeyHex ?? `02${leafKey}`,
+        privateKeyHex: '',
+        publicKeyHex: `02${leafKey}`,
         xonlyPubKeyHex: leafKey,
         isLiveKey: false,
         identificationXonlyPubKeyHex: identificationKey,

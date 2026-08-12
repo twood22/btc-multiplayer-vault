@@ -264,3 +264,48 @@ export interface Prevout {
   scriptPubKeyHex: Hex;
   valueSats: number;
 }
+
+/**
+ * The exact vault coin a local signer independently expects to spend. Every
+ * field must come from the signer's own view of the chain (their node, their
+ * block explorer, their own `verify-vault-utxo` run) and never from the
+ * coordinator-supplied context or PSBT. It is the anchor that turns "the PSBT
+ * I was handed spends the coin I meant to spend, for the value I meant to
+ * spend" into a checkable claim: a coordinator that swaps the outpoint, lies
+ * about the input value (which changes the BIP-341 sighash), or points the
+ * signer at a different script never gets a signature.
+ */
+export interface TrustedVaultInput {
+  txid: Hex;
+  vout: number;
+  valueSats: number;
+  scriptPubKeyHex: Hex;
+}
+
+export function asTrustedVaultInput(input: {
+  txid: unknown;
+  vout: unknown;
+  valueSats: unknown;
+  scriptPubKeyHex: unknown;
+}): TrustedVaultInput {
+  const txid = typeof input.txid === 'string' ? input.txid.toLowerCase() : '';
+  if (!/^[0-9a-f]{64}$/.test(txid)) {
+    throw new Error('trusted input --txid must be a 32-byte hex transaction id');
+  }
+  const vout = Number(input.vout);
+  if (!Number.isSafeInteger(vout) || vout < 0 || vout > 0xffffffff) {
+    throw new Error('trusted input --vout must be a uint32 output index');
+  }
+  const valueSats = Number(input.valueSats);
+  if (!Number.isSafeInteger(valueSats) || valueSats <= 0) {
+    throw new Error('trusted input --value-sats must be a positive integer satoshi amount');
+  }
+  const scriptPubKeyHex =
+    typeof input.scriptPubKeyHex === 'string' ? input.scriptPubKeyHex.toLowerCase() : '';
+  if (!/^5120[0-9a-f]{64}$/.test(scriptPubKeyHex)) {
+    throw new Error(
+      'trusted input --script-pubkey must be a v1 taproot scriptPubKey (5120<32-byte output key>)',
+    );
+  }
+  return { txid, vout, valueSats, scriptPubKeyHex };
+}
