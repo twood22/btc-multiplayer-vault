@@ -67,7 +67,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@sigbash/sdk": "^0.6.0",
+    "@sigbash/sdk": "0.7.1",
     "bitcoinjs-lib": "^7.0.1",
     "tiny-secp256k1": "^2.2.4"
   },
