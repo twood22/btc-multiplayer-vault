@@ -760,6 +760,55 @@ export interface RecoveryShare {
   signatureHex: Hex;
 }
 
+/** Validate one public recovery contribution without requiring other shares. */
+export function validateRecoveryShare({
+  state,
+  currentIds,
+  vanishedId,
+  psbtBase64,
+  trustedInput,
+  share,
+}: {
+  state: VaultState;
+  currentIds: string[];
+  vanishedId: string;
+  psbtBase64: string;
+  trustedInput: TrustedVaultInput;
+  share: RecoveryShare;
+}): RecoveryAuthorization {
+  const authorization = authorizeRecoveryPsbt({
+    state,
+    currentIds,
+    vanishedId,
+    psbtBase64,
+    trustedInput,
+  });
+  if (!share || typeof share !== 'object') throw new Error('recovery share must be an object');
+  if (share.round !== authorization.round || share.vanishedId !== vanishedId) {
+    throw new Error('recovery share names a different round or vanished participant');
+  }
+  if (share.leafHashHex !== authorization.leafHashHex || share.unsignedTxid !== authorization.unsignedTxid) {
+    throw new Error('recovery share is bound to a different leaf or transaction');
+  }
+  const participant = participantById(state, share.participantId);
+  if (share.participantId === vanishedId || !currentIds.includes(share.participantId)) {
+    throw new Error('recovery share signer is vanished or outside the current round');
+  }
+  if (
+    share.xonlyPubkey !== participant.personal.xonlyPubKeyHex ||
+    !authorization.leaf.recoveryXonlyPubkeys.includes(share.xonlyPubkey)
+  ) throw new Error('recovery share key does not match the signer and recovery leaf');
+  if (!/^[0-9a-f]{128}$/u.test(share.signatureHex)) {
+    throw new Error('recovery share is not a 64-byte BIP-340 signature');
+  }
+  if (!ecc.verifySchnorr(
+    Buffer.from(authorization.messageHex, 'hex'),
+    Buffer.from(share.xonlyPubkey, 'hex'),
+    Buffer.from(share.signatureHex, 'hex'),
+  )) throw new Error(`recovery share from ${share.participantId} failed signature verification`);
+  return authorization;
+}
+
 /**
  * One participant's recovery signature, produced on their own device from
  * their own secret. The share carries no private material and is useless for

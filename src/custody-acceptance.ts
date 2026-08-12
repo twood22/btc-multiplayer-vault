@@ -23,6 +23,7 @@ import {
   loadLocalSigner,
   loadPublicRoster,
   localSignerFromSecret,
+  validateRecoveryShare,
   validateRoster,
   type LocalSigner,
   type RecoveryShare,
@@ -551,6 +552,29 @@ export function runCustodyAcceptance(): CustodyAcceptanceReport {
     assert(aliceShare.signatureHex !== bobShare.signatureHex, 'rescuers produced identical signatures');
     return aliceShare.unsignedTxid;
   });
+
+  const validateShare = (share: RecoveryShare) => validateRecoveryShare({
+    state: publicOnly.state,
+    currentIds: recoveryIds,
+    vanishedId,
+    psbtBase64: recoveryBuilt.psbtBase64,
+    trustedInput,
+    share,
+  });
+  expect('the coordinator verifies each recovery share before persistence', () => {
+    const authorization = validateShare(aliceShare!);
+    assert(authorization.unsignedTxid === aliceShare!.unsignedTxid, 'validated a different recovery transaction');
+    return authorization.unsignedTxid;
+  });
+  expectReject('the coordinator rejects a recovery share relabelled as another signer', 'key does not match', () =>
+    validateShare({ ...aliceShare!, participantId: 'bob' }),
+  );
+  expectReject('the coordinator rejects a recovery share with a changed signature', 'failed signature verification', () =>
+    validateShare({
+      ...aliceShare!,
+      signatureHex: `${aliceShare!.signatureHex[0] === '0' ? '1' : '0'}${aliceShare!.signatureHex.slice(1)}`,
+    }),
+  );
 
   expect('independently produced shares aggregate into a consensus-valid recovery', () => {
     const aggregated = aggregateRecoveryShares({

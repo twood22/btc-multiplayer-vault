@@ -15,6 +15,7 @@ import { withUnlockedVaultCustody } from '../lib/client/unlocked-vault-custody';
 import {
   createAuthorizedCooperativeNonce,
   createAuthorizedCooperativePartial,
+  createAuthorizedRecoverySignature,
   signAuthorizedFinalSweep,
   signAuthorizedSoloWithdrawal,
 } from '../lib/client/vault-signing';
@@ -27,18 +28,22 @@ import {
 import { assertPasskey } from '../lib/client/webauthn';
 
 interface PasskeyChoice { id: string; name: string }
+interface RecoveryShareStatus { participantId: string }
 interface RuntimeStatus {
   participantId: string;
   participantPersonalPublicKeyHex: string;
+  recoveryDelayBlocks: number;
   chainObservationOrigins: string[];
   coin: (VaultCoinSnapshot & {
     id: string;
     snapshotDigest: string;
     observedParticipantIds: string[];
+    participantObservationConfirmations: number | null;
   }) | null;
   proposal: {
     id: string;
     kind: 'solo' | 'cooperative' | 'recovery' | 'final_sweep';
+    roundId: string | null;
     actorParticipantId: string | null;
     digest: string;
     unsignedTxid: string;
@@ -50,6 +55,7 @@ interface RuntimeStatus {
       pubnonces: Record<string, string>;
       partialSigs: Record<string, string>;
     } | null;
+    recoveryShares: RecoveryShareStatus[] | null;
   } | null;
 }
 
@@ -123,6 +129,41 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
       setMessage('Equal cooperative refund proposed; every current participant signs on their own device');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not create cooperative exit');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function createRecoveryProposal(vanishedId: string) {
+    if (!runtime?.coin || !credentialId) return;
+    setWorking(true);
+    try {
+      const source = runtime.chainObservationOrigins[0];
+      if (!source) throw new Error('no independent chain observation source is configured');
+      setMessage('Checking recovery maturity directly against Bitcoin mainnet…');
+      const observed = await observeVaultCoin(source, runtime.coin);
+      if (observed.confirmations <= runtime.recoveryDelayBlocks) {
+        throw new Error(
+          `recovery needs more than ${runtime.recoveryDelayBlocks} confirmations; mainnet currently reports ${observed.confirmations}`,
+        );
+      }
+      const options = await postJson('/api/vault/observe/options', { credentialId, ...observed });
+      const response = await assertPasskey(options.options as Record<string, unknown>);
+      await postJson('/api/vault/observe/finish', {
+        challengeId: options.challengeId,
+        snapshotDigest: observed.snapshotDigest,
+        response,
+      });
+      await postJson('/api/vault/proposals', {
+        kind: 'recovery',
+        actorParticipantId: vanishedId,
+      });
+      await refresh();
+      setMessage(
+        `Timelocked recovery for absent participant ${vanishedId} proposed; nothing has been signed or broadcast`,
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not create timelocked recovery');
     } finally {
       setWorking(false);
     }
@@ -323,6 +364,77 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
     }
   }
 
+  async function signRecoveryProposal() {
+    if (!runtime?.coin || !runtime.proposal || !credentialId) return;
+    const proposal = runtime.proposal;
+    setWorking(true);
+    try {
+      if (proposal.kind !== 'recovery' || !proposal.actorParticipantId) {
+        throw new Error('this is not a recovery proposal');
+      }
+      const source = runtime.chainObservationOrigins[0];
+      if (!source) throw new Error('no independent chain observation source is configured');
+      setMessage('Rechecking recovery maturity directly against Bitcoin mainnet…');
+      const observed = await observeVaultCoin(source, runtime.coin);
+      if (observed.confirmations <= runtime.recoveryDelayBlocks) {
+        throw new Error(
+          `recovery needs more than ${runtime.recoveryDelayBlocks} confirmations; mainnet currently reports ${observed.confirmations}`,
+        );
+      }
+      const options = await postJson('/api/vault/observe/options', { credentialId, ...observed });
+      const response = await assertPasskey(options.options as Record<string, unknown>);
+      await postJson('/api/vault/observe/finish', {
+        challengeId: options.challengeId,
+        snapshotDigest: observed.snapshotDigest,
+        response,
+      });
+      const result = await withUnlockedVaultCustody({
+        credentialId,
+        action: async ({ unlocked }) => {
+          const round = runtime.coin!.roundId;
+          if (!round) throw new Error('recovery input has no current vault round');
+          const currentIds = unlocked.artifact.vaults
+            .find((vault) => vault.round === round)?.participantIds;
+          if (!currentIds) throw new Error('recovery round is absent from the confirmed artifact');
+          const rebuilt = buildVaultProposal({
+            artifact: unlocked.artifact,
+            coin: runtime.coin!,
+            kind: 'recovery',
+            actorParticipantId: proposal.actorParticipantId!,
+            expiresAt: proposal.expiresAt,
+          });
+          if (
+            rebuilt.digest !== proposal.digest || rebuilt.psbtBase64 !== proposal.psbtBase64 ||
+            rebuilt.unsignedTxid !== proposal.unsignedTxid
+          ) throw new Error('coordinator recovery proposal does not reproduce in this browser');
+          if (!rebuilt.requiredSignerIds.includes(unlocked.signer.participantId)) {
+            throw new Error('this participant is not a required recovery signer');
+          }
+          const { share } = createAuthorizedRecoverySignature({
+            unlocked,
+            currentIds,
+            vanishedId: proposal.actorParticipantId!,
+            psbtBase64: proposal.psbtBase64,
+            trustedInput: runtime.coin!,
+          });
+          return postJson('/api/vault/proposals/recovery-contribution', {
+            proposalId: proposal.id,
+            proposalDigest: proposal.digest,
+            share,
+          });
+        },
+      });
+      await refresh();
+      setMessage(result.finalizedTxid
+        ? `All recovery shares verified; transaction finalized as ${String(result.finalizedTxid)} and not broadcast`
+        : `Your recovery share is verified; waiting for ${Number(result.requiredCount) - Number(result.shareCount)} more`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Recovery signing failed');
+    } finally {
+      setWorking(false);
+    }
+  }
+
   async function createFinalSweepProposal() {
     if (!runtime) return;
     setWorking(true);
@@ -387,6 +499,14 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
     && !runtime.proposal
     && observed;
   const canCooperate = canSolo;
+  const recoveryMature = Boolean(
+    runtime?.coin?.participantObservationConfirmations !== null &&
+    runtime?.coin?.participantObservationConfirmations !== undefined &&
+    runtime.coin.participantObservationConfirmations > runtime.recoveryDelayBlocks,
+  );
+  const recoveryCandidates = canSolo && recoveryMature
+    ? currentRoundIds.filter((participantId) => participantId !== runtime?.participantId)
+    : [];
   const canCreateFinalSweep = runtime?.coin?.kind === 'final_payout'
     && runtime.coin.ownerParticipantId === runtime.participantId
     && !runtime.proposal
@@ -399,6 +519,14 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
     && runtime.proposal.actorParticipantId === runtime.participantId
     && runtime.proposal.status === 'collecting'
     && observed;
+  const hasOwnRecoveryShare = Boolean(runtime?.proposal?.recoveryShares
+    ?.some((share) => share.participantId === runtime.participantId));
+  const canSignRecovery = runtime?.proposal?.kind === 'recovery'
+    && runtime.proposal.status === 'collecting'
+    && runtime.proposal.requiredSignerIds.includes(runtime.participantId)
+    && observed
+    && recoveryMature
+    && !hasOwnRecoveryShare;
   const proposalReview = runtime?.coin && runtime.proposal
     ? reviewProposal(runtime.coin, runtime.proposal.psbtBase64)
     : null;
@@ -433,8 +561,10 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
             {passkeys.map((passkey) => <option key={passkey.id} value={passkey.id}>{passkey.name}</option>)}
           </select>
         </label>
-        {runtime?.coin && !observed && (
-          <button disabled={working} onClick={verifyCurrentCoin} type="button">Verify current coin</button>
+        {runtime?.coin && (
+          <button disabled={working} onClick={verifyCurrentCoin} type="button">
+            {observed ? 'Refresh mainnet verification' : 'Verify current coin'}
+          </button>
         )}
         {canSolo && (
           <button disabled={working} onClick={createSoloProposal} type="button">Create my solo withdrawal</button>
@@ -442,11 +572,24 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
         {canCooperate && (
           <button disabled={working} onClick={createCooperativeProposal} type="button">Propose an equal cooperative refund</button>
         )}
+        {recoveryCandidates.map((participantId) => (
+          <button
+            disabled={working}
+            key={participantId}
+            onClick={() => createRecoveryProposal(participantId)}
+            type="button"
+          >Start recovery without {participantId}</button>
+        ))}
         {canCreateFinalSweep && (
           <button disabled={working} onClick={createFinalSweepProposal} type="button">Create my final payout sweep</button>
         )}
         {canSignSolo && (
           <button disabled={working} onClick={signSoloProposal} type="button">Verify and sign my solo withdrawal</button>
+        )}
+        {canSignRecovery && (
+          <button disabled={working} onClick={signRecoveryProposal} type="button">
+            Recheck mainnet and sign recovery
+          </button>
         )}
         {canSignFinalSweep && (
           <button disabled={working} onClick={signFinalSweepProposal} type="button">Verify and sign my final payout sweep</button>
@@ -467,6 +610,22 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
               <p key={output.index}>Participant {index + 1}: {output.valueSats.toLocaleString()} sats</p>
             ))}
             <p>Miner fee: {proposalReview.feeSats.toLocaleString()} sats</p>
+            <code>{runtime.proposal.digest}</code>
+          </div>
+        )}
+        {proposalReview && runtime?.proposal?.kind === 'recovery' && (
+          <div className="activation-code">
+            <span>Timelocked recovery without {runtime.proposal.actorParticipantId}</span>
+            {proposalReview.outputs.map((output, index) => (
+              <p key={output.index}>
+                {currentRoundIds[index]}: {output.valueSats.toLocaleString()} sats
+              </p>
+            ))}
+            <p>Miner fee: {proposalReview.feeSats.toLocaleString()} sats</p>
+            <p>
+              Recovery shares: {runtime.proposal.recoveryShares?.length || 0}/
+              {runtime.proposal.requiredSignerIds.length}
+            </p>
             <code>{runtime.proposal.digest}</code>
           </div>
         )}
@@ -499,11 +658,14 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
             </p>
           </>
         )}
-        {runtime?.proposal && !canSignSolo && runtime.proposal.kind !== 'cooperative' && (
+        {runtime?.proposal && !canSignSolo && !canSignRecovery && runtime.proposal.kind !== 'cooperative' && (
           <p>A {runtime.proposal.kind} proposal is currently {runtime.proposal.status}.</p>
         )}
         {runtime?.proposal?.kind === 'cooperative' && runtime.proposal.status === 'finalized' && (
           <p>Cooperative exit finalized and held for explicit broadcast approval.</p>
+        )}
+        {runtime?.proposal?.kind === 'recovery' && runtime.proposal.status === 'finalized' && (
+          <p>Recovery finalized and held for explicit broadcast approval.</p>
         )}
         <p className="form-message" role="status">{working ? `Working · ${message}` : message}</p>
       </div>

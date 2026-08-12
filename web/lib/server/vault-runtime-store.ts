@@ -4,7 +4,12 @@ import * as bitcoin from 'bitcoinjs-lib';
 import type { AuthenticatorTransportFuture, Base64URLString } from '@simplewebauthn/server';
 import type { TrustedVaultInput } from '../../../src/types';
 import { authorizeSoloSigningArtifacts } from '../../../src/psbt';
-import { authorizeFinalSweep } from '../../../src/custody';
+import {
+  aggregateRecoveryShares,
+  authorizeFinalSweep,
+  validateRecoveryShare,
+  type RecoveryShare,
+} from '../../../src/custody';
 import { verifyVaultTransaction } from '../../../src/consensus';
 import {
   ceremonyAggregate,
@@ -72,6 +77,7 @@ export interface VaultRuntimeStatus {
   vaultId: string;
   participantId: string;
   participantPersonalPublicKeyHex: string;
+  recoveryDelayBlocks: number;
   chainObservationOrigins: string[];
   coin: (VaultCoinSnapshot & {
     id: string;
@@ -79,6 +85,7 @@ export interface VaultRuntimeStatus {
     confirmedHeight: number | null;
     snapshotDigest: string;
     observedParticipantIds: string[];
+    participantObservationConfirmations: number | null;
   }) | null;
   proposal: {
     id: string;
@@ -95,6 +102,7 @@ export interface VaultRuntimeStatus {
       pubnonces: Record<string, string>;
       partialSigs: Record<string, string>;
     } | null;
+    recoveryShares: RecoveryShare[] | null;
   } | null;
 }
 
@@ -125,8 +133,11 @@ export async function getVaultRuntimeStatus(userId: string): Promise<VaultRuntim
   const coin = coinRow ? storedCoinSnapshot(coinRow) : null;
   if (coin) validateVaultCoin(confirmed.artifact, coin);
   const snapshotDigest = coin ? vaultCoinSnapshotDigest(coin) : null;
-  const observations = coin && snapshotDigest ? await db()<Array<{ participant_id: string }>>`
-    SELECT participant_id FROM vault_coin_observations
+  const observations = coin && snapshotDigest ? await db()<Array<{
+    participant_id: string;
+    confirmations: number;
+  }>>`
+    SELECT participant_id, confirmations FROM vault_coin_observations
     WHERE coin_id = ${coin.id}::uuid
       AND snapshot_digest = ${Buffer.from(snapshotDigest, 'hex')}
       AND observed_unspent = true
@@ -177,11 +188,19 @@ export async function getVaultRuntimeStatus(userId: string): Promise<VaultRuntim
   const cooperativeContributions = proposal?.kind === 'cooperative'
     ? contributionMaps(contributionRows)
     : null;
+  const recoveryRows = proposal?.kind === 'recovery'
+    ? await db()<Array<{ payload_json: unknown }>>`
+        SELECT payload_json FROM vault_proposal_contributions
+        WHERE proposal_id = ${proposal.id}::uuid AND kind = 'recovery_share'
+        ORDER BY participant_id
+      `
+    : [];
   return {
     vaultId: membership.vault_id,
     participantId: membership.participant_id,
     participantPersonalPublicKeyHex: confirmed.artifact.participants
       .find((item) => item.id === membership.participant_id)!.personalPublicKeyHex,
+    recoveryDelayBlocks: confirmed.artifact.economics.recoveryDelayBlocks,
     chainObservationOrigins: chainObservationOrigins(),
     coin: coin && coinRow ? {
       ...coin,
@@ -191,6 +210,8 @@ export async function getVaultRuntimeStatus(userId: string): Promise<VaultRuntim
         : exactSafeInteger(coinRow.confirmed_height, 'confirmed height'),
       snapshotDigest: snapshotDigest!,
       observedParticipantIds: observations.map((item) => item.participant_id),
+      participantObservationConfirmations: observations
+        .find((item) => item.participant_id === membership.participant_id)?.confirmations ?? null,
     } : null,
     proposal: proposal ? {
       id: proposal.id,
@@ -204,6 +225,9 @@ export async function getVaultRuntimeStatus(userId: string): Promise<VaultRuntim
       status: proposal.status,
       expiresAt: proposal.expires_at.toISOString(),
       cooperativeContributions,
+      recoveryShares: proposal?.kind === 'recovery'
+        ? recoveryRows.map((item) => parseStoredRecoveryShare(item.payload_json))
+        : null,
     } : null,
   };
 }
@@ -231,8 +255,12 @@ export async function createStoredVaultProposal(
     if (rows.length !== 1) throw new Error('vault has no single confirmed current coin');
     const coin = storedCoinSnapshot(rows[0]!);
     const snapshotDigest = vaultCoinSnapshotDigest(coin);
-    const observation = await sql<Array<{ participant_id: string }>>`
-      SELECT participant_id FROM vault_coin_observations
+    const observation = await sql<Array<{
+      participant_id: string;
+      confirmations: number;
+      observed_at: Date;
+    }>>`
+      SELECT participant_id, confirmations, observed_at FROM vault_coin_observations
       WHERE coin_id = ${coin.id}::uuid
         AND user_id = ${userId}::uuid
         AND participant_id = ${membership.participant_id}
@@ -241,6 +269,15 @@ export async function createStoredVaultProposal(
     `;
     if (observation.length !== 1) {
       throw new Error('verify the exact current coin against an independent chain source before proposing a spend');
+    }
+    if (
+      input.kind === 'recovery' &&
+      (
+        observation[0]!.confirmations <= confirmed.artifact.economics.recoveryDelayBlocks ||
+        observation[0]!.observed_at.getTime() < Date.now() - 2 * 60 * 1000
+      )
+    ) {
+      throw new Error('timelocked recovery needs a fresh, mature independent chain observation');
     }
     await sql`
       UPDATE vault_transaction_proposals
@@ -769,6 +806,167 @@ export async function finalizeStoredFinalSweep(input: {
   });
 }
 
+export async function recordRecoveryContribution(input: {
+  userId: string;
+  proposalId: string;
+  proposalDigest: string;
+  share: RecoveryShare;
+}): Promise<{ shareCount: number; requiredCount: number; finalizedTxid: string | null }> {
+  if (!/^[0-9a-f]{64}$/u.test(input.proposalDigest)) throw new Error('proposal digest is invalid');
+  const membership = await membershipForUser(input.userId);
+  const confirmed = await getConfirmedVaultArtifactForVault(membership.vault_id);
+  return transaction(async (sql) => {
+    const proposals = await sql<LockedProposalRow[]>`
+      SELECT id, vault_id, roster_digest, input_coin_id, kind, round_id,
+             actor_participant_id, proposal_digest, unsigned_txid,
+             psbt_base64, final_txid, status, expires_at
+      FROM vault_transaction_proposals
+      WHERE id = ${input.proposalId}::uuid AND vault_id = ${membership.vault_id}::uuid
+        AND status IN ('collecting', 'finalized') AND expires_at > now()
+      FOR UPDATE
+    `;
+    const proposal = proposals[0];
+    if (!proposal || proposal.kind !== 'recovery' || !proposal.actor_participant_id) {
+      throw new Error('recovery proposal is missing, expired, or unavailable');
+    }
+    if (
+      proposal.proposal_digest.toString('hex') !== input.proposalDigest ||
+      proposal.roster_digest.toString('hex') !== confirmed.digest
+    ) throw new Error('recovery proposal differs from the confirmed vault commitment');
+    const coins = await sql<StoredCoinRow[]>`
+      SELECT id, vault_id, roster_digest, kind, round_id, owner_participant_id,
+             txid, vout::text, value_sats::text, script_pubkey, status,
+             confirmed_height::text
+      FROM vault_coins
+      WHERE id = ${proposal.input_coin_id}::uuid AND vault_id = ${membership.vault_id}::uuid
+        AND status = 'current'
+      FOR UPDATE
+    `;
+    if (coins.length !== 1) throw new Error('recovery input is no longer the current vault coin');
+    const coin = storedCoinSnapshot(coins[0]!);
+    const validated = validateVaultCoin(confirmed.artifact, coin);
+    const rebuilt = buildVaultProposal({
+      artifact: confirmed.artifact,
+      coin,
+      kind: 'recovery',
+      actorParticipantId: proposal.actor_participant_id,
+      expiresAt: proposal.expires_at.toISOString(),
+    });
+    if (
+      rebuilt.digest !== input.proposalDigest || rebuilt.psbtBase64 !== proposal.psbt_base64 ||
+      rebuilt.unsignedTxid !== proposal.unsigned_txid.toString('hex')
+    ) throw new Error('stored recovery proposal does not reproduce from the current vault coin');
+    if (!rebuilt.requiredSignerIds.includes(membership.participant_id)) {
+      throw new Error('vanished or unrelated participant cannot contribute a recovery share');
+    }
+    const observation = await sql<Array<{ confirmations: number }>>`
+      SELECT confirmations FROM vault_coin_observations
+      WHERE coin_id = ${coin.id}::uuid AND user_id = ${input.userId}::uuid
+        AND participant_id = ${membership.participant_id}
+        AND snapshot_digest = ${Buffer.from(vaultCoinSnapshotDigest(coin), 'hex')}
+        AND observed_unspent = true
+        AND observed_at > now() - interval '2 minutes'
+    `;
+    if (
+      observation.length !== 1 ||
+      observation[0]!.confirmations <= confirmed.artifact.economics.recoveryDelayBlocks
+    ) throw new Error('recovery is not mature in this participant’s independently observed chain view');
+    if (input.share.participantId !== membership.participant_id) {
+      throw new Error('recovery share claims a different participant');
+    }
+    const authorization = validateRecoveryShare({
+      state: validated.state,
+      currentIds: validated.currentParticipantIds,
+      vanishedId: proposal.actor_participant_id,
+      psbtBase64: proposal.psbt_base64,
+      trustedInput: coin,
+      share: input.share,
+    });
+    const payload = {
+      round: input.share.round,
+      vanishedId: input.share.vanishedId,
+      participantId: input.share.participantId,
+      xonlyPubkey: input.share.xonlyPubkey,
+      leafHashHex: input.share.leafHashHex,
+      unsignedTxid: input.share.unsignedTxid,
+      signatureHex: input.share.signatureHex,
+    };
+    if (proposal.status === 'finalized') {
+      const existing = await sql<Array<{ payload_json: unknown }>>`
+        SELECT payload_json FROM vault_proposal_contributions
+        WHERE proposal_id = ${proposal.id}::uuid
+          AND participant_id = ${membership.participant_id}
+          AND kind = 'recovery_share'
+      `;
+      if (!sameRecoveryShare(existing[0]?.payload_json, payload)) {
+        throw new Error('recovery proposal is already finalized with different contribution data');
+      }
+      const counts = await sql<Array<{ shares: string }>>`
+        SELECT count(*)::text AS shares FROM vault_proposal_contributions
+        WHERE proposal_id = ${proposal.id}::uuid AND kind = 'recovery_share'
+      `;
+      return {
+        shareCount: Number(counts[0]?.shares || 0),
+        requiredCount: authorization.leaf.threshold,
+        finalizedTxid: proposal.final_txid?.toString('hex') || null,
+      };
+    }
+    const inserted = await sql<Array<{ participant_id: string }>>`
+      INSERT INTO vault_proposal_contributions (
+        proposal_id, vault_id, proposal_digest, user_id, participant_id,
+        kind, payload_json, payload_hash
+      ) VALUES (
+        ${proposal.id}::uuid, ${membership.vault_id}::uuid,
+        ${Buffer.from(input.proposalDigest, 'hex')}, ${input.userId}::uuid,
+        ${membership.participant_id}, 'recovery_share', ${sql.json(payload)},
+        ${Buffer.from(sha256Hex(JSON.stringify(payload)), 'hex')}
+      )
+      ON CONFLICT DO NOTHING RETURNING participant_id
+    `;
+    if (inserted.length !== 1) {
+      const existing = await sql<Array<{ payload_json: unknown }>>`
+        SELECT payload_json FROM vault_proposal_contributions
+        WHERE proposal_id = ${proposal.id}::uuid
+          AND participant_id = ${membership.participant_id}
+          AND kind = 'recovery_share'
+      `;
+      if (!sameRecoveryShare(existing[0]?.payload_json, payload)) {
+        throw new Error('participant already submitted a different recovery share');
+      }
+    }
+    const rows = await sql<Array<{ payload_json: unknown }>>`
+      SELECT payload_json FROM vault_proposal_contributions
+      WHERE proposal_id = ${proposal.id}::uuid AND kind = 'recovery_share'
+      ORDER BY participant_id
+    `;
+    let finalizedTxid: string | null = null;
+    if (rows.length === authorization.leaf.threshold) {
+      const aggregated = aggregateRecoveryShares({
+        state: validated.state,
+        currentIds: validated.currentParticipantIds,
+        vanishedId: proposal.actor_participant_id,
+        psbtBase64: proposal.psbt_base64,
+        trustedInput: coin,
+        shares: rows.map((item) => parseStoredRecoveryShare(item.payload_json)),
+      });
+      const updated = await sql<Array<{ id: string }>>`
+        UPDATE vault_transaction_proposals
+        SET status = 'finalized', finalized_tx_hex = ${aggregated.transactionHex},
+            final_txid = ${Buffer.from(aggregated.txid, 'hex')}, updated_at = now()
+        WHERE id = ${proposal.id}::uuid AND status = 'collecting'
+        RETURNING id
+      `;
+      if (updated.length !== 1) throw new Error('recovery proposal changed during aggregation');
+      finalizedTxid = aggregated.txid;
+    }
+    return {
+      shareCount: rows.length,
+      requiredCount: authorization.leaf.threshold,
+      finalizedTxid,
+    };
+  });
+}
+
 export async function getCoinObservationChallenge(input: {
   challengeId: string;
   userId: string;
@@ -996,6 +1194,44 @@ function contributionMaps(rows: Array<{
     target[publicKeyHex] = value;
   }
   return { pubnonces, partialSigs };
+}
+
+function parseStoredRecoveryShare(value: unknown): RecoveryShare {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('stored recovery share is not an object');
+  }
+  const row = value as Record<string, unknown>;
+  const round = String(row.round || '');
+  const vanishedId = String(row.vanishedId || '');
+  const participantId = String(row.participantId || '');
+  const xonlyPubkey = String(row.xonlyPubkey || '');
+  const leafHashHex = String(row.leafHashHex || '');
+  const unsignedTxid = String(row.unsignedTxid || '');
+  const signatureHex = String(row.signatureHex || '');
+  if (!['alicebobcarol', 'alicebob', 'alicecarol', 'bobcarol'].includes(round)) {
+    throw new Error('stored recovery share round is invalid');
+  }
+  if (!['alice', 'bob', 'carol'].includes(vanishedId) ||
+      !['alice', 'bob', 'carol'].includes(participantId)) {
+    throw new Error('stored recovery share participant is invalid');
+  }
+  if (!/^[0-9a-f]{64}$/u.test(xonlyPubkey) || !/^[0-9a-f]{64}$/u.test(leafHashHex) ||
+      !/^[0-9a-f]{64}$/u.test(unsignedTxid) || !/^[0-9a-f]{128}$/u.test(signatureHex)) {
+    throw new Error('stored recovery share cryptographic material is invalid');
+  }
+  return { round, vanishedId, participantId, xonlyPubkey, leafHashHex, unsignedTxid, signatureHex };
+}
+
+function sameRecoveryShare(value: unknown, expected: RecoveryShare): boolean {
+  try {
+    const actual = parseStoredRecoveryShare(value);
+    return actual.round === expected.round && actual.vanishedId === expected.vanishedId &&
+      actual.participantId === expected.participantId && actual.xonlyPubkey === expected.xonlyPubkey &&
+      actual.leafHashHex === expected.leafHashHex && actual.unsignedTxid === expected.unsignedTxid &&
+      actual.signatureHex === expected.signatureHex;
+  } catch {
+    return false;
+  }
 }
 
 function validatedRequiredSignerCount(
