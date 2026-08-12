@@ -4,9 +4,11 @@ import {
   AMOUNTS,
   DEFAULT_DEMO_SEED,
   DEMO_SEED,
+  NETWORK,
   PARTICIPANTS,
   RECOVERY_DELAY_BLOCKS,
 } from './config.js';
+import { BITCOIN_CORE_CHAIN, DEFAULT_BITCOIN_RPC_URL } from './network.js';
 import { auditSpecState } from './audit.js';
 import { runBip327KeyAggVectors, verifyVaultTransaction } from './consensus.js';
 import { runBip327ProtocolVectors } from './musig2-vectors.js';
@@ -426,8 +428,8 @@ async function fundingManifest() {
   const state = createConfiguredState();
   const roundOneIds = state.participants.map((participant) => participant.id);
   const roundOneVault = requireVault(state, roundOneIds);
-  printResult('signet funding manifest', {
-    network: 'signet',
+  printResult('mainnet funding manifest', {
+    network: NETWORK,
     fundingModel:
       'Build one funding transaction with Alice/Bob/Carol contributing 1 BTC each and exactly one 3 BTC output to the round-one vault. The solo-withdrawal ordering relies on that single vault UTXO.',
     participants: state.participants.map((participant) => ({
@@ -526,7 +528,7 @@ async function rpcImportWatchonly() {
   }
   const result = await importDescriptors(requests);
   printResult('Bitcoin Core importdescriptors', {
-    walletRpcUrl: process.env.BITCOIN_RPC_URL || 'http://127.0.0.1:38332',
+    walletRpcUrl: process.env.BITCOIN_RPC_URL || DEFAULT_BITCOIN_RPC_URL,
     imported: manifest.vaults.map((vault, index) => ({
       round: vault.round,
       address: vault.address,
@@ -1225,7 +1227,7 @@ async function psbtAcceptance() {
       {
         vout: [
           { n: 0, value: 0.5, scriptPubKey: {} },
-          { n: 1, value: 1.25, scriptPubKey: { address: 'tb1qfallback' } },
+          { n: 1, value: 1.25, scriptPubKey: { address: 'bc1qfallback' } },
         ],
       },
     ],
@@ -1460,14 +1462,14 @@ async function psbtAcceptance() {
   });
 }
 
-// Deterministic tpub fixture for dual-leaf tests: depth-0 testnet xpub whose
+// Deterministic xpub fixture for dual-leaf tests: depth-0 mainnet xpub whose
 // child 0/0 (policy leaf) and internal root (identification leaf) can be
 // derived exactly like a live Sigbash bip328Xpub. No network, no secrets.
-function syntheticTpubForTest(label: string): string {
+function syntheticXpubForTest(label: string): string {
   const rootKey = deterministicKeypair(DEMO_SEED, `${label}:xpub-root`);
   return base58CheckEncode(
     Buffer.concat([
-      Buffer.from('043587cf', 'hex'),
+      Buffer.from('0488b21e', 'hex'),
       Buffer.from([0]),
       Buffer.alloc(4),
       Buffer.alloc(4),
@@ -1646,7 +1648,7 @@ async function dualLeafAcceptance() {
   // Live override resolution: checkpoint-derived, xpub-only, and explicit
   // overrides must all produce the identical canonical dual-leaf vault, and
   // the checkpoint parser must be the single source for resume.
-  const xpub = syntheticTpubForTest(`dual-leaf-acceptance:alice:${round}`);
+  const xpub = syntheticXpubForTest(`dual-leaf-acceptance:alice:${round}`);
   const policyLeafKey = deriveXpubChildPubkey(xpub, [0, 0]).xonlyPubKeyHex;
   const identificationLeafKey = xpubRootXonly(xpub);
   const registration: LiveKeyRegistration = {
@@ -2189,7 +2191,7 @@ async function liveAcceptanceEvidence() {
   ];
 
   printResult('live acceptance evidence checklist', {
-    purpose: 'Run these commands with real signet txids/outpoints to produce evidence for every acceptance item in spec.md section 8.',
+    purpose: 'Run these commands with real mainnet txids/outpoints to produce evidence for the preserved round-based acceptance items in spec.md section 8.',
     strict,
     assumptions: {
       firstLeaver,
@@ -3341,7 +3343,7 @@ async function sigbashLiveSetup() {
     });
     const created = await createKeyWithAutoIndex(client, {
       policy: toPoetPolicy(sdk, policy),
-      network: 'signet',
+      network: NETWORK,
       require2FA: false,
       verbose: true,
     });
@@ -3604,7 +3606,7 @@ function requirePolicy(state: VaultState, currentIds: string[], leaverId: string
 function impossibleBootstrapPolicy(participantId: string) {
   return {
     id: `bootstrap:${participantId}`,
-    network: 'signet',
+    network: NETWORK,
     logic: 'AND',
     conditions: [
       { type: 'TX_OUTPUT_COUNT', operator: 'EQ', value: 0 },
@@ -4004,7 +4006,7 @@ function buildSignedLocalWithdrawalRun(
     mode: startingOutpoint ? 'real-outpoint-local-signing' : 'placeholder-outpoint-local-signing',
     note: startingOutpoint
       ? 'Uses the provided round-one vault outpoint. Broadcast still requires live Sigbash signing for the production solo path.'
-      : 'Uses a placeholder funding txid for local extraction; rerun with --txid/--vout from a real funded signet vault outpoint for broadcast-oriented transaction assembly.',
+      : 'Uses a placeholder funding txid for local extraction; rerun with --txid/--vout from a deliberately tiny real funded mainnet vault outpoint for broadcast-oriented transaction assembly.',
     startingOutpoint: firstInput,
     stages: [
       signedRunStage({
@@ -4166,7 +4168,7 @@ function sigbashSignedNextCommands({
 
 function watchOnlyManifest(state: VaultState) {
   return {
-    network: 'signet',
+    network: NETWORK,
     purpose:
       'Import these addr() descriptors into a Bitcoin Core wallet to watch vault funding and revault outputs. They do not grant spending authority.',
     vaults: [...state.vaults.values()].map((vault) => ({
@@ -4314,15 +4316,15 @@ async function checkBitcoinRpc() {
   try {
     const info = await getBlockchainInfo();
     return {
-      name: 'Bitcoin Core RPC is reachable on signet',
-      ok: info.chain === 'signet',
+      name: 'Bitcoin Core RPC is reachable on mainnet',
+      ok: info.chain === BITCOIN_CORE_CHAIN,
       chain: info.chain,
       blocks: info.blocks,
       headers: info.headers,
     };
   } catch (error) {
     return {
-      name: 'Bitcoin Core RPC is reachable on signet',
+      name: 'Bitcoin Core RPC is reachable on mainnet',
       ok: false,
       error: errorMessage(error),
     };

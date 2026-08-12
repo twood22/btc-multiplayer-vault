@@ -1,6 +1,7 @@
 import { createECDH, createHash, createHmac } from 'node:crypto';
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
+import { BITCOIN_NETWORK } from './network.js';
 import type { Hex, KeyAggResult, KeyAggregation, Keypair, TapLeaf } from './types.js';
 
 bitcoin.initEccLib(ecc);
@@ -55,7 +56,7 @@ export function deterministicKeypair(seed: string, label: string): Keypair {
 export function taprootAddress(xonlyPubKeyHex: Hex): string {
   const { address } = bitcoin.payments.p2tr({
     internalPubkey: Buffer.from(xonlyPubKeyHex, 'hex'),
-    network: bitcoin.networks.testnet,
+    network: BITCOIN_NETWORK,
   });
   if (!address) throw new Error('failed to derive taproot address');
   return address;
@@ -216,7 +217,7 @@ export function tapLeafHash(script: Buffer, leafVersion = 0xc0): Buffer {
 }
 
 // Master fingerprint for BIP-371 derivation fields: prefer the BIP-380 key
-// origin prefix ([fingerprint]tpub...); otherwise, for a depth-0 xpub, the
+// origin prefix ([fingerprint]xpub...); otherwise, for a depth-0 xpub, the
 // fingerprint is hash160 of its own public key.
 export function xpubMasterFingerprint(xpubBase58: string): Buffer {
   const origin = xpubBase58.match(/^\[([0-9a-fA-F]{8})/);
@@ -238,7 +239,7 @@ export function deriveXpubChildPubkey(
   xpubBase58: string,
   path: number[] = [0, 0],
 ): { publicKeyHex: Hex; xonlyPubKeyHex: Hex } {
-  // Sigbash returns the xpub with a BIP-380 key-origin prefix: [fingerprint]tpub...
+  // Sigbash returns the xpub with a BIP-380 key-origin prefix: [fingerprint]xpub...
   const stripped = xpubBase58.replace(/^\[[0-9a-fA-F/h']*\]/, '');
   const data = base58CheckDecode(stripped);
   if (data.length !== 78) throw new Error('invalid extended public key length');
@@ -347,7 +348,7 @@ export function buildVaultTaproot({
     // bitcoinjs' Taptree is the same recursive leaf/[left,right] shape our
     // builder produces, but it is typed as a branded tuple.
     scriptTree: scriptTree as P2trScriptTree,
-    network: bitcoin.networks.testnet,
+    network: BITCOIN_NETWORK,
   });
   if (!payment.address || !payment.output || !payment.hash) {
     throw new Error('failed to build vault taproot payment');
@@ -358,7 +359,7 @@ export function buildVaultTaproot({
       internalPubkey: Buffer.from(internalXonlyPubkey, 'hex'),
       scriptTree: scriptTree as P2trScriptTree,
       redeem: { output: Buffer.from(leaf.scriptHex, 'hex') },
-      network: bitcoin.networks.testnet,
+      network: BITCOIN_NETWORK,
     });
     const controlBlock = leafPayment.witness?.at(-1);
     if (!controlBlock) throw new Error('failed to derive tapleaf control block');

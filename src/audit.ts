@@ -1,4 +1,4 @@
-import { AMOUNTS, PARTICIPANTS, POLICY_FLOORS, RECOVERY_DELAY_BLOCKS, SOLO_FEE_BUDGET_SATS } from './config.js';
+import { AMOUNTS, NETWORK, PARTICIPANTS, POLICY_FLOORS, RECOVERY_DELAY_BLOCKS, SOLO_FEE_BUDGET_SATS } from './config.js';
 import { policyId, roundId, verifyNoSigbashInKeyPath } from './vault.js';
 import type { SoloPolicy, VaultState } from './types.js';
 
@@ -28,7 +28,8 @@ export function auditSpecState(state: VaultState): AuditReport {
     check('second withdrawal amount is 1.025 BTC', AMOUNTS.secondWithdrawal === 102_500_000),
     check('configured payout schedule sums to 3 BTC', payoutScheduleTotal() === 300_000_000),
     check('precomputed vault tree has 1 round-one and 3 round-two vaults', state.vaults.size === 4),
-    check('all vault addresses are signet taproot addresses', allVaultAddressesAreSignetTaproot(state)),
+    check('all payout and vault addresses are mainnet taproot addresses', allAddressesAreMainnetTaproot(state)),
+    check('all solo policies and destination conditions declare mainnet', allPoliciesAreMainnet(state)),
     check('all vault scriptPubKeys are v1 P2TR outputs', allVaultScriptsAreP2tr(state)),
     check('all cooperative key-paths exclude Sigbash keys', allKeyPathsExcludeSigbash(state)),
     check('all cooperative key-paths use standard BIP-327 KeyAgg', allKeyPathsUseBip327(state)),
@@ -66,8 +67,21 @@ function payoutScheduleTotal(): number {
   return AMOUNTS.firstWithdrawal + AMOUNTS.secondWithdrawal + AMOUNTS.secondWithdrawal;
 }
 
-function allVaultAddressesAreSignetTaproot(state: VaultState): boolean {
-  return [...state.vaults.values()].every((vault) => vault.address.startsWith('tb1p'));
+function allAddressesAreMainnetTaproot(state: VaultState): boolean {
+  return (
+    state.participants.every((participant) => participant.payoutAddress.startsWith('bc1p')) &&
+    [...state.vaults.values()].every((vault) => vault.address.startsWith('bc1p'))
+  );
+}
+
+function allPoliciesAreMainnet(state: VaultState): boolean {
+  return [...state.policies.values()].every(
+    (policy) =>
+      policy.network === NETWORK &&
+      policy.conditions
+        .filter((condition) => condition.type === 'OUTPUT_DEST_IS_IN_SETS')
+        .every((condition) => condition.network === NETWORK),
+  );
 }
 
 function allVaultScriptsAreP2tr(state: VaultState): boolean {

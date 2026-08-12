@@ -1,5 +1,6 @@
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
+import { BITCOIN_NETWORK } from './network.js';
 import { AMOUNTS } from './config.js';
 import { verifyVaultTransaction, type ConsensusVerification } from './consensus.js';
 import { keyAgg, keySort, taggedHash } from './crypto.js';
@@ -156,7 +157,7 @@ export function authorizeCooperativeContext({
 
   // Outpoint and value first (they give the sharpest diagnostic), then the
   // byte-for-byte comparison that catches everything else.
-  const psbt = bitcoin.Psbt.fromBase64(context.psbtBase64, { network: bitcoin.networks.testnet });
+  const psbt = bitcoin.Psbt.fromBase64(context.psbtBase64, { network: BITCOIN_NETWORK });
   assertTrustedInputMatchesPsbt('cooperative exit PSBT', psbt, trustedInput);
   const rebuilt = buildCooperativeExitPsbt({
     state,
@@ -248,7 +249,7 @@ export function ceremonyStart({
     vout: trustedInput.vout,
     valueSats: trustedInput.valueSats,
   });
-  const psbt = bitcoin.Psbt.fromBase64(built.psbtBase64, { network: bitcoin.networks.testnet });
+  const psbt = bitcoin.Psbt.fromBase64(built.psbtBase64, { network: BITCOIN_NETWORK });
   const context: CeremonyContext = {
     round: vault.id,
     aggregateXonly: vault.keyPath.aggregateXonlyPubkey,
@@ -403,7 +404,7 @@ export function ceremonyAggregate({
     throw new Error('aggregated MuSig2 signature is invalid for the taproot output key');
   }
 
-  const psbt = bitcoin.Psbt.fromBase64(context.psbtBase64, { network: bitcoin.networks.testnet });
+  const psbt = bitcoin.Psbt.fromBase64(context.psbtBase64, { network: BITCOIN_NETWORK });
   psbt.updateInput(0, { tapKeySig: signature });
   psbt.finalizeInput(0);
   const transaction = psbt.extractTransaction();

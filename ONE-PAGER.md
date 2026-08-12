@@ -2,7 +2,7 @@
 
 ## What it is
 
-A 3-player Bitcoin savings game on signet. Alice, Bob, and Carol each lock
+A 3-player Bitcoin savings game whose product code is pinned to mainnet. Alice, Bob, and Carol each lock
 1 BTC into a shared vault that rewards patience: anyone can leave at any
 time, but the **first** to withdraw takes a haircut (**0.95 BTC**), the
 **second** gets a bonus (**1.025 BTC**), and the **last** sweeps the remainder
@@ -79,17 +79,19 @@ is checked by the audit suite.
 **Assumptions and known trade-offs:**
 
 1. **The recovery leaf is a collusion path.** After `T` blocks of vault
-   inactivity (default 6 — deliberately short for the demo), any N−1 players
+   inactivity (the inherited default 6 is offline-test-only), any N−1 players
    can jointly take the pot; in a 2-player round that is one person. This is
    the price of the "no one can freeze the vault" guarantee. Real deployments
    set `T` much higher and accept the trade-off knowingly.
-2. **The demo signs cooperatively on one machine.** The aggregate key is
-   standard, but production requires an interactive MuSig2 ceremony so no
-   single machine ever holds all personal keys.
-3. **Demo key custody.** All keys derive from one seed; live-mode commands
-   refuse the public default seed, but real participants would each generate
-   keys on their own devices, with their own Sigbash credentials.
+2. **Cooperative signing is distributed.** The production ceremony implements
+   interactive BIP-327 MuSig2 with one participant secret per device; the
+   single-process signer remains an offline acceptance harness only.
+3. **Participant custody is distributed.** Each participant secret is generated
+   and passkey-encrypted in that participant's browser. The checked-in seed is
+   only an offline fixture and live commands refuse it.
 4. **Fee-burn bound.** A malicious leaver can overpay fees by at most 10,000
    sats per withdrawal — bounded by policy, not goodwill.
-5. **Signet only.** Amounts, fees, and network are pinned; mainnet requires
-   items 1–3 resolved first.
+5. **Mainnet is not the same as mainnet-ready.** The code is mainnet-only, but
+   live Sigbash mainnet signing, Core acceptance, a reviewed recovery delay,
+   roster unanimity, real passkeys/Postgres, and deliberately tiny funding are
+   still hard gates.

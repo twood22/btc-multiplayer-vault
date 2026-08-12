@@ -141,6 +141,7 @@ export interface VaultRound {
 }
 
 export type ComparisonOperator = 'EQ' | 'NEQ' | 'LT' | 'LTE' | 'GT' | 'GTE';
+export type BitcoinNetworkName = 'mainnet';
 
 export interface IndexSelector {
   type: 'INDEX';
@@ -158,7 +159,7 @@ export type PolicyCondition =
       type: 'OUTPUT_DEST_IS_IN_SETS';
       selector: IndexSelector;
       addresses: string[];
-      network: string;
+      network: BitcoinNetworkName;
     }
   | { type: 'TX_OUTPUT_COUNT'; operator: ComparisonOperator; value: number }
   | { type: 'TX_INPUT_COUNT'; operator: ComparisonOperator; value: number }
@@ -169,7 +170,7 @@ export type PolicyCondition =
       descriptor_template: string;
       /**
        * Local policy model only: the round-scoped leaf key the descriptor
-       * resolves to (proven on live signet to satisfy the REQKEY clause).
+       * resolves to (previous live service testing proved the REQKEY shape).
        * Stripped before the policy is sent to Sigbash.
        */
       local_key_identifier: Hex;
@@ -180,7 +181,7 @@ export interface SoloPolicy {
   id: string;
   leaverId: string;
   roundIds: string[];
-  network: string;
+  network: BitcoinNetworkName;
   logic: 'AND';
   conditions: PolicyCondition[];
   /** Attached by live-mode commands before contacting Sigbash. */

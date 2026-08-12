@@ -453,7 +453,7 @@ export function soloPolicy({
       { type: 'TX_OUTPUT_COUNT', operator: 'EQ', value: 2 },
       { type: 'TX_INPUT_COUNT', operator: 'EQ', value: 1 },
       {
-        // Descriptor-mode REQKEY: proven on live Sigbash signet to satisfy the
+        // Descriptor-mode REQKEY: previous live service testing proved this satisfies the
         // "signer key in required signer universe" clause when the tapscript
         // leaf contains the xpub's child 0/0 key. The local model checks the
         // equivalent round-scoped leaf key via local_key_identifier, which is

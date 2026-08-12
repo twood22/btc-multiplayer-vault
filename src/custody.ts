@@ -1,5 +1,6 @@
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
+import { BITCOIN_NETWORK } from './network.js';
 import { AMOUNTS, PARTICIPANTS, RECOVERY_DELAY_BLOCKS } from './config.js';
 import { verifyVaultTransaction, type ConsensusVerification } from './consensus.js';
 import { taggedHash, tapLeafHash, taprootAddress } from './crypto.js';
@@ -479,7 +480,7 @@ export function assertOutputsMatch(
   }
   expectedOutputs.forEach((expected, index) => {
     const output = tx.outs[index]!;
-    const expectedScript = bitcoin.address.toOutputScript(expected.address, bitcoin.networks.testnet);
+    const expectedScript = bitcoin.address.toOutputScript(expected.address, BITCOIN_NETWORK);
     if (!Buffer.from(output.script).equals(Buffer.from(expectedScript))) {
       throw new Error(`${label} output ${index} does not pay the expected address ${expected.address}`);
     }
@@ -552,7 +553,7 @@ export function authorizeRecoveryPsbt({
     throw new Error(`the ${round} vault script does not commit to its own key path and tap tree`);
   }
 
-  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: bitcoin.networks.testnet });
+  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: BITCOIN_NETWORK });
   assertTrustedInputMatchesPsbt('recovery PSBT', psbt, trustedInput);
   const rebuilt = buildRecoveryPsbt({
     state,
@@ -829,7 +830,7 @@ export function aggregateRecoveryShares({
     Buffer.from(leaf.scriptHex, 'hex'),
     Buffer.from(leaf.controlBlockHex, 'hex'),
   ];
-  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: bitcoin.networks.testnet });
+  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: BITCOIN_NETWORK });
   psbt.finalizeInput(0, () => ({
     finalScriptSig: undefined,
     finalScriptWitness: witnessStackToScriptWitness(witnessStack),
@@ -940,7 +941,7 @@ export function authorizeFinalSweep({
     throw new Error('final sweep --fee-sats must be a positive integer');
   }
   const payoutScriptHex = Buffer.from(
-    bitcoin.address.toOutputScript(participant.payoutAddress, bitcoin.networks.testnet),
+    bitcoin.address.toOutputScript(participant.payoutAddress, BITCOIN_NETWORK),
   ).toString('hex');
   if (trustedInput.scriptPubKeyHex !== payoutScriptHex) {
     throw new Error(
@@ -954,7 +955,7 @@ export function authorizeFinalSweep({
   const sweepSats = trustedInput.valueSats - feeSats;
   if (sweepSats <= 0) throw new Error(`final sweep value ${sweepSats} sats is not positive after fee`);
 
-  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: bitcoin.networks.testnet });
+  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: BITCOIN_NETWORK });
   assertTrustedInputMatchesPsbt('final sweep PSBT', psbt, trustedInput);
   const rebuilt = buildFinalSweepPsbt({
     state,

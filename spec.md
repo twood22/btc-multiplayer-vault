@@ -1,5 +1,12 @@
 # Build Spec — Bitcoin Multiplayer Savings Vault (Demo)
 
+> **Historical input, not the current release specification.** The user later
+> explicitly required the real product to be mainnet-only. Preserve the
+> round-based withdrawal game and trust boundaries below, but the signet-only
+> directions are superseded. Current release gates live in
+> `PASSKEY-PRODUCT.md`; no deployment or funding is allowed until live Sigbash
+> mainnet signing is proven.
+
 **Audience:** an autonomous coding agent (Claude Code / OpenAI Codex).
 **Goal:** build a working **demo** of a multi-party Bitcoin savings vault with incentive-based withdrawals, using the Sigbash SDK as the policy-enforcing co-signer.
 **Scope:** this is a vibe-coded demo. Keep it simple. Don't build abstraction layers, plugin systems, or upgrade paths. Make it work end-to-end on **signet** for **3 participants** and stop there. You pick the language, libraries, and structure.

@@ -86,9 +86,10 @@ with the existing vault core.
 3. Prove an actual live Sigbash mainnet solo signature and hostile-PSBT rejection
    against the exact SDK/server contract. Mainnet access is external and is not
    currently proven.
-4. Convert all Bitcoin network configuration, address parsing, policy network
-   fields, RPC/explorer calls, fee assumptions, and acceptance checks from
-   signet to mainnet. A UI label is not a network conversion.
+4. Validate the now-mainnet-only address, PSBT, policy, RPC, and explorer paths
+   against a production-version Bitcoin Core node, including deliberately tiny
+   amounts, dust/relay policy, fees, and the chosen recovery delay. The offline
+   conversion is complete; real-node acceptance is not.
 5. Add the three-person roster ceremony: everyone independently confirms the
    same personal keys, payout keys, Sigbash leaves, policies, vault tree, and
    funding address before the address can be copied or funded.

@@ -72,7 +72,8 @@
     "ceremony-partial": "tsx src/cli.ts ceremony-partial",
     "ceremony-aggregate": "tsx src/cli.ts ceremony-aggregate",
     "vault-keygen": "tsx src/cli.ts vault-keygen",
-    "verify-roster": "tsx src/cli.ts verify-roster"
+    "verify-roster": "tsx src/cli.ts verify-roster",
+    "network-acceptance": "tsx src/network-acceptance.ts"
   },
   "engines": {
     "node": ">=22"

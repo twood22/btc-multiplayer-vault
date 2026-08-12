@@ -5,8 +5,9 @@ import {
   esploraGetTxOut,
   esploraSendRawTransaction,
 } from './esplora.js';
+import { assertMainnetChain, DEFAULT_BITCOIN_RPC_URL } from './network.js';
 
-// Thin JSON-RPC client for Bitcoin Core on signet. RPC results are inherently
+// Thin JSON-RPC client for Bitcoin Core on mainnet. RPC results are inherently
 // untyped JSON; the narrow result shapes the CLI relies on are declared here.
 // When BITCOIN_BACKEND=esplora, chain reads/broadcast are served by a public
 // Esplora API instead, so no local node is required.
@@ -70,14 +71,47 @@ interface RpcEnvelope {
   error?: { code?: number; message?: string } | null;
 }
 
-export async function bitcoinRpc<T = unknown>(method: string, params: unknown[] = []): Promise<T> {
-  const url = process.env.BITCOIN_RPC_URL || 'http://127.0.0.1:38332';
+function rpcConfig(): { url: string; headers: Record<string, string> } {
+  const url = process.env.BITCOIN_RPC_URL || DEFAULT_BITCOIN_RPC_URL;
   const username = process.env.BITCOIN_RPC_USER || process.env.BITCOIN_RPC_USERNAME;
   const password = process.env.BITCOIN_RPC_PASSWORD;
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (username || password) {
     headers.authorization = `Basic ${Buffer.from(`${username || ''}:${password || ''}`).toString('base64')}`;
   }
+  return { url, headers };
+}
+
+let validatedRpcUrl = '';
+let rpcValidation: Promise<void> | undefined;
+
+async function assertMainnetRpc(url: string, headers: Record<string, string>): Promise<void> {
+  if (validatedRpcUrl !== url) {
+    validatedRpcUrl = url;
+    rpcValidation = (async () => {
+      const info = await rawBitcoinRpc<{ chain: string }>('getblockchaininfo', [], url, headers);
+      assertMainnetChain(info.chain);
+    })();
+  }
+  try {
+    await rpcValidation;
+  } catch (error) {
+    // A transient connection failure must not poison this process forever.
+    // Keep the operation fail-closed, but make the next call revalidate.
+    if (validatedRpcUrl === url) {
+      validatedRpcUrl = '';
+      rpcValidation = undefined;
+    }
+    throw error;
+  }
+}
+
+async function rawBitcoinRpc<T>(
+  method: string,
+  params: unknown[],
+  url: string,
+  headers: Record<string, string>,
+): Promise<T> {
 
   let response: Response;
   try {
@@ -93,7 +127,7 @@ export async function bitcoinRpc<T = unknown>(method: string, params: unknown[] 
     });
   } catch (error) {
     throw new Error(
-      `Bitcoin RPC ${method} could not reach ${url}. Start Bitcoin Core on signet or set BITCOIN_RPC_URL/BITCOIN_RPC_USER/BITCOIN_RPC_PASSWORD. ${(error as Error).message}`,
+      `Bitcoin RPC ${method} could not reach ${url}. Start Bitcoin Core on mainnet or set BITCOIN_RPC_URL/BITCOIN_RPC_USER/BITCOIN_RPC_PASSWORD. ${(error as Error).message}`,
     );
   }
   const body = (await response.json()) as RpcEnvelope;
@@ -105,14 +139,23 @@ export async function bitcoinRpc<T = unknown>(method: string, params: unknown[] 
   return body.result as T;
 }
 
+export async function bitcoinRpc<T = unknown>(method: string, params: unknown[] = []): Promise<T> {
+  const { url, headers } = rpcConfig();
+  if (method !== 'getblockchaininfo') await assertMainnetRpc(url, headers);
+  return rawBitcoinRpc<T>(method, params, url, headers);
+}
+
 export async function getTxOut(txid: string, vout: number): Promise<RpcTxOut | null> {
   if (esploraEnabled()) return esploraGetTxOut(txid, vout);
   return bitcoinRpc<RpcTxOut | null>('gettxout', [txid, vout, true]);
 }
 
 export async function getBlockchainInfo(): Promise<{ chain: string; blocks: number; headers: number }> {
-  if (esploraEnabled()) return esploraGetBlockchainInfo();
-  return bitcoinRpc('getblockchaininfo');
+  const info = esploraEnabled()
+    ? await esploraGetBlockchainInfo()
+    : await bitcoinRpc<{ chain: string; blocks: number; headers: number }>('getblockchaininfo');
+  assertMainnetChain(info.chain);
+  return info;
 }
 
 export async function getDescriptorInfo(descriptor: string): Promise<{ descriptor: string; checksum: string }> {

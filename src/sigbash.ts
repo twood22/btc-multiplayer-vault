@@ -1,4 +1,5 @@
 import { assertNonDefaultSeed } from './config.js';
+import { BITCOIN_NETWORK_NAME } from './network.js';
 import type { PolicyCondition, PolicyNode, PolicyTx, SoloPolicy } from './types.js';
 
 // The live SDK is imported dynamically (it needs WASM + credentials), so its
@@ -223,7 +224,7 @@ class LiveSigbashAdapter implements SigbashAdapter {
     return this.client.verifyPSBT({
       psbtBase64: tx.psbtBase64,
       kmcJSON,
-      network: 'signet',
+      network: BITCOIN_NETWORK_NAME,
     });
   }
 
@@ -242,7 +243,7 @@ class LiveSigbashAdapter implements SigbashAdapter {
       keyId: policy.keyId,
       psbtBase64: tx.psbtBase64,
       kmcJSON,
-      network: 'signet',
+      network: BITCOIN_NETWORK_NAME,
     });
   }
 }

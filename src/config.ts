@@ -1,6 +1,7 @@
 import { asSats, type Sats } from './types.js';
+import { BITCOIN_NETWORK_NAME } from './network.js';
 
-export const NETWORK = 'signet';
+export const NETWORK = BITCOIN_NETWORK_NAME;
 
 export const SATS_PER_BTC = 100_000_000;
 
@@ -17,11 +18,11 @@ export const PARTICIPANTS: ParticipantConfig[] = [
 
 // Per-transaction fee budget enforced by the Sigbash policy floors below. A
 // leaver chooses the actual fee, but the policy guarantees the leftover can be
-// short of its ideal value by at most this many sats. Signet solo withdrawals
-// are ~150 vbytes, so 10k sats is a generous ceiling with a tight burn bound.
+// short of its ideal value by at most this many sats.
 export const SOLO_FEE_BUDGET_SATS: Sats = asSats(10_000);
 
-// Amounts are overridable so a live signet run can use faucet-sized deposits.
+// Amounts remain configurable so a deliberately tiny mainnet run can use the
+// same round-based payout schedule without changing transaction semantics.
 // Set VAULT_DEPOSIT_SATS; the schedule scales with haircut = bonus = 5% of the
 // deposit (first = deposit - haircut, second = deposit + haircut/2), which
 // keeps first + second + second == 3 * deposit. The defaults are the spec's
@@ -60,12 +61,12 @@ export const POLICY_FLOORS = {
   ),
 } satisfies Record<string, Sats>;
 
-// Short on purpose so the signet demo can exercise the recovery path. Note the
-// trust consequence documented in the README: after this many blocks of vault
-// inactivity, N-1 of the current participants can co-sign the recovery leaf.
+// The default remains the original prototype value for reproducible offline
+// acceptance only. Mainnet deployment must explicitly choose and review a
+// production delay before the release gate can pass.
 export const RECOVERY_DELAY_BLOCKS = Number(process.env.RECOVERY_DELAY_BLOCKS || 6);
 
-export const DEFAULT_DEMO_SEED = 'btc-multiplayer-vault-signet-demo';
+export const DEFAULT_DEMO_SEED = 'btc-multiplayer-vault-public-test-fixture';
 
 export const DEMO_SEED = process.env.VAULT_DEMO_SEED || DEFAULT_DEMO_SEED;
 

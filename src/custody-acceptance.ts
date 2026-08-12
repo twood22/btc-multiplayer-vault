@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AMOUNTS, PARTICIPANTS, RECOVERY_DELAY_BLOCKS } from './config.js';
+import { BITCOIN_NETWORK } from './network.js';
 import { verifyVaultTransaction } from './consensus.js';
 import { deterministicKeypair, tapLeafHash } from './crypto.js';
 import { loadAndBurnSecnonce, saveSecnonce } from './nonce-store.js';
@@ -793,7 +794,7 @@ function pubkeyOf(state: VaultState, id: string): Hex {
 }
 
 function payoutScriptHex(address: string): Hex {
-  return Buffer.from(bitcoin.address.toOutputScript(address, bitcoin.networks.testnet)).toString('hex');
+  return Buffer.from(bitcoin.address.toOutputScript(address, BITCOIN_NETWORK)).toString('hex');
 }
 
 function pairPotSats(): number {
@@ -815,7 +816,7 @@ function hostilePsbt(
   trustedInput: TrustedVaultInput,
   outputs: Array<{ address: string; valueSats: number }>,
 ): bitcoin.Psbt {
-  const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
+  const psbt = new bitcoin.Psbt({ network: BITCOIN_NETWORK });
   psbt.addInput({
     hash: trustedInput.txid,
     index: trustedInput.vout,
@@ -841,7 +842,7 @@ function hostileRecoveryPsbt(
 ): string {
   const leaf = vault.tapscriptLeaves.find((item) => item.type === 'timelocked-recovery');
   if (leaf?.type !== 'timelocked-recovery') throw new Error('no recovery leaf');
-  const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
+  const psbt = new bitcoin.Psbt({ network: BITCOIN_NETWORK });
   psbt.setVersion(2);
   psbt.addInput({
     hash: trustedInput.txid,
@@ -902,7 +903,7 @@ function contextWithPsbt(
 
 /** The same transaction, but already carrying a (bogus) key-path signature. */
 function presignedPsbt(psbtBase64: string): bitcoin.Psbt {
-  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: bitcoin.networks.testnet });
+  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: BITCOIN_NETWORK });
   psbt.updateInput(0, { tapKeySig: Buffer.alloc(64, 7) });
   return psbt;
 }
@@ -914,7 +915,7 @@ function signRecoveryLeaf(
   trustedInput: TrustedVaultInput,
   leafHash: Buffer,
 ): Hex {
-  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: bitcoin.networks.testnet });
+  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: BITCOIN_NETWORK });
   const message = Buffer.from(
     unsignedTx(psbt).hashForWitnessV1(
       0,

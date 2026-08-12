@@ -1,5 +1,6 @@
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
+import { BITCOIN_NETWORK } from './network.js';
 import { AMOUNTS, RECOVERY_DELAY_BLOCKS } from './config.js';
 import { verifyVaultTransaction, type ConsensusVerification } from './consensus.js';
 import { keyAggSecret, taggedHashHex, tapLeafHash, xpubMasterFingerprint } from './crypto.js';
@@ -65,7 +66,7 @@ export function buildFundingPsbt({
   }
   const feeShare = Math.floor(feeSats / participantIds.length);
   const feeRemainder = feeSats - feeShare * participantIds.length;
-  const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
+  const psbt = new bitcoin.Psbt({ network: BITCOIN_NETWORK });
   const normalizedInputs = participantIds.map((participantId, index) => {
     const input = byParticipant.get(participantId)!;
     const valueSats = Number(input.valueSats);
@@ -237,7 +238,7 @@ export function buildIdentificationLeafMisusePsbt(params: SoloPsbtParams): {
   identificationLeafScriptHex: Hex;
 } {
   const context = soloWithdrawalContext(params);
-  const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
+  const psbt = new bitcoin.Psbt({ network: BITCOIN_NETWORK });
   psbt.addInput({
     hash: context.txid,
     index: context.vout,
@@ -373,7 +374,7 @@ function buildSoloWithdrawalPsbtFromOutputs({
   if (outputTotal >= valueSats) {
     throw new Error(`solo withdrawal outputs ${outputTotal} sats leave no fee from ${valueSats} sats input`);
   }
-  const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
+  const psbt = new bitcoin.Psbt({ network: BITCOIN_NETWORK });
   psbt.addInput({
     hash: txid,
     index: vout,
@@ -463,7 +464,7 @@ export function signSoloWithdrawalPsbt({
   const participant = participantById(state, leaverId);
   const { policyLeaf: leaf, identificationLeaf } = soloLeavesOf(vault, leaverId);
 
-  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: bitcoin.networks.testnet });
+  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: BITCOIN_NETWORK });
   const input = psbt.data.inputs[0];
   const psbtLeaf = input?.tapLeafScript?.find(
     (item) => Buffer.from(item.script).toString('hex') === leaf.scriptHex,
@@ -560,7 +561,7 @@ export function authorizeSoloSigningArtifacts(
     throw new Error('signer returned no artifacts to authorize');
   }
 
-  const originalPsbt = bitcoin.Psbt.fromBase64(originalPsbtBase64, { network: bitcoin.networks.testnet });
+  const originalPsbt = bitcoin.Psbt.fromBase64(originalPsbtBase64, { network: BITCOIN_NETWORK });
   const originalTx = unsignedTx(originalPsbt);
   if (originalTx.ins.length !== 1) {
     throw new Error(`solo withdrawal PSBT must have exactly 1 input, got ${originalTx.ins.length}`);
@@ -580,7 +581,7 @@ export function authorizeSoloSigningArtifacts(
   let partialSignatureCount = 0;
 
   if (signedPsbtBase64) {
-    const signedPsbt = bitcoin.Psbt.fromBase64(signedPsbtBase64, { network: bitcoin.networks.testnet });
+    const signedPsbt = bitcoin.Psbt.fromBase64(signedPsbtBase64, { network: BITCOIN_NETWORK });
     assertSameUnsignedTransaction('signed PSBT', originalTx, unsignedTx(signedPsbt));
     const input = signedPsbt.data.inputs[0];
     if (!input?.witnessUtxo) throw new Error('signed PSBT dropped the vault witnessUtxo');
@@ -701,7 +702,7 @@ export function buildSoloAuthorizationTamperFixtures({
   witness[witness.length - 2] = Buffer.from(identificationLeaf.scriptHex, 'hex');
   witness[witness.length - 1] = Buffer.from(identificationLeaf.controlBlockHex, 'hex');
 
-  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: bitcoin.networks.testnet });
+  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: BITCOIN_NETWORK });
   psbt.updateInput(0, {
     tapScriptSig: [
       {
@@ -747,7 +748,7 @@ export function buildCooperativeExitPsbt({
   const refundSats = Math.floor((valueSats - feeSats) / current.length);
   if (refundSats <= 0) throw new Error('cooperative refund is not positive after fee');
 
-  const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
+  const psbt = new bitcoin.Psbt({ network: BITCOIN_NETWORK });
   psbt.addInput({
     hash: txid,
     index: vout,
@@ -797,7 +798,7 @@ export function signCooperativeExitPsbt({
     throw new Error('cooperative key path includes Sigbash keys');
   }
 
-  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: bitcoin.networks.testnet });
+  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: BITCOIN_NETWORK });
   const input = psbt.data.inputs[0];
   if (!input?.witnessUtxo) throw new Error('cooperative PSBT input 0 is missing witnessUtxo');
   if (Buffer.from(input.tapInternalKey || []).toString('hex') !== vault.keyPath.aggregateXonlyPubkey) {
@@ -861,7 +862,7 @@ export function buildRecoveryPsbt({
     throw new Error(`recovery outputs ${outputTotal} sats exceed input ${valueSats} sats`);
   }
 
-  const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
+  const psbt = new bitcoin.Psbt({ network: BITCOIN_NETWORK });
   psbt.setVersion(2);
   psbt.addInput({
     hash: txid,
@@ -940,12 +941,12 @@ export function buildFinalSweepPsbt({
     throw new Error(`final sweep value ${sweepValue} sats is not positive after fee`);
   }
 
-  const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
+  const psbt = new bitcoin.Psbt({ network: BITCOIN_NETWORK });
   psbt.addInput({
     hash: txid,
     index: vout,
     witnessUtxo: {
-      script: bitcoin.address.toOutputScript(participant.payoutAddress, bitcoin.networks.testnet),
+      script: bitcoin.address.toOutputScript(participant.payoutAddress, BITCOIN_NETWORK),
       value: BigInt(valueSats),
     },
     tapInternalKey: Buffer.from(participant.payout.xonlyPubKeyHex, 'hex'),
@@ -962,7 +963,7 @@ export function buildFinalSweepPsbt({
         vout,
         valueSats,
         scriptPubKeyHex: Buffer.from(
-          bitcoin.address.toOutputScript(participant.payoutAddress, bitcoin.networks.testnet),
+          bitcoin.address.toOutputScript(participant.payoutAddress, BITCOIN_NETWORK),
         ).toString('hex'),
       },
       keyPath: {
@@ -993,7 +994,7 @@ export function signFinalSweepPsbt({
   psbtBase64: string;
 }): SignedTransaction & { participantId: string } {
   const participant = participantById(state, participantId);
-  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: bitcoin.networks.testnet });
+  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: BITCOIN_NETWORK });
   const signer = taprootKeyPathSigner(participant.payout.privateKeyHex);
   psbt.signInput(0, signer);
   const signaturesValid = psbt.validateSignaturesOfInput(0, (pubkey, hash, signature) =>
@@ -1039,7 +1040,7 @@ export function signRecoveryPsbt({
     throw new Error(`recovery requires ${leaf.threshold} signer(s), got ${signerIds.length}`);
   }
 
-  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: bitcoin.networks.testnet });
+  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: BITCOIN_NETWORK });
   const input = psbt.data.inputs[0];
   const psbtLeaf = input?.tapLeafScript?.find(
     (item) => Buffer.from(item.script).toString('hex') === leaf.scriptHex,
@@ -1119,7 +1120,7 @@ export function signRecoveryPsbt({
 }
 
 export function inspectPsbt(psbtBase64: string): PsbtInspection {
-  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: bitcoin.networks.testnet });
+  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: BITCOIN_NETWORK });
   const tx = unsignedTx(psbt);
   return {
     version: tx.version,
@@ -1158,7 +1159,7 @@ export function inspectPsbt(psbtBase64: string): PsbtInspection {
       index,
       valueSats: Number(output.value),
       scriptPubKeyHex: Buffer.from(output.script).toString('hex'),
-      address: bitcoin.address.fromOutputScript(output.script, bitcoin.networks.testnet),
+      address: bitcoin.address.fromOutputScript(output.script, BITCOIN_NETWORK),
     })),
   };
 }
