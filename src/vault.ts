@@ -169,6 +169,23 @@ export interface RosterEntry {
   sigbashLeafByRound: Record<string, string>;
   /** Identification-only leaf key per round; never a spend key. */
   sigbashIdentificationLeafByRound: Record<string, string>;
+  /**
+   * Service-created public registration data. Offline acceptance rosters omit
+   * this field; a user-facing/fundable roster must contain one validated entry
+   * for every round in which this participant can leave.
+   */
+  sigbashRegistrationByRound?: Record<string, SigbashRosterRegistration>;
+}
+
+export interface SigbashRosterRegistration {
+  network: 'mainnet';
+  keyId: string;
+  keyIndex: number;
+  bip328Xpub: string;
+  policyLeafXonlyPubkey: string;
+  identificationLeafXonlyPubkey: string;
+  policyRoot: string;
+  policyId: string;
 }
 
 // Local stand-in for the live xpub internal root: keeps local and live tap
@@ -250,11 +267,13 @@ export function createRosterState(
             `regenerate the entry with vault-keygen`,
         );
       }
+      const registration = entry.sigbashRegistrationByRound?.[round];
       sigbashByRound[round] = {
         privateKeyHex: '',
         publicKeyHex: `02${leafKey}`,
         xonlyPubKeyHex: leafKey,
-        isLiveKey: false,
+        isLiveKey: Boolean(registration),
+        ...(registration ? { xpub: registration.bip328Xpub } : {}),
         identificationXonlyPubKeyHex: identificationKey,
       };
     }
@@ -277,6 +296,13 @@ export function createRosterState(
   });
   const vaults = buildVaultTree(participants);
   const policies = buildPolicies(participants, vaults);
+  for (const entry of roster) {
+    for (const [round, registration] of Object.entries(entry.sigbashRegistrationByRound || {})) {
+      const expectedPolicy = policies.get(`${round}:${entry.id}`);
+      if (!expectedPolicy) throw new Error(`no policy for live Sigbash registration ${entry.id}:${round}`);
+      expectedPolicy.keyId = registration.keyId;
+    }
+  }
   return { participants, vaults, policies };
 }
 

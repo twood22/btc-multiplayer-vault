@@ -3,7 +3,13 @@ import * as ecc from 'tiny-secp256k1';
 import { BITCOIN_NETWORK } from './network.js';
 import { AMOUNTS, PARTICIPANTS, RECOVERY_DELAY_BLOCKS } from './config.js';
 import { verifyVaultTransaction, type ConsensusVerification } from './consensus.js';
-import { taggedHash, tapLeafHash, taprootAddress } from './crypto.js';
+import {
+  deriveXpubChildPubkey,
+  taggedHash,
+  tapLeafHash,
+  taprootAddress,
+  xpubRootXonly,
+} from './crypto.js';
 import {
   buildFinalSweepPsbt,
   buildRecoveryPsbt,
@@ -17,6 +23,7 @@ import {
   participantLeaveRounds,
   roundId,
   type RosterEntry,
+  type SigbashRosterRegistration,
 } from './vault.js';
 import type {
   Hex,
@@ -150,6 +157,15 @@ export function validateRoster(candidate: unknown): RosterEntry[] {
       expectedRounds,
       `${id} sigbashIdentificationLeafByRound`,
     );
+    const sigbashRegistrationByRound = entry.sigbashRegistrationByRound === undefined
+      ? undefined
+      : requireSigbashRegistrationMap(
+          entry.sigbashRegistrationByRound,
+          id,
+          expectedRounds,
+          sigbashLeafByRound,
+          sigbashIdentificationLeafByRound,
+        );
 
     claim(personalPublicKeyHex, `${id}'s personal public key`);
     claim(personalPublicKeyHex.slice(2), `${id}'s personal public key (x-only)`);
@@ -175,6 +191,7 @@ export function validateRoster(candidate: unknown): RosterEntry[] {
       payoutXonlyPubkeyHex,
       sigbashLeafByRound,
       sigbashIdentificationLeafByRound,
+      ...(sigbashRegistrationByRound ? { sigbashRegistrationByRound } : {}),
     };
   });
 
@@ -186,6 +203,77 @@ export function validateRoster(candidate: unknown): RosterEntry[] {
     if (!ids.includes(expected)) throw new Error(`roster is missing participant ${expected}`);
   }
   return entries;
+}
+
+function requireSigbashRegistrationMap(
+  value: unknown,
+  participantId: string,
+  expectedRounds: string[],
+  policyLeaves: Record<string, Hex>,
+  identificationLeaves: Record<string, Hex>,
+): Record<string, SigbashRosterRegistration> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${participantId} sigbashRegistrationByRound must be an object keyed by round id`);
+  }
+  const map = value as Record<string, unknown>;
+  const rounds = Object.keys(map).sort();
+  if (rounds.join(',') !== expectedRounds.join(',')) {
+    throw new Error(
+      `${participantId} sigbashRegistrationByRound must cover exactly the rounds ` +
+        `[${expectedRounds.join(', ')}], got [${rounds.join(', ')}]`,
+    );
+  }
+  return Object.fromEntries(expectedRounds.map((round) => {
+    const raw = map[round];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error(`${participantId} ${round} Sigbash registration must be an object`);
+    }
+    const item = raw as Partial<SigbashRosterRegistration>;
+    if (item.network !== 'mainnet') {
+      throw new Error(`${participantId} ${round} Sigbash registration is not mainnet`);
+    }
+    if (typeof item.keyId !== 'string' || item.keyId.length < 1 || item.keyId.length > 256) {
+      throw new Error(`${participantId} ${round} Sigbash registration has an invalid keyId`);
+    }
+    if (!Number.isSafeInteger(item.keyIndex) || Number(item.keyIndex) < 0) {
+      throw new Error(`${participantId} ${round} Sigbash registration has an invalid keyIndex`);
+    }
+    const xpub = typeof item.bip328Xpub === 'string' ? item.bip328Xpub : '';
+    const strippedXpub = xpub.replace(/^\[[0-9a-fA-F/h']*\]/u, '');
+    if (!strippedXpub.startsWith('xpub')) {
+      throw new Error(`${participantId} ${round} Sigbash registration must carry a mainnet xpub`);
+    }
+    const derivedPolicyLeaf = deriveXpubChildPubkey(xpub, [0, 0]).xonlyPubKeyHex;
+    const derivedIdentificationLeaf = xpubRootXonly(xpub);
+    if (
+      item.policyLeafXonlyPubkey !== derivedPolicyLeaf ||
+      item.policyLeafXonlyPubkey !== policyLeaves[round]
+    ) {
+      throw new Error(`${participantId} ${round} policy leaf does not match its Sigbash xpub child 0/0`);
+    }
+    if (
+      item.identificationLeafXonlyPubkey !== derivedIdentificationLeaf ||
+      item.identificationLeafXonlyPubkey !== identificationLeaves[round]
+    ) {
+      throw new Error(`${participantId} ${round} identification leaf does not match its Sigbash xpub root`);
+    }
+    if (typeof item.policyRoot !== 'string' || !/^[0-9a-f]{64}$/u.test(item.policyRoot)) {
+      throw new Error(`${participantId} ${round} Sigbash registration has an invalid policyRoot`);
+    }
+    if (item.policyId !== `${round}:${participantId}`) {
+      throw new Error(`${participantId} ${round} Sigbash registration has the wrong policyId`);
+    }
+    return [round, {
+      network: 'mainnet',
+      keyId: item.keyId,
+      keyIndex: Number(item.keyIndex),
+      bip328Xpub: xpub,
+      policyLeafXonlyPubkey: derivedPolicyLeaf,
+      identificationLeafXonlyPubkey: derivedIdentificationLeaf,
+      policyRoot: item.policyRoot,
+      policyId: item.policyId,
+    } satisfies SigbashRosterRegistration];
+  }));
 }
 
 function requireCompressedPubkey(value: unknown, label: string): Hex {

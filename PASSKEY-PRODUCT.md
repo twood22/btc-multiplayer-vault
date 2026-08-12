@@ -26,6 +26,12 @@ participant-only MuSig2 path, or the timelocked recovery path.
   registers a distinct credential, and encrypts the exact same participant
   secret under a credential-specific PRF salt and authenticated envelope. Either
   completed passkey can subsequently sign in and unlock the same identity.
+- An immutable roster ceremony that refuses offline Sigbash fixtures, rebuilds
+  and audits the complete mainnet vault from nine service-created public key
+  registrations, commits the economics, policies, Taproot trees, and funding
+  output to one canonical SHA-256 digest, and binds each participant's fresh
+  passkey assertion to that digest. The round-one address and script are absent
+  from responses until all three distinct seats confirm.
 
 Recovery enrollment is a ten-minute, one-time server capability. Its creation
 challenge is bound to the existing credential; registration is bound to the
@@ -73,8 +79,9 @@ npm audit
 
 `web:test` currently proves encryption/decryption, wrong-passkey rejection,
 authenticated-identity tamper rejection, two-credential rewrapping of the same
-participant identity, PRF-output stripping, and exact public key compatibility
-with the existing vault core.
+participant identity, PRF-output stripping, exact public key compatibility,
+offline-roster rejection, xpub/leaf binding, deterministic roster digests, and
+no funding address or output-script disclosure before unanimity.
 
 ## Hard gates before deployment or funding
 
@@ -90,9 +97,10 @@ with the existing vault core.
    against a production-version Bitcoin Core node, including deliberately tiny
    amounts, dust/relay policy, fees, and the chosen recovery delay. The offline
    conversion is complete; real-node acceptance is not.
-5. Add the three-person roster ceremony: everyone independently confirms the
-   same personal keys, payout keys, Sigbash leaves, policies, vault tree, and
-   funding address before the address can be copied or funded.
+5. Run the roster migration and database transaction flow against the
+   production Postgres version, then exercise all three confirmations with real
+   authenticators. The code path exists, but no real Sigbash registrations are
+   present and the database-backed ceremony has not yet been run end to end.
 6. Wire browser-unlocked secrets to the already-authorized MuSig2, independent
    recovery-share, and final-sweep operations without exporting secrets to the
    server.

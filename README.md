@@ -31,6 +31,7 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Sigbash policy enforcement + tamper rejection | ✅ historical signet evidence; mainnet unproven |
 | Sigbash co-signing a live mainnet withdrawal | ⛔ external hard gate; not proven |
 | Per-participant key custody | ✅ `vault-keygen` + `verify-roster` |
+| Immutable three-passkey roster gate | ✅ implemented offline; real Postgres/authenticator run still required |
 | Runs without local Bitcoin Core | ✅ `BITCOIN_BACKEND=esplora` |
 
 ## Requirements
