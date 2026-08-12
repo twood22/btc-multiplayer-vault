@@ -176,7 +176,17 @@ export async function getRawTransaction(
   verbose: boolean | number = true,
 ): Promise<RpcTransaction> {
   if (esploraEnabled()) return esploraGetRawTransaction(txid);
-  return bitcoinRpc('getrawtransaction', [txid, verbose]);
+  const transaction = await bitcoinRpc<RpcTransaction>('getrawtransaction', [txid, verbose]);
+  if (transaction.blockheight === undefined &&
+      (transaction.confirmations || 0) > 0 &&
+      transaction.blockhash) {
+    const header = await bitcoinRpc<{ height: number }>('getblockheader', [transaction.blockhash, true]);
+    if (!Number.isSafeInteger(header.height) || header.height <= 0) {
+      throw new Error('Bitcoin RPC returned an invalid confirmed block height');
+    }
+    transaction.blockheight = header.height;
+  }
+  return transaction;
 }
 
 export async function testMempoolAccept(

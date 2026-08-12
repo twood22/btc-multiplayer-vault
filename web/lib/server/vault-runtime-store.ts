@@ -37,7 +37,7 @@ import {
   type VaultProposalKind,
 } from '../../../src/vault-runtime';
 import { db, transaction } from './db';
-import { chainObservationOrigins } from './config';
+import { chainConfirmationsRequired, chainObservationOrigins } from './config';
 import { getConfirmedVaultArtifactForVault } from './roster-store';
 import type { StoredCredential } from './webauthn-store';
 
@@ -607,10 +607,13 @@ export async function pollVaultChain(): Promise<{
     });
     const height = confirmedBlockHeight(observed);
     if (height === null) continue;
+    const requiredConfirmations = chainConfirmationsRequired();
+    if ((observed.confirmations || 0) < requiredConfirmations) continue;
     await recordConfirmedVaultProposal({
       vaultId: proposal.vault_id,
       txid: expectedTxid,
       confirmedHeight: height,
+      confirmations: observed.confirmations!,
     });
     confirmedTransactions.push(expectedTxid);
   }
@@ -1487,9 +1490,14 @@ export async function recordConfirmedFundingCoin(input: {
   vaultId: string;
   trustedInput: TrustedVaultInput;
   confirmedHeight: number;
+  confirmations: number;
 }): Promise<{ id: string; snapshotDigest: string }> {
   if (!Number.isSafeInteger(input.confirmedHeight) || input.confirmedHeight <= 0) {
     throw new Error('confirmed funding height must be a positive integer');
+  }
+  if (!Number.isSafeInteger(input.confirmations) ||
+      input.confirmations < chainConfirmationsRequired()) {
+    throw new Error(`funding requires at least ${chainConfirmationsRequired()} confirmations`);
   }
   const confirmed = await getConfirmedVaultArtifactForVault(input.vaultId);
   const coin: VaultCoinSnapshot = {
@@ -1547,10 +1555,15 @@ export async function recordConfirmedVaultProposal(input: {
   vaultId: string;
   txid: string;
   confirmedHeight: number;
+  confirmations: number;
 }): Promise<{ nextCoin: VaultCoinSnapshot | null; closed: boolean }> {
   if (!/^[0-9a-f]{64}$/u.test(input.txid)) throw new Error('confirmed transaction id is invalid');
   if (!Number.isSafeInteger(input.confirmedHeight) || input.confirmedHeight <= 0) {
     throw new Error('confirmed transaction height must be a positive integer');
+  }
+  if (!Number.isSafeInteger(input.confirmations) ||
+      input.confirmations < chainConfirmationsRequired()) {
+    throw new Error(`vault transition requires at least ${chainConfirmationsRequired()} confirmations`);
   }
   const confirmed = await getConfirmedVaultArtifactForVault(input.vaultId);
   return transaction(async (sql) => {

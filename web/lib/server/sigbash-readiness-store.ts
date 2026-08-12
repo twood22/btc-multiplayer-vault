@@ -1,12 +1,12 @@
 import 'server-only';
 import { randomBytes } from 'node:crypto';
 import { Buffer } from 'buffer';
-import { authorizeSoloSigningArtifacts } from '@/src/psbt';
-import { sha256Hex } from '@/src/crypto';
-import type { PublishedRosterArtifact } from '@/src/roster-ceremony';
-import { buildSigbashReadinessFixture } from '@/src/sigbash-readiness';
-import type { VaultCoinSnapshot } from '@/src/vault-runtime';
-import { createRosterState, participantLeaveRounds } from '@/src/vault';
+import { authorizeSoloSigningArtifacts } from '../../../src/psbt';
+import { sha256Hex } from '../../../src/crypto';
+import type { PublishedRosterArtifact } from '../../../src/roster-ceremony';
+import { buildSigbashReadinessFixture } from '../../../src/sigbash-readiness';
+import type { VaultCoinSnapshot } from '../../../src/vault-runtime';
+import { createRosterState, participantLeaveRounds } from '../../../src/vault';
 import { assertSigbashCustodyLease } from './sigbash-custody-store';
 import { db, transaction } from './db';
 import { getConfirmedVaultArtifactForVault } from './roster-store';

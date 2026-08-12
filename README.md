@@ -212,9 +212,11 @@ Live Sigbash: `sigbash-live-setup`, `sigbash-sign-psbt`, `live-readiness`,
 The user-facing server never broadcasts during signing or finalization. After
 reviewing the exact finalized transaction, an eligible signer must check the
 mainnet warning and complete a separate passkey assertion. The server submits
-only those stored bytes. Run `npm run web:watch-chain` from a private scheduler
-to resume an interrupted approved submission and advance a broadcast proposal
-only after the backend returns the exact transaction as confirmed.
+only those stored bytes. Set `VAULT_CONFIRMATIONS_REQUIRED` deliberately for
+the private beta. Run `npm run web:watch-chain` from a private scheduler to
+resume an interrupted approved submission and advance a broadcast proposal
+only after the backend returns the exact transaction with that confirmation
+depth.
 
 `policy-check-psbt` and `sigbash-sign-psbt` infer the round from the PSBT's
 input scriptPubKey, so you only pass `--participant`.
@@ -254,10 +256,10 @@ input scriptPubKey, so you only pass `--participant`.
    the `tweakedAggregate` candidates printed by setup and re-run setup once
    more so the vault addresses match.
 
-4. **Only after all nine browser readiness proofs pass, fund round one** with
-   the exact configured output. The commands below describe the historical
-   1-BTC-per-person profile; the private beta uses its separately committed
-   tiny-mainnet economics:
+4. **Only after all nine browser readiness proofs pass and a separate funding
+   approval is given, fund round one** with the exact configured output. The
+   commands below describe the historical 1-BTC-per-person profile; the private
+   beta uses its separately committed tiny-mainnet economics:
 
    ```bash
    npm run funding-psbt -- --inputs-json '[{"participantId":"alice",...},...]' --fee-sats 3000
@@ -266,6 +268,19 @@ input scriptPubKey, so you only pass `--participant`.
    npm run verify-vault-utxo -- --txid <round1_txid> --vout <n> --round alice,bob,carol
    SIGBASH_MODE=live npm run live-readiness -- --txid <round1_txid> --vout <n>
    ```
+
+   For the user-facing service, wait for `VAULT_CONFIRMATIONS_REQUIRED`, then
+   activate only that exact P2TR output through the private operator command:
+
+   ```bash
+   npm run web:record-funding -- --vault-id <uuid> --txid <round1_txid> --vout <n>
+   ```
+
+   The recorder checks mainnet identity, unspent status, transaction/output
+   agreement, exact roster-derived script and value, vault readiness, and the
+   configured confirmation depth before the database can become active. It is
+   not an HTTP route and must not be run until funding has been separately
+   approved.
 
 5. **Solo withdrawal** (Alice leaves first):
 

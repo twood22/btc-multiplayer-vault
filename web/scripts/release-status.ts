@@ -43,6 +43,7 @@ checks.push(check(
 const deposit = explicitInteger('VAULT_DEPOSIT_SATS');
 const depositCap = explicitInteger('PRIVATE_BETA_MAX_DEPOSIT_SATS');
 const recoveryDelay = explicitInteger('RECOVERY_DELAY_BLOCKS');
+const confirmationsRequired = explicitInteger('VAULT_CONFIRMATIONS_REQUIRED');
 checks.push(check(
   'tiny-mainnet amount is explicit and within the private-beta cap',
   deposit !== null && depositCap !== null && deposit >= 10_000 && deposit <= depositCap,
@@ -52,6 +53,11 @@ checks.push(check(
   'mainnet recovery delay is explicit and positive',
   recoveryDelay !== null && recoveryDelay > 0,
   recoveryDelay === null ? undefined : `${recoveryDelay} blocks`,
+));
+checks.push(check(
+  'confirmation depth for funding and transitions is explicit',
+  confirmationsRequired !== null && confirmationsRequired >= 1 && confirmationsRequired <= 144,
+  confirmationsRequired === null ? undefined : `${confirmationsRequired} confirmations`,
 ));
 
 const sigbashServer = parsedOrigin(process.env.SIGBASH_SERVER_URL);

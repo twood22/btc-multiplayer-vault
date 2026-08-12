@@ -1,7 +1,7 @@
 import 'server-only';
 import type { AuthenticatorTransportFuture, Base64URLString } from '@simplewebauthn/server';
-import { AMOUNTS, RECOVERY_DELAY_BLOCKS } from '@/src/config';
-import { deriveXpubChildPubkey, taprootAddress, xpubRootXonly } from '@/src/crypto';
+import { AMOUNTS, RECOVERY_DELAY_BLOCKS } from '../../../src/config';
+import { deriveXpubChildPubkey, taprootAddress, xpubRootXonly } from '../../../src/crypto';
 import {
   canonicalRosterJson,
   createPublishedRosterArtifact,
@@ -9,8 +9,8 @@ import {
   rosterReview,
   type PublishedRosterArtifact,
   type RosterReview,
-} from '@/src/roster-ceremony';
-import { participantLeaveRounds, type RosterEntry, type SigbashRosterRegistration } from '@/src/vault';
+} from '../../../src/roster-ceremony';
+import { participantLeaveRounds, type RosterEntry, type SigbashRosterRegistration } from '../../../src/vault';
 import { db, transaction } from './db';
 import type { StoredCredential } from './webauthn-store';
 import { consumeRateLimit } from './rate-limit';

@@ -1,13 +1,13 @@
 import 'server-only';
 import { conditionConfigToPoetPolicy, type POETPolicy } from '@sigbash/sdk';
-import { deterministicKeypair, taprootAddress } from '@/src/crypto';
-import { planSigbashProvisioning } from '@/src/sigbash-provisioning';
-import type { SoloPolicy } from '@/src/types';
+import { deterministicKeypair, taprootAddress } from '../../../src/crypto';
+import { planSigbashProvisioning } from '../../../src/sigbash-provisioning';
+import type { SoloPolicy } from '../../../src/types';
 import {
   participantLeaveRounds,
   type RosterEntry,
   type SigbashRosterRegistration,
-} from '@/src/vault';
+} from '../../../src/vault';
 import { db } from './db';
 
 export interface SigbashProvisioningStep {

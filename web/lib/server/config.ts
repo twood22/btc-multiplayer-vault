@@ -42,6 +42,15 @@ export function chainObservationOrigins(): string[] {
   return origins;
 }
 
+export function chainConfirmationsRequired(): number {
+  const raw = required('VAULT_CONFIRMATIONS_REQUIRED');
+  const value = Number(raw);
+  if (!/^\d+$/u.test(raw) || !Number.isSafeInteger(value) || value < 1 || value > 144) {
+    throw new Error('VAULT_CONFIRMATIONS_REQUIRED must be an integer from 1 to 144');
+  }
+  return value;
+}
+
 function normalizedOrigin(value: string, name: string): string {
   const url = new URL(value);
   if (url.pathname !== '/' || url.search || url.hash || url.username || url.password) {
