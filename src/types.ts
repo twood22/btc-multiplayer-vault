@@ -30,6 +30,11 @@ export interface Keypair {
  * mode this is a deterministic demo keypair; in live mode xonlyPubKeyHex is
  * overridden with the key derived from the Sigbash registration and the
  * local private key must not be used for signing.
+ *
+ * xonlyPubKeyHex is always the *policy* leaf key — the key inside the
+ * pk() leaf that solo signing spends and that satisfies the policy REQKEY
+ * clause (live: the BIP-328 xpub's child 0/0). The identification key is
+ * carried separately and is never a spend key.
  */
 export interface SigbashRoundKey extends Keypair {
   isLiveKey: boolean;
@@ -39,6 +44,14 @@ export interface SigbashRoundKey extends Keypair {
    * vault input as one it controls.
    */
   xpub?: string;
+  /**
+   * The x-only key in this round's Sigbash identification leaf. Live mode:
+   * the xpub's own internal-root key, which satisfies Sigbash's
+   * "aggregate key found in tapscript leaf" input-identification check.
+   * Local mode: a deterministic stand-in with no private key retained, so
+   * the local model is structurally unable to sign the identification leaf.
+   */
+  identificationXonlyPubKeyHex: Hex;
 }
 
 export interface Participant {
@@ -63,10 +76,33 @@ export interface KeyAggResult {
   aggregation: KeyAggregation;
 }
 
+/**
+ * The per-(participant, round) *policy spend* leaf: pk(child 0/0 of the
+ * Sigbash key's xpub in live mode). This is the only Sigbash leaf that solo
+ * signing may select and the only key a policy REQKEY may reference.
+ */
 export interface SoloTapLeaf {
   type: 'solo-withdrawal';
+  role: 'policy-spend';
   participantId: string;
   sigbashXonlyPubkey: Hex;
+  scriptHex: Hex;
+  controlBlockHex: Hex;
+}
+
+/**
+ * The per-(participant, round) Sigbash *identification* leaf:
+ * pk(internal root of the Sigbash key's xpub). It exists only so live
+ * Sigbash recognizes the vault input as one it controls ("aggregate key
+ * found in tapscript leaf"). It must never be selected for solo signing
+ * and its key must never satisfy a policy REQKEY. The distinct `type` and
+ * `role` make it impossible to confuse with the policy-spend leaf.
+ */
+export interface SigbashIdentificationTapLeaf {
+  type: 'sigbash-identification';
+  role: 'identification-only';
+  participantId: string;
+  internalRootXonlyPubkey: Hex;
   scriptHex: Hex;
   controlBlockHex: Hex;
 }
@@ -80,7 +116,7 @@ export interface RecoveryTapLeaf {
   controlBlockHex: Hex;
 }
 
-export type TapLeaf = SoloTapLeaf | RecoveryTapLeaf;
+export type TapLeaf = SoloTapLeaf | SigbashIdentificationTapLeaf | RecoveryTapLeaf;
 
 export interface VaultKeyPath {
   type: 'MuSig2';
@@ -211,6 +247,9 @@ export interface PsbtInspection {
     tapInternalKey?: Hex | undefined;
     tapLeafScript?:
       | Array<{ leafVersion: number; scriptHex: Hex; controlBlockHex: Hex }>
+      | undefined;
+    tapBip32Derivation?:
+      | Array<{ masterFingerprintHex: Hex; pubkeyHex: Hex; path: string; leafHashesHex: Hex[] }>
       | undefined;
   }>;
   outputs: Array<{

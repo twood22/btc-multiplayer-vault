@@ -28,6 +28,7 @@
     "policy-check-psbt": "tsx src/cli.ts policy-check-psbt",
     "inspect-psbt": "tsx src/cli.ts inspect-psbt",
     "psbt-acceptance": "tsx src/cli.ts psbt-acceptance",
+    "dual-leaf-acceptance": "tsx src/cli.ts dual-leaf-acceptance",
     "rpc-gettxout": "tsx src/cli.ts rpc-gettxout",
     "verify-vault-utxo": "tsx src/cli.ts verify-vault-utxo",
     "cooperative-readiness": "tsx src/cli.ts cooperative-readiness",

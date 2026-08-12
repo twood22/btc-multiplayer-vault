@@ -180,6 +180,25 @@ function base58CheckDecode(value: string): Buffer {
   return data;
 }
 
+export function base58CheckEncode(data: Buffer): string {
+  const checksum = createHash('sha256')
+    .update(createHash('sha256').update(data).digest())
+    .digest()
+    .subarray(0, 4);
+  const payload = Buffer.concat([data, checksum]);
+  let acc = BigInt(`0x${payload.toString('hex')}`);
+  let encoded = '';
+  while (acc > 0n) {
+    encoded = BASE58_ALPHABET[Number(acc % 58n)] + encoded;
+    acc /= 58n;
+  }
+  for (const byte of payload) {
+    if (byte !== 0) break;
+    encoded = `1${encoded}`;
+  }
+  return encoded;
+}
+
 // The xpub's own root public key (x-only). For a Sigbash key this is the
 // untweaked MuSig2 aggregate — the key that signs a tapscript-leaf input.
 export function xpubRootXonly(xpubBase58: string): Hex {
@@ -263,18 +282,47 @@ export function buildVaultTaproot({
   recoveryXonlyPubkeys,
 }: {
   internalXonlyPubkey: Hex;
-  soloLeafPubkeys: Array<{ participantId: string; xonlyPubkey: Hex }>;
+  soloLeafPubkeys: Array<{
+    participantId: string;
+    xonlyPubkey: Hex;
+    identificationXonlyPubkey: Hex;
+  }>;
   recoveryDelayBlocks: number;
   recoveryXonlyPubkeys: Hex[];
 }): VaultTaproot {
-  const soloLeaves = soloLeafPubkeys.map(({ participantId, xonlyPubkey }) => ({
-    type: 'solo-withdrawal' as const,
-    participantId,
-    sigbashXonlyPubkey: xonlyPubkey,
-    scriptHex: Buffer.from(
+  const pkScriptHex = (xonlyPubkey: Hex): Hex =>
+    Buffer.from(
       bitcoin.script.compile([Buffer.from(xonlyPubkey, 'hex'), bitcoin.opcodes.OP_CHECKSIG]),
-    ).toString('hex'),
-  }));
+    ).toString('hex');
+  // Dual-leaf Sigbash structure (live-verified, see REVIEW.md): per
+  // participant/round the tree carries a policy-spend leaf pk(child 0/0)
+  // that solo signing uses, plus an identification-only leaf
+  // pk(internal root) that live Sigbash needs to recognize the input.
+  const soloLeaves = soloLeafPubkeys.flatMap(
+    ({ participantId, xonlyPubkey, identificationXonlyPubkey }) => {
+      if (xonlyPubkey === identificationXonlyPubkey) {
+        throw new Error(
+          `${participantId}: identification leaf key must differ from the policy-spend leaf key`,
+        );
+      }
+      return [
+        {
+          type: 'solo-withdrawal' as const,
+          role: 'policy-spend' as const,
+          participantId,
+          sigbashXonlyPubkey: xonlyPubkey,
+          scriptHex: pkScriptHex(xonlyPubkey),
+        },
+        {
+          type: 'sigbash-identification' as const,
+          role: 'identification-only' as const,
+          participantId,
+          internalRootXonlyPubkey: identificationXonlyPubkey,
+          scriptHex: pkScriptHex(identificationXonlyPubkey),
+        },
+      ];
+    },
+  );
   const recoveryThreshold = Math.max(1, recoveryXonlyPubkeys.length - 1);
   const sortedRecoveryPubkeys = [...recoveryXonlyPubkeys].sort();
   const recoveryScript = bitcoin.script.compile([

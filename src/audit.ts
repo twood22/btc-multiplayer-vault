@@ -37,6 +37,14 @@ export function auditSpecState(state: VaultState): AuditReport {
     check('one immutable Sigbash policy exists per (round, leaver)', state.policies.size === 9),
     check('no policy is an OR across rounds', noOrPolicies(state)),
     check('Sigbash leaf keys are unique per (participant, round)', leafKeysAreRoundScoped(state)),
+    check(
+      'every participant/round pairs a policy-spend leaf with a distinct identification leaf',
+      dualLeavesArePairedAndDistinct(state),
+    ),
+    check(
+      'identification leaf keys never satisfy any policy REQKEY',
+      identificationKeysNeverSatisfyReqkey(state),
+    ),
     check('all solo policies pin exactly two outputs', allBranchesPinOutputCount(state)),
     check('all solo policies pin exactly one input', allBranchesPinInputCount(state)),
     check('all solo policies pin the round leaf key via REQKEY', allBranchesRequireLeafKey(state)),
@@ -112,8 +120,12 @@ function leafKeysAreRoundScoped(state: VaultState): boolean {
   const seen = new Set<string>();
   for (const participant of state.participants) {
     for (const [round, key] of Object.entries(participant.sigbashByRound)) {
+      // Policy and identification keys share one uniqueness universe: no key
+      // may appear twice in any role, in any round.
       if (seen.has(key.xonlyPubKeyHex)) return false;
       seen.add(key.xonlyPubKeyHex);
+      if (seen.has(key.identificationXonlyPubKeyHex)) return false;
+      seen.add(key.identificationXonlyPubKeyHex);
       const vault = state.vaults.get(round);
       const leaf = vault?.tapscriptLeaves.find(
         (item) => item.type === 'solo-withdrawal' && item.participantId === participant.id,
@@ -127,6 +139,58 @@ function leafKeysAreRoundScoped(state: VaultState): boolean {
     }
   }
   return true;
+}
+
+// Each participant in each round vault has exactly one policy-spend leaf and
+// exactly one identification leaf, with distinct scripts/keys, and both match
+// that participant's round key material. The `role` fields must be present so
+// callers can never confuse the two.
+function dualLeavesArePairedAndDistinct(state: VaultState): boolean {
+  for (const vault of state.vaults.values()) {
+    for (const participantId of vault.participantIds) {
+      const participant = state.participants.find((item) => item.id === participantId);
+      const roundKey = participant?.sigbashByRound[vault.id];
+      if (!roundKey) return false;
+      const policyLeaves = vault.tapscriptLeaves.filter(
+        (item) => item.type === 'solo-withdrawal' && item.participantId === participantId,
+      );
+      const identificationLeaves = vault.tapscriptLeaves.filter(
+        (item) => item.type === 'sigbash-identification' && item.participantId === participantId,
+      );
+      if (policyLeaves.length !== 1 || identificationLeaves.length !== 1) return false;
+      const policyLeaf = policyLeaves[0]!;
+      const identificationLeaf = identificationLeaves[0]!;
+      if (policyLeaf.type !== 'solo-withdrawal') return false;
+      if (identificationLeaf.type !== 'sigbash-identification') return false;
+      if (policyLeaf.role !== 'policy-spend') return false;
+      if (identificationLeaf.role !== 'identification-only') return false;
+      if (policyLeaf.sigbashXonlyPubkey !== roundKey.xonlyPubKeyHex) return false;
+      if (identificationLeaf.internalRootXonlyPubkey !== roundKey.identificationXonlyPubKeyHex) {
+        return false;
+      }
+      if (identificationLeaf.scriptHex === policyLeaf.scriptHex) return false;
+      if (identificationLeaf.internalRootXonlyPubkey === policyLeaf.sigbashXonlyPubkey) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+// No REQKEY anywhere may reference an identification-leaf key: the
+// identification leaf must carry zero policy authority.
+function identificationKeysNeverSatisfyReqkey(state: VaultState): boolean {
+  const identificationKeys = new Set(
+    state.participants.flatMap((participant) =>
+      Object.values(participant.sigbashByRound).map((key) => key.identificationXonlyPubKeyHex),
+    ),
+  );
+  return [...state.policies.values()].every((policy) =>
+    policy.conditions.every(
+      (condition) =>
+        condition.type !== 'REQKEY' || !identificationKeys.has(condition.local_key_identifier),
+    ),
+  );
 }
 
 function allBranchesPinOutputCount(state: VaultState): boolean {

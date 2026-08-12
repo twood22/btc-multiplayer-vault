@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
-import { AMOUNTS, PARTICIPANTS, RECOVERY_DELAY_BLOCKS } from './config.js';
+import { AMOUNTS, DEMO_SEED, PARTICIPANTS, RECOVERY_DELAY_BLOCKS } from './config.js';
 import { auditSpecState } from './audit.js';
 import { runBip327KeyAggVectors, verifyVaultTransaction } from './consensus.js';
 import { runBip327ProtocolVectors } from './musig2-vectors.js';
@@ -11,7 +11,14 @@ import {
   ceremonyStart,
   type CeremonyContext,
 } from './ceremony.js';
-import { deriveXpubChildPubkey, xpubRootXonly } from './crypto.js';
+import {
+  base58CheckEncode,
+  deriveXpubChildPubkey,
+  deterministicKeypair,
+  sha256Hex,
+  tapLeafHash,
+  xpubRootXonly,
+} from './crypto.js';
 import {
   combinePsbts,
   decodeRawTransaction,
@@ -29,6 +36,7 @@ import {
   buildCooperativeExitPsbt,
   buildFinalSweepPsbt,
   buildFundingPsbt,
+  buildIdentificationLeafMisusePsbt,
   buildRecoveryPsbt,
   buildSoloWithdrawalPsbt,
   buildSoloWithdrawalTamperPsbts,
@@ -37,8 +45,15 @@ import {
   signFinalSweepPsbt,
   signRecoveryPsbt,
   signSoloWithdrawalPsbt,
+  soloLeavesOf,
 } from './psbt.js';
-import { createLiveSigbashClient, createSigbashAdapter, evaluatePolicy, toPoetPolicy } from './sigbash.js';
+import {
+  LocalSigbashAdapter,
+  createLiveSigbashClient,
+  createSigbashAdapter,
+  evaluatePolicy,
+  toPoetPolicy,
+} from './sigbash.js';
 import {
   Ledger,
   buildCooperativeExit,
@@ -104,6 +119,7 @@ const commands: Record<string, () => Promise<void>> = {
   'policy-check-psbt': policyCheckPsbt,
   'inspect-psbt': inspectPsbtCommand,
   'psbt-acceptance': psbtAcceptance,
+  'dual-leaf-acceptance': dualLeafAcceptance,
   'rpc-gettxout': rpcGetTxOut,
   'verify-vault-utxo': verifyVaultUtxo,
   'cooperative-readiness': cooperativeReadiness,
@@ -215,7 +231,7 @@ async function cooperative() {
 }
 
 async function solo() {
-  const adapter = await createSigbashAdapter();
+  const adapter = await createSigbashAdapter({ participantId: 'alice' });
   const state = createDemoState();
   const ledger = new Ledger();
   createDeposits(ledger, state);
@@ -260,7 +276,6 @@ async function solo() {
 }
 
 async function fullRun() {
-  const adapter = await createSigbashAdapter();
   const state = createDemoState();
   const ledger = new Ledger();
   createDeposits(ledger, state);
@@ -279,7 +294,9 @@ async function fullRun() {
   let currentIds = ['alice', 'bob', 'carol'];
   const first = buildSoloWithdrawal({ state, currentUtxo, currentIds, leaverId: 'alice' });
   let policy = requirePolicy(state, currentIds, 'alice');
-  let signed = await adapter.signPSBT(first, policy);
+  // Per-leaver adapters: each signing request runs under the leaver's own
+  // Sigbash credential scope.
+  let signed = await (await createSigbashAdapter({ participantId: 'alice' })).signPSBT(first, policy);
   assert(signed.success, signed.error || 'first withdrawal rejected');
   let committed = ledger.spend(currentUtxo.outpoint, first);
   events.push({
@@ -303,7 +320,7 @@ async function fullRun() {
   currentIds = ['bob', 'carol'];
   const second = buildSoloWithdrawal({ state, currentUtxo, currentIds, leaverId: 'bob' });
   policy = requirePolicy(state, currentIds, 'bob');
-  signed = await adapter.signPSBT(second, policy);
+  signed = await (await createSigbashAdapter({ participantId: 'bob' })).signPSBT(second, policy);
   assert(signed.success, signed.error || 'second withdrawal rejected');
   committed = ledger.spend(currentUtxo.outpoint, second);
   events.push({
@@ -383,8 +400,14 @@ async function fundingManifest() {
       depositSats: AMOUNTS.deposit,
       payoutAddress: participant.payoutAddress,
       personalXonlyPubkey: participant.personal.xonlyPubKeyHex,
-      sigbashLeafXonlyPubkeysByRound: Object.fromEntries(
+      sigbashPolicyLeafXonlyPubkeysByRound: Object.fromEntries(
         Object.entries(participant.sigbashByRound).map(([round, key]) => [round, key.xonlyPubKeyHex]),
+      ),
+      sigbashIdentificationLeafXonlyPubkeysByRound: Object.fromEntries(
+        Object.entries(participant.sigbashByRound).map(([round, key]) => [
+          round,
+          key.identificationXonlyPubKeyHex,
+        ]),
       ),
     })),
     roundOneFundingOutput: {
@@ -681,7 +704,7 @@ async function sigbashSignPsbt() {
     keyId,
   };
   assert(policy.conditions, `unknown policy for ${participantId} in round ${vault.id}`);
-  const adapter = await createSigbashAdapter();
+  const adapter = await createSigbashAdapter({ participantId });
   const tx = { psbtBase64 };
   const verification = await adapter.verifyPSBT(tx, policy);
   if (verification.passed === false || verification.success === false) {
@@ -1261,6 +1284,341 @@ async function psbtAcceptance() {
       'final sweep audit helpers identify the payout input, key-path witness, and sweep output',
       'live audit confirmation helper enforces the requested confirmation threshold',
       'acceptance evidence commands keep ordering-only and full-run proofs distinct',
+    ],
+  });
+}
+
+// Deterministic tpub fixture for dual-leaf tests: depth-0 testnet xpub whose
+// child 0/0 (policy leaf) and internal root (identification leaf) can be
+// derived exactly like a live Sigbash bip328Xpub. No network, no secrets.
+function syntheticTpubForTest(label: string): string {
+  const rootKey = deterministicKeypair(DEMO_SEED, `${label}:xpub-root`);
+  return base58CheckEncode(
+    Buffer.concat([
+      Buffer.from('043587cf', 'hex'),
+      Buffer.from([0]),
+      Buffer.alloc(4),
+      Buffer.alloc(4),
+      Buffer.from(sha256Hex(`${label}:chaincode`), 'hex'),
+      Buffer.from(rootKey.publicKeyHex, 'hex'),
+    ]),
+  );
+}
+
+// Focused dual-leaf regressions: the identification leaf must never be
+// selected by local solo signing and must never authorize a spend through
+// any local adapter path; live overrides and setup checkpoints must resolve
+// to one canonical dual-leaf vault whether fresh or resumed.
+async function dualLeafAcceptance() {
+  const state = createDemoState();
+  const roundOneIds = ['alice', 'bob', 'carol'];
+  const round = roundId(roundOneIds);
+  const roundOneVault = requireVault(state, roundOneIds);
+  const txid = '0000000000000000000000000000000000000000000000000000000000000001';
+  const potSats = AMOUNTS.deposit * 3;
+  const alice = participantById(state, 'alice');
+  const aliceRoundKey = alice.sigbashByRound[round]!;
+
+  // Tree structure: per participant one policy-spend and one identification
+  // leaf, plus the recovery leaf; MuSig2 key path untouched.
+  const policyLeaves = roundOneVault.tapscriptLeaves.filter((leaf) => leaf.type === 'solo-withdrawal');
+  const identificationLeaves = roundOneVault.tapscriptLeaves.filter(
+    (leaf) => leaf.type === 'sigbash-identification',
+  );
+  assert(
+    policyLeaves.length === 3 && identificationLeaves.length === 3,
+    'round-one vault must carry 3 policy-spend and 3 identification leaves',
+  );
+  assert(
+    roundOneVault.tapscriptLeaves.filter((leaf) => leaf.type === 'timelocked-recovery').length === 1,
+    'round-one vault must keep exactly one recovery leaf',
+  );
+  assert(
+    requireVault(state, ['bob', 'carol']).tapscriptLeaves.length === 5,
+    'pair vault must carry 2 policy + 2 identification + 1 recovery leaves',
+  );
+  assert(verifyNoSigbashInKeyPath(roundOneVault), 'dual-leaf tree leaked keys into the key path');
+  const aliceLeaves = soloLeavesOf(roundOneVault, 'alice');
+  assert(
+    aliceLeaves.policyLeaf.scriptHex === `20${aliceRoundKey.xonlyPubKeyHex}ac`,
+    'policy-spend leaf script must be pk(round policy key)',
+  );
+  assert(
+    aliceLeaves.identificationLeaf.scriptHex === `20${aliceRoundKey.identificationXonlyPubKeyHex}ac`,
+    'identification leaf script must be pk(identification key)',
+  );
+  assert(
+    roundOneVault.descriptor.includes(`pk(${aliceRoundKey.identificationXonlyPubKeyHex})`),
+    'vault descriptor must list the identification leaf',
+  );
+
+  // Solo PSBT carries both leaves with unambiguous role metadata.
+  const solo = buildSoloWithdrawalPsbt({
+    state,
+    currentIds: roundOneIds,
+    leaverId: 'alice',
+    txid,
+    vout: 0,
+    valueSats: potSats,
+  });
+  assert(solo.txTemplate.tapLeafScript.role === 'policy-spend', 'solo template policy leaf role mismatch');
+  assert(
+    solo.txTemplate.identificationLeaf.role === 'identification-only',
+    'solo template identification leaf role mismatch',
+  );
+  const soloInspection = inspectPsbt(solo.psbtBase64);
+  const psbtLeafScripts = (soloInspection.inputs[0]!.tapLeafScript ?? []).map((leaf) => leaf.scriptHex);
+  assert(
+    psbtLeafScripts.length === 2 &&
+      psbtLeafScripts.includes(aliceLeaves.policyLeaf.scriptHex) &&
+      psbtLeafScripts.includes(aliceLeaves.identificationLeaf.scriptHex),
+    'solo PSBT must carry exactly the policy-spend and identification leaves',
+  );
+  assert(
+    soloInspection.inputs[0]!.tapBip32Derivation === undefined,
+    'local-mode solo PSBT must not fabricate a tapBip32Derivation',
+  );
+
+  // Regression: local solo signing selects the policy leaf, never the
+  // identification leaf, even though both ride in the PSBT.
+  const signedSolo = signSoloWithdrawalPsbt({
+    state,
+    currentIds: roundOneIds,
+    leaverId: 'alice',
+    psbtBase64: solo.psbtBase64,
+  });
+  assert(
+    signedSolo.signedLeaf.role === 'policy-spend' &&
+      signedSolo.signedLeaf.scriptHex === aliceLeaves.policyLeaf.scriptHex &&
+      signedSolo.signedLeaf.scriptHex !== aliceLeaves.identificationLeaf.scriptHex,
+    'local solo signing must finalize the policy-spend leaf only',
+  );
+
+  // Regression: leaf selection is by script role, not PSBT ordering.
+  const reordered = structuredClone(soloInspection);
+  reordered.inputs[0]!.tapLeafScript!.reverse();
+  const reorderedTx = psbtInspectionToPolicyTx({ state, inspection: reordered });
+  assert(
+    reorderedTx.sigbashLeafKey === aliceRoundKey.xonlyPubKeyHex,
+    'policy leaf key must be resolved regardless of tapLeafScript order',
+  );
+  assert(
+    evaluatePolicy(reorderedTx, requirePolicy(state, roundOneIds, 'alice')).length === 0,
+    'reordered dual-leaf PSBT must still satisfy the policy preflight',
+  );
+
+  // Regression: a PSBT carrying only the identification leaf fails the local
+  // policy preflight (REQKEY) and cannot be signed by local solo signing.
+  const misuse = buildIdentificationLeafMisusePsbt({
+    state,
+    currentIds: roundOneIds,
+    leaverId: 'alice',
+    txid,
+    vout: 0,
+    valueSats: potSats,
+  });
+  const misuseTx = psbtInspectionToPolicyTx({ state, inspection: inspectPsbt(misuse.psbtBase64) });
+  assert(
+    misuseTx.sigbashLeafKey === undefined,
+    'identification leaf must never be treated as a policy leaf key',
+  );
+  assert(
+    evaluatePolicy(misuseTx, requirePolicy(state, roundOneIds, 'alice')).length > 0,
+    'identification-leaf-only PSBT unexpectedly passed the local policy',
+  );
+  let misuseSigningError = '';
+  try {
+    signSoloWithdrawalPsbt({
+      state,
+      currentIds: roundOneIds,
+      leaverId: 'alice',
+      psbtBase64: misuse.psbtBase64,
+    });
+  } catch (error) {
+    misuseSigningError = errorMessage(error);
+  }
+  assert(
+    misuseSigningError.includes('policy-spend'),
+    'local solo signing must refuse a PSBT without the policy-spend leaf',
+  );
+
+  // Regression: no local adapter path lets the identification key authorize a
+  // spend — for every (round, leaver) policy, a transaction satisfying every
+  // amount/address/count condition but presenting the identification key must
+  // fail verification and signing on REQKEY.
+  const localAdapter = new LocalSigbashAdapter();
+  for (const policy of state.policies.values()) {
+    const leaver = participantById(state, policy.leaverId);
+    const policyRound = roundId(policy.roundIds);
+    const identificationKey = leaver.sigbashByRound[policyRound]!.identificationXonlyPubKeyHex;
+    const bypassAttempt = {
+      sigbashLeafKey: identificationKey,
+      inputCount: 1,
+      outputs: [
+        { address: policyOutputAddress(policy, 0), value: policyOutputValue(policy, 0) },
+        { address: policyOutputAddress(policy, 1), value: policyOutputValue(policy, 1) },
+      ],
+    };
+    const verifyResult = await localAdapter.verifyPSBT(bypassAttempt, policy);
+    assert(
+      verifyResult.success === false,
+      `identification key satisfied policy ${policy.id} in local verification`,
+    );
+    const signResult = await localAdapter.signPSBT(bypassAttempt, policy);
+    assert(
+      signResult.success === false && signResult.psbt === undefined,
+      `identification key obtained a local signature for policy ${policy.id}`,
+    );
+  }
+
+  // Live override resolution: checkpoint-derived, xpub-only, and explicit
+  // overrides must all produce the identical canonical dual-leaf vault, and
+  // the checkpoint parser must be the single source for resume.
+  const xpub = syntheticTpubForTest(`dual-leaf-acceptance:alice:${round}`);
+  const policyLeafKey = deriveXpubChildPubkey(xpub, [0, 0]).xonlyPubKeyHex;
+  const identificationLeafKey = xpubRootXonly(xpub);
+  const registration: LiveKeyRegistration = {
+    participantId: 'alice',
+    round,
+    keyId: 'test-key-id',
+    keyIndex: 0,
+    keyIdEnvName: sigbashKeyIdEnvName('alice', round),
+    bip328Xpub: xpub,
+    policyLeafXonlyPubkey: policyLeafKey,
+    identificationLeafXonlyPubkey: identificationLeafKey,
+    helperP2trAddressDoNotFund: undefined,
+    policyRoot: 'test-policy-root',
+    policyId: policyId(roundOneIds, 'alice'),
+  };
+  const resumedOverride = checkpointRegistrationToOverride(
+    parseSetupCheckpointLine(JSON.stringify(registration)),
+  );
+  assert(
+    resumedOverride.key === policyLeafKey &&
+      resumedOverride.identificationKey === identificationLeafKey &&
+      resumedOverride.xpub === xpub,
+    'checkpoint resume must reproduce the canonical dual-leaf override',
+  );
+  const liveState = createDemoState({
+    sigbashLeafOverrides: { alice: { [round]: resumedOverride } },
+  });
+  const liveVault = requireVault(liveState, roundOneIds);
+  const aliceLiveLeaves = soloLeavesOf(liveVault, 'alice');
+  assert(
+    aliceLiveLeaves.policyLeaf.scriptHex === `20${policyLeafKey}ac` &&
+      aliceLiveLeaves.identificationLeaf.scriptHex === `20${identificationLeafKey}ac`,
+    'live override must place child 0/0 in the policy leaf and the internal root in the identification leaf',
+  );
+  const xpubOnlyState = createDemoState({
+    sigbashLeafOverrides: { alice: { [round]: { key: policyLeafKey, xpub } } },
+  });
+  assert(
+    requireVault(xpubOnlyState, roundOneIds).address === liveVault.address,
+    'xpub-only override must derive the identical dual-leaf vault address',
+  );
+
+  // Live-mode PSBT metadata: exactly one tapBip32Derivation, for the policy
+  // leaf child key at m/0/0 — never for the identification leaf.
+  const livePsbt = buildSoloWithdrawalPsbt({
+    state: liveState,
+    currentIds: roundOneIds,
+    leaverId: 'alice',
+    txid,
+    vout: 0,
+    valueSats: potSats,
+  });
+  const liveDerivations = inspectPsbt(livePsbt.psbtBase64).inputs[0]!.tapBip32Derivation ?? [];
+  const policyLeafHashHex = tapLeafHash(
+    Buffer.from(aliceLiveLeaves.policyLeaf.scriptHex, 'hex'),
+  ).toString('hex');
+  const identificationLeafHashHex = tapLeafHash(
+    Buffer.from(aliceLiveLeaves.identificationLeaf.scriptHex, 'hex'),
+  ).toString('hex');
+  assert(
+    liveDerivations.length === 1 &&
+      liveDerivations[0]!.pubkeyHex === policyLeafKey &&
+      liveDerivations[0]!.path === 'm/0/0' &&
+      liveDerivations[0]!.leafHashesHex.join(',') === policyLeafHashHex &&
+      !liveDerivations[0]!.leafHashesHex.includes(identificationLeafHashHex),
+    'live solo PSBT must carry a tapBip32Derivation for the policy leaf only',
+  );
+  let liveLocalSigningError = '';
+  try {
+    signSoloWithdrawalPsbt({
+      state: liveState,
+      currentIds: roundOneIds,
+      leaverId: 'alice',
+      psbtBase64: livePsbt.psbtBase64,
+    });
+  } catch (error) {
+    liveLocalSigningError = errorMessage(error);
+  }
+  assert(
+    liveLocalSigningError.includes('live Sigbash leaf key'),
+    'local signing must refuse live-keyed rounds',
+  );
+
+  // Checkpoint hygiene: legacy, incomplete, and mixed lines are rejected
+  // instead of silently deriving a different vault address on resume.
+  const expectRejected = (label: string, line: unknown, pattern: RegExp) => {
+    let message = '';
+    try {
+      parseSetupCheckpointLine(JSON.stringify(line));
+    } catch (error) {
+      message = errorMessage(error);
+    }
+    assert(pattern.test(message), `${label} checkpoint entry was not rejected (${message || 'accepted'})`);
+  };
+  expectRejected(
+    'legacy',
+    { ...registration, policyLeafXonlyPubkey: undefined, leafXonlyPubkey: identificationLeafKey },
+    /legacy setup checkpoint/,
+  );
+  expectRejected(
+    'incomplete',
+    { ...registration, identificationLeafXonlyPubkey: undefined },
+    /missing identificationLeafXonlyPubkey/,
+  );
+  expectRejected(
+    'mixed (identification key is not the xpub root)',
+    { ...registration, identificationLeafXonlyPubkey: policyLeafKey },
+    /mixed\/corrupt/,
+  );
+  expectRejected(
+    'mixed (policy key is not the xpub child 0\\/0)',
+    { ...registration, policyLeafXonlyPubkey: identificationLeafKey },
+    /mixed\/corrupt/,
+  );
+  const expectOverrideRejected = (label: string, override: unknown, pattern: RegExp) => {
+    let message = '';
+    try {
+      createDemoState({
+        sigbashLeafOverrides: { alice: { [round]: override as never } },
+      });
+    } catch (error) {
+      message = errorMessage(error);
+    }
+    assert(pattern.test(message), `${label} leaf override was not rejected (${message || 'accepted'})`);
+  };
+  expectOverrideRejected('legacy bare-string', policyLeafKey, /legacy single-key/);
+  expectOverrideRejected('incomplete (no xpub, no identification key)', { key: policyLeafKey }, /incomplete/);
+  expectOverrideRejected(
+    'mixed (key is not child 0/0 of the xpub)',
+    { key: identificationLeafKey, xpub },
+    /not the xpub's child 0\/0/,
+  );
+
+  printResult('dual-leaf acceptance', {
+    passed: true,
+    checks: [
+      'every vault pairs each policy-spend leaf with a distinct identification leaf and keeps the recovery leaf',
+      'solo PSBTs carry both Sigbash leaves with unambiguous role metadata',
+      'local solo signing finalizes the policy-spend leaf and never the identification leaf',
+      'policy leaf resolution is order-independent; identification-only PSBTs fail preflight and signing',
+      'no (round, leaver) policy accepts the identification key through any local adapter path',
+      'checkpoint fresh/resume and xpub-only overrides derive one canonical dual-leaf vault',
+      'live solo PSBTs carry a tapBip32Derivation for the policy leaf child 0/0 only',
+      'legacy, incomplete, and mixed checkpoints/overrides are rejected outright',
     ],
   });
 }
@@ -1854,7 +2212,7 @@ async function liveSoloWithdrawal() {
   let liveSignature = null;
   let signedArtifacts = null;
   if (checks.every((item) => item.ok)) {
-    const adapter = await createSigbashAdapter();
+    const adapter = await createSigbashAdapter({ participantId: leaverId });
     const policy = {
       ...requirePolicy(state, currentIds, leaverId),
       keyId,
@@ -1930,7 +2288,7 @@ async function livePolicyDryRun() {
   const policy = { ...requirePolicy(state, currentIds, leaverId), keyId };
 
   const variants = buildSoloWithdrawalTamperPsbts({ state, currentIds, leaverId, txid, vout, valueSats });
-  const adapter = await createSigbashAdapter();
+  const adapter = await createSigbashAdapter({ participantId: leaverId });
   const liveValid = await adapter.verifyPSBT({ psbtBase64: variants.valid.psbtBase64 }, policy);
   const liveTampered: Record<string, SigbashVerifyResult> = {};
   for (const [name, psbt] of Object.entries(variants.tampered)) {
@@ -1989,7 +2347,7 @@ async function liveSoloTamperCheck() {
     valueSats: btcToSats(actual.value),
   });
   const localChecks = soloTamperLocalChecks({ state, currentIds, leaverId, variants });
-  const adapter = await createSigbashAdapter();
+  const adapter = await createSigbashAdapter({ participantId: leaverId });
   const liveValid = await adapter.verifyPSBT({ psbtBase64: variants.valid.psbtBase64 }, policy);
   const liveTampered: Record<string, SigbashVerifyResult> = {};
   for (const [name, psbt] of Object.entries(variants.tampered)) {
@@ -2328,6 +2686,7 @@ async function acceptance() {
   await audit();
   await sdkPolicyCheck();
   await psbtAcceptance();
+  await dualLeafAcceptance();
   await consensusAcceptance();
   await cooperative();
   await solo();
@@ -2548,6 +2907,83 @@ async function sdkPolicyCheck() {
   });
 }
 
+interface LiveKeyRegistration {
+  participantId: string;
+  round: string;
+  keyId: string;
+  keyIndex: number;
+  keyIdEnvName: string;
+  bip328Xpub: string;
+  /** Canonical policy-spend leaf key: the xpub's child 0/0. */
+  policyLeafXonlyPubkey: string;
+  /** Canonical identification leaf key: the xpub's internal root. */
+  identificationLeafXonlyPubkey: string;
+  helperP2trAddressDoNotFund: string | undefined;
+  policyRoot: string;
+  policyId: string;
+}
+
+// Single construction point for a leaf override, shared by the fresh
+// registration path and checkpoint resume so both are guaranteed to derive
+// the identical dual-leaf vault addresses.
+function checkpointRegistrationToOverride(registration: LiveKeyRegistration): {
+  key: string;
+  xpub: string;
+  identificationKey: string;
+} {
+  return {
+    key: registration.policyLeafXonlyPubkey,
+    xpub: registration.bip328Xpub,
+    identificationKey: registration.identificationLeafXonlyPubkey,
+  };
+}
+
+// Strict checkpoint validation: a legacy line (single ambiguous
+// leafXonlyPubkey), a line missing either canonical leaf field, or a line
+// whose leaf keys do not match its own xpub is rejected outright. Resuming
+// from such a line would silently rebuild a different vault address than a
+// fresh run — the exact bug this format exists to prevent.
+function parseSetupCheckpointLine(line: string): LiveKeyRegistration {
+  const parsed = JSON.parse(line) as Partial<LiveKeyRegistration> & {
+    leafXonlyPubkey?: string;
+  };
+  const where = `${parsed.participantId ?? '?'}:${parsed.round ?? '?'}`;
+  if (parsed.leafXonlyPubkey !== undefined) {
+    throw new Error(
+      `legacy setup checkpoint entry for ${where} (single leafXonlyPubkey): the dual-leaf ` +
+        'format requires policyLeafXonlyPubkey and identificationLeafXonlyPubkey. Move the old ' +
+        'checkpoint aside and re-run sigbash-live-setup (existing keys cannot be reused safely).',
+    );
+  }
+  for (const field of [
+    'participantId',
+    'round',
+    'keyId',
+    'keyIdEnvName',
+    'bip328Xpub',
+    'policyLeafXonlyPubkey',
+    'identificationLeafXonlyPubkey',
+  ] as const) {
+    if (typeof parsed[field] !== 'string' || parsed[field] === '') {
+      throw new Error(`incomplete setup checkpoint entry for ${where}: missing ${field}`);
+    }
+  }
+  const registration = parsed as LiveKeyRegistration;
+  const expectedPolicyLeaf = deriveXpubChildPubkey(registration.bip328Xpub, [0, 0]).xonlyPubKeyHex;
+  if (registration.policyLeafXonlyPubkey !== expectedPolicyLeaf) {
+    throw new Error(
+      `mixed/corrupt setup checkpoint entry for ${where}: policyLeafXonlyPubkey is not the xpub's child 0/0`,
+    );
+  }
+  const expectedIdentificationLeaf = xpubRootXonly(registration.bip328Xpub);
+  if (registration.identificationLeafXonlyPubkey !== expectedIdentificationLeaf) {
+    throw new Error(
+      `mixed/corrupt setup checkpoint entry for ${where}: identificationLeafXonlyPubkey is not the xpub's internal root`,
+    );
+  }
+  return registration;
+}
+
 // Creates one immutable Sigbash key per (participant, round-they-could-leave):
 // nine keys total. Pair-round keys are created first because their policies
 // reference only payout addresses; round-one policies then pin the pair-round
@@ -2562,37 +2998,27 @@ async function sigbashLiveSetup() {
   const bootstrapState = createDemoState();
   const allIds = participantIds(bootstrapState);
   const roundOne = roundId(allIds);
-  const leafOverrides: Record<string, Record<string, { key: string; xpub: string }>> =
-    Object.fromEntries(allIds.map((id) => [id, {}]));
-  interface LiveKeyRegistration {
-    participantId: string;
-    round: string;
-    keyId: string;
-    keyIndex: number;
-    keyIdEnvName: string;
-    bip328Xpub: string;
-    leafXonlyPubkey: string;
-    leafKeyCandidates: { xpubRoot: string; xpubChild00: string; tweakedAggregate: string | null };
-    helperP2trAddressDoNotFund: string | undefined;
-    policyRoot: string;
-    policyId: string;
-  }
+  const leafOverrides: Record<
+    string,
+    Record<string, { key: string; xpub: string; identificationKey: string }>
+  > = Object.fromEntries(allIds.map((id) => [id, {}]));
   // Resumable checkpoint: each successful registration is appended here so a
   // rate-limit/timeout partway through does not strand created keys. Rerunning
-  // reloads it and skips (participant, round) pairs already registered.
+  // reloads it and skips (participant, round) pairs already registered. Fresh
+  // and resumed runs build the leaf overrides through the same
+  // checkpointRegistrationToOverride() so they can never derive different
+  // vault addresses; legacy/mixed/incomplete checkpoint lines abort the run.
   const checkpointPath = process.env.SIGBASH_SETUP_CHECKPOINT || 'live-run/setup-checkpoint.jsonl';
   const registrations: LiveKeyRegistration[] = [];
   const doneKeys = new Set<string>();
   if (existsSync(checkpointPath)) {
     for (const line of readFileSync(checkpointPath, 'utf8').split('\n')) {
       if (!line.trim()) continue;
-      const registration = JSON.parse(line) as LiveKeyRegistration;
+      const registration = parseSetupCheckpointLine(line);
       registrations.push(registration);
       doneKeys.add(`${registration.participantId}:${registration.round}`);
-      leafOverrides[registration.participantId]![registration.round] = {
-        key: registration.leafXonlyPubkey,
-        xpub: registration.bip328Xpub,
-      };
+      leafOverrides[registration.participantId]![registration.round] =
+        checkpointRegistrationToOverride(registration);
     }
     console.error(`  resuming: ${doneKeys.size} key(s) already registered`);
   }
@@ -2614,18 +3040,13 @@ async function sigbashLiveSetup() {
       verbose: true,
     });
     assert(created.bip328Xpub, `Sigbash did not return bip328Xpub for ${participantId}:${round}`);
-    // Leaf-key assumption (see README): the SDK's documented multisig
-    // integration derives co-signer leaf keys from the BIP-328 xpub at child
-    // path 0/0. The tweaked aggregate is printed as the fallback candidate —
-    // if live verifyPSBT rejects REQKEY, swap SIGBASH_LEAF_KEYS_JSON to it.
-    const xpubChildLeaf = deriveXpubChildPubkey(created.bip328Xpub, [0, 0]).xonlyPubKeyHex;
-    const xpubRootLeaf = xpubRootXonly(created.bip328Xpub);
-    // Leaf key = xpub child 0/0: proven on live signet to satisfy the
-    // descriptor-mode REQKEY policy clause. NOTE (see REVIEW.md "Live Sigbash
-    // findings"): Sigbash accepts the policy with this leaf but does not yet
-    // identify the input as one it controls, so live co-signing is not wired
-    // up end to end — the root/aggregate keys are kept as diagnostic fallbacks.
-    leafOverrides[participantId]![round] = { key: xpubChildLeaf, xpub: created.bip328Xpub! };
+    // Dual-leaf structure, live-verified (see REVIEW.md "Input identification
+    // — solved"): the xpub child 0/0 is the policy-spend leaf key that
+    // satisfies the descriptor-mode REQKEY clause; the xpub's internal root
+    // is the identification leaf key that satisfies input identification.
+    // Both are persisted as separate canonical checkpoint fields.
+    const policyLeafXonlyPubkey = deriveXpubChildPubkey(created.bip328Xpub, [0, 0]).xonlyPubKeyHex;
+    const identificationLeafXonlyPubkey = xpubRootXonly(created.bip328Xpub);
     const registration: LiveKeyRegistration = {
       participantId,
       round,
@@ -2633,18 +3054,13 @@ async function sigbashLiveSetup() {
       keyIndex: created.keyIndex,
       keyIdEnvName: sigbashKeyIdEnvName(participantId, round),
       bip328Xpub: created.bip328Xpub,
-      leafXonlyPubkey: xpubRootLeaf,
-      leafKeyCandidates: {
-        xpubRoot: xpubRootLeaf,
-        xpubChild00: xpubChildLeaf,
-        tweakedAggregate: created.aggregatePubKeyHex
-          ? normalizeXonly(created.aggregatePubKeyHex)
-          : null,
-      },
+      policyLeafXonlyPubkey,
+      identificationLeafXonlyPubkey,
       helperP2trAddressDoNotFund: created.p2trAddress,
       policyRoot: created.policyRoot,
       policyId: policy.id,
     };
+    leafOverrides[participantId]![round] = checkpointRegistrationToOverride(registration);
     registrations.push(registration);
     doneKeys.add(`${participantId}:${round}`);
     appendFileSync(checkpointPath, `${JSON.stringify(registration)}\n`);
@@ -2668,6 +3084,10 @@ async function sigbashLiveSetup() {
   printResult('live Sigbash setup', {
     warning:
       'Do not fund any helper p2trAddress. Fund only the printed round-one vault address, and only after verifying every key registration above succeeded.',
+    liveSigningGate:
+      'Registration and verifyPSBT are proven live; actual live signPSBT success remains an ' +
+      'external gate (Sigbash server signing service error — see REVIEW.md). Do not fund on the ' +
+      'assumption that live solo signing works.',
     registrations,
     envExports: [
       `SIGBASH_LEAF_KEYS_JSON='${JSON.stringify(leafOverrides)}'`,
@@ -2729,8 +3149,14 @@ function printSetup(state: VaultState): void {
       payoutAddress: p.payoutAddress,
       payoutXonlyPubkey: p.payout.xonlyPubKeyHex,
       personalXonlyPubkey: p.personal.xonlyPubKeyHex,
-      sigbashLeafXonlyPubkeysByRound: Object.fromEntries(
+      sigbashPolicyLeafXonlyPubkeysByRound: Object.fromEntries(
         Object.entries(p.sigbashByRound).map(([round, key]) => [round, key.xonlyPubKeyHex]),
+      ),
+      sigbashIdentificationLeafXonlyPubkeysByRound: Object.fromEntries(
+        Object.entries(p.sigbashByRound).map(([round, key]) => [
+          round,
+          key.identificationXonlyPubKeyHex,
+        ]),
       ),
     })),
     vaults: [...state.vaults.values()].map((vault) => ({
@@ -2865,10 +3291,6 @@ function impossibleBootstrapPolicy(participantId: string) {
       },
     ],
   };
-}
-
-function normalizeXonly(pubkeyHex: string): string {
-  return pubkeyHex.length === 66 ? pubkeyHex.slice(2) : pubkeyHex;
 }
 
 function loadDotenv() {
@@ -3545,10 +3967,20 @@ function psbtInspectionToPolicyTx({
   state: VaultState;
   inspection: PsbtInspection;
 }): PolicyTx {
-  const scriptHex = inspection.inputs[0]?.tapLeafScript?.[0]?.scriptHex;
-  const leaf = scriptHex ? findLeafByScriptHex(state, scriptHex) : null;
+  // Only a policy-spend leaf may supply the REQKEY-checked leaf key,
+  // regardless of tapLeafScript ordering. An identification leaf (or any
+  // unknown script) contributes nothing, so a PSBT carrying only the
+  // identification leaf can never satisfy a policy's REQKEY clause.
+  let sigbashLeafKey: string | undefined;
+  for (const item of inspection.inputs[0]?.tapLeafScript ?? []) {
+    const leaf = findLeafByScriptHex(state, item.scriptHex);
+    if (leaf?.type === 'solo-withdrawal') {
+      sigbashLeafKey = leaf.sigbashXonlyPubkey;
+      break;
+    }
+  }
   return {
-    sigbashLeafKey: leaf && leaf.type === 'solo-withdrawal' ? leaf.sigbashXonlyPubkey : undefined,
+    sigbashLeafKey,
     inputCount: inspection.inputCount,
     outputs: inspection.outputs.map((output) => ({
       address: output.address,

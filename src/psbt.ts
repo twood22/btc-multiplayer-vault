@@ -151,7 +151,23 @@ export interface BuiltPsbt {
   psbtHex: string;
   txTemplate: {
     input: { txid: string; vout: number; valueSats: number; scriptPubKeyHex: Hex };
-    tapLeafScript: { leafVersion: number; scriptHex: Hex; controlBlockHex: Hex };
+    /** The policy-spend leaf — the only leaf solo signing may use. */
+    tapLeafScript: {
+      leafVersion: number;
+      scriptHex: Hex;
+      controlBlockHex: Hex;
+      role: 'policy-spend';
+    };
+    /**
+     * The Sigbash identification leaf. Included in the PSBT so live Sigbash
+     * recognizes the input; must never be signed or finalized.
+     */
+    identificationLeaf: {
+      leafVersion: number;
+      scriptHex: Hex;
+      controlBlockHex: Hex;
+      role: 'identification-only';
+    };
     outputs: Array<{ index: number; address: string; valueSats: number }>;
     feeSats: number;
     configuredFeeSats: number;
@@ -205,10 +221,54 @@ export function buildSoloWithdrawalTamperPsbts(params: SoloPsbtParams): {
   };
 }
 
+/**
+ * Negative-regression fixture only: a solo-shaped PSBT whose sole
+ * tapLeafScript is the Sigbash identification leaf. Local solo signing and
+ * the local policy preflight must both reject it — the identification leaf
+ * carries no spend authority in the local model.
+ */
+export function buildIdentificationLeafMisusePsbt(params: SoloPsbtParams): {
+  round: string;
+  leaverId: string;
+  psbtBase64: string;
+  identificationLeafScriptHex: Hex;
+} {
+  const context = soloWithdrawalContext(params);
+  const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
+  psbt.addInput({
+    hash: context.txid,
+    index: context.vout,
+    witnessUtxo: {
+      script: Buffer.from(context.vault.outputScriptHex, 'hex'),
+      value: BigInt(context.valueSats),
+    },
+    tapInternalKey: Buffer.from(context.vault.keyPath.aggregateXonlyPubkey, 'hex'),
+    tapLeafScript: [
+      {
+        leafVersion: 0xc0,
+        script: Buffer.from(context.identificationLeaf.scriptHex, 'hex'),
+        controlBlock: Buffer.from(context.identificationLeaf.controlBlockHex, 'hex'),
+      },
+    ],
+  });
+  for (const output of context.outputs) {
+    psbt.addOutput({ address: output.address, value: BigInt(output.valueSats) });
+  }
+  return {
+    round: context.round,
+    leaverId: context.leaverId,
+    psbtBase64: psbt.toBase64(),
+    identificationLeafScriptHex: context.identificationLeaf.scriptHex,
+  };
+}
+
 interface SoloContext {
   round: string;
   vault: VaultRound;
+  /** Policy-spend leaf pk(child 0/0): the leaf that is signed and finalized. */
   leaf: { scriptHex: Hex; controlBlockHex: Hex };
+  /** Identification leaf pk(internal root): carried for Sigbash, never signed. */
+  identificationLeaf: { scriptHex: Hex; controlBlockHex: Hex };
   leaverId: string;
   txid: string;
   vout: number;
@@ -218,9 +278,11 @@ interface SoloContext {
   outputs: Array<{ index?: number; address: string; valueSats: number }>;
   tamper?: string;
   /**
-   * BIP-371 derivation for the Sigbash leaf key (live mode). Without this the
-   * Sigbash WASM wallet does not recognize the vault input as one it controls
-   * ("no Sigbash-controlled inputs found in PSBT").
+   * BIP-371 derivation for the Sigbash *policy* leaf key — the xpub child
+   * 0/0 (live mode). Without this the Sigbash WASM wallet does not recognize
+   * the vault input as one it controls ("no Sigbash-controlled inputs found
+   * in PSBT"). The identification leaf gets no derivation entry: it carries
+   * the xpub's own root key.
    */
   tapBip32Derivation?: {
     masterFingerprint: Buffer;
@@ -230,15 +292,29 @@ interface SoloContext {
   };
 }
 
+export function soloLeavesOf(vault: VaultRound, participantId: string) {
+  const policyLeaf = vault.tapscriptLeaves.find(
+    (item) => item.type === 'solo-withdrawal' && item.participantId === participantId,
+  );
+  if (!policyLeaf) throw new Error(`no solo leaf for ${participantId} in ${vault.id}`);
+  const identificationLeaf = vault.tapscriptLeaves.find(
+    (item) => item.type === 'sigbash-identification' && item.participantId === participantId,
+  );
+  if (!identificationLeaf) {
+    throw new Error(`no Sigbash identification leaf for ${participantId} in ${vault.id}`);
+  }
+  if (identificationLeaf.scriptHex === policyLeaf.scriptHex) {
+    throw new Error(`identification leaf equals policy leaf for ${participantId} in ${vault.id}`);
+  }
+  return { policyLeaf, identificationLeaf };
+}
+
 function soloWithdrawalContext({ state, currentIds, leaverId, txid, vout, valueSats }: SoloPsbtParams): SoloContext {
   const round = roundId(currentIds);
   const vault = requireVault(state, currentIds);
   const policy = state.policies.get(policyId(currentIds, leaverId));
   if (!policy) throw new Error(`unknown solo policy ${policyId(currentIds, leaverId)}`);
-  const leaf = vault.tapscriptLeaves.find(
-    (item) => item.type === 'solo-withdrawal' && item.participantId === leaverId,
-  );
-  if (!leaf) throw new Error(`no solo leaf for ${leaverId} in ${round}`);
+  const { policyLeaf: leaf, identificationLeaf } = soloLeavesOf(vault, leaverId);
 
   const payout = outputValue(policy, 0, 'EQ');
   const nextAddress = outputAddress(policy, 1);
@@ -261,6 +337,7 @@ function soloWithdrawalContext({ state, currentIds, leaverId, txid, vout, valueS
     round,
     vault,
     leaf,
+    identificationLeaf,
     leaverId,
     txid,
     vout,
@@ -279,6 +356,7 @@ function buildSoloWithdrawalPsbtFromOutputs({
   round,
   vault,
   leaf,
+  identificationLeaf,
   leaverId,
   txid,
   vout,
@@ -301,11 +379,20 @@ function buildSoloWithdrawalPsbtFromOutputs({
       value: BigInt(valueSats),
     },
     tapInternalKey: Buffer.from(vault.keyPath.aggregateXonlyPubkey, 'hex'),
+    // Both Sigbash leaves ride in the PSBT: the policy leaf is the one that
+    // gets signed; the identification leaf lets live Sigbash recognize the
+    // input ("aggregate key found in tapscript leaf"). Local signing selects
+    // by script, never by position.
     tapLeafScript: [
       {
         leafVersion: 0xc0,
         script: Buffer.from(leaf.scriptHex, 'hex'),
         controlBlock: Buffer.from(leaf.controlBlockHex, 'hex'),
+      },
+      {
+        leafVersion: 0xc0,
+        script: Buffer.from(identificationLeaf.scriptHex, 'hex'),
+        controlBlock: Buffer.from(identificationLeaf.controlBlockHex, 'hex'),
       },
     ],
     ...(tapBip32Derivation ? { tapBip32Derivation: [tapBip32Derivation] } : {}),
@@ -326,6 +413,13 @@ function buildSoloWithdrawalPsbtFromOutputs({
         leafVersion: 0xc0,
         scriptHex: leaf.scriptHex,
         controlBlockHex: leaf.controlBlockHex,
+        role: 'policy-spend',
+      },
+      identificationLeaf: {
+        leafVersion: 0xc0,
+        scriptHex: identificationLeaf.scriptHex,
+        controlBlockHex: identificationLeaf.controlBlockHex,
+        role: 'identification-only',
       },
       outputs: outputs.map((output, index) => ({
         index,
@@ -355,21 +449,28 @@ export function signSoloWithdrawalPsbt({
   currentIds: string[];
   leaverId: string;
   psbtBase64: string;
-}): SignedTransaction & { round: string; leaverId: string; mode: string } {
+}): SignedTransaction & {
+  round: string;
+  leaverId: string;
+  mode: string;
+  signedLeaf: { role: 'policy-spend'; scriptHex: Hex };
+} {
   const round = roundId(currentIds);
   const vault = requireVault(state, currentIds);
   const participant = participantById(state, leaverId);
-  const leaf = vault.tapscriptLeaves.find(
-    (item) => item.type === 'solo-withdrawal' && item.participantId === leaverId,
-  );
-  if (!leaf) throw new Error(`no solo leaf for ${leaverId} in ${round}`);
+  const { policyLeaf: leaf, identificationLeaf } = soloLeavesOf(vault, leaverId);
 
   const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: bitcoin.networks.testnet });
   const input = psbt.data.inputs[0];
   const psbtLeaf = input?.tapLeafScript?.find(
     (item) => Buffer.from(item.script).toString('hex') === leaf.scriptHex,
   );
-  if (!psbtLeaf) throw new Error(`PSBT does not contain ${leaverId} solo leaf for ${round}`);
+  if (!psbtLeaf) {
+    throw new Error(
+      `PSBT does not contain the ${leaverId} policy-spend leaf for ${round}; ` +
+        'the identification leaf alone is never signable',
+    );
+  }
   const roundSigbashKey = sigbashRoundKey(participant, round);
   if (roundSigbashKey.isLiveKey) {
     throw new Error(
@@ -381,8 +482,19 @@ export function signSoloWithdrawalPsbt({
     ecc.verifySchnorr(hash, pubkey, signature),
   );
   if (!signaturesValid) throw new Error('solo withdrawal signature validation failed');
-  psbt.finalizeTaprootInput(0);
+  // Finalize the policy leaf by its leaf hash so the identification leaf can
+  // never be selected, then verify the extracted witness actually spends the
+  // policy leaf script.
+  psbt.finalizeTaprootInput(0, tapLeafHash(Buffer.from(leaf.scriptHex, 'hex')));
   const transaction = psbt.extractTransaction();
+  const witness = transaction.ins[0]?.witness ?? [];
+  const witnessScriptHex = witness.at(-2) ? Buffer.from(witness.at(-2)!).toString('hex') : '';
+  if (witnessScriptHex !== leaf.scriptHex) {
+    throw new Error('finalized solo witness does not spend the policy-spend leaf');
+  }
+  if (witnessScriptHex === identificationLeaf.scriptHex) {
+    throw new Error('finalized solo witness spends the identification leaf');
+  }
   return {
     round,
     leaverId,
@@ -391,6 +503,7 @@ export function signSoloWithdrawalPsbt({
     transactionHex: transaction.toHex(),
     txid: transaction.getId(),
     mode: 'local-deterministic-sigbash-leaf',
+    signedLeaf: { role: 'policy-spend', scriptHex: leaf.scriptHex },
   };
 }
 
@@ -817,6 +930,12 @@ export function inspectPsbt(psbtBase64: string): PsbtInspection {
           leafVersion: leaf.leafVersion,
           scriptHex: Buffer.from(leaf.script).toString('hex'),
           controlBlockHex: Buffer.from(leaf.controlBlock).toString('hex'),
+        })),
+        tapBip32Derivation: psbtInput?.tapBip32Derivation?.map((derivation) => ({
+          masterFingerprintHex: Buffer.from(derivation.masterFingerprint).toString('hex'),
+          pubkeyHex: Buffer.from(derivation.pubkey).toString('hex'),
+          path: derivation.path,
+          leafHashesHex: derivation.leafHashes.map((hash) => Buffer.from(hash).toString('hex')),
         })),
       };
     }),

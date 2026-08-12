@@ -85,9 +85,17 @@ export interface SigbashAdapter {
   signPSBT(tx: AdapterTx, policy: SoloPolicy): Promise<SigbashSignResult>;
 }
 
-export async function createSigbashAdapter(): Promise<SigbashAdapter> {
+/**
+ * participantId selects the per-participant Sigbash credential triplet
+ * (SIGBASH_API_KEY_<ID> etc.) in live mode, so verify and sign for a given
+ * leaver always run under that participant's own credentials. The local
+ * adapter has no credentials and ignores it.
+ */
+export async function createSigbashAdapter(
+  { participantId }: { participantId?: string } = {},
+): Promise<SigbashAdapter> {
   if (process.env.SIGBASH_MODE === 'live') {
-    return LiveSigbashAdapter.create();
+    return LiveSigbashAdapter.create({ participantId });
   }
   return new LocalSigbashAdapter();
 }
@@ -130,8 +138,14 @@ function isPolicyTx(tx: AdapterTx): tx is PolicyTx {
 }
 
 class LiveSigbashAdapter implements SigbashAdapter {
-  static async create(): Promise<LiveSigbashAdapter> {
-    const { sdk, client } = await createLiveSigbashClient();
+  static async create(
+    { participantId }: { participantId?: string } = {},
+  ): Promise<LiveSigbashAdapter> {
+    // Only participantId is threaded through: verify/sign are driven entirely
+    // by the KMC fetched via getKey() — the SDK's signPSBT surface takes
+    // {keyId, psbtBase64, kmcJSON, network} and nothing else, so no extra key
+    // material (e.g. a musig2PrivateKey) may be invented here.
+    const { sdk, client } = await createLiveSigbashClient({ participantId });
     return new LiveSigbashAdapter(sdk, client);
   }
 
@@ -156,6 +170,12 @@ class LiveSigbashAdapter implements SigbashAdapter {
     });
   }
 
+  // TODO(live-gate): actual live signPSBT success remains an external gate.
+  // With the dual-leaf tree, live verifyPSBT passes and the client pipeline
+  // reaches "sign tapscript input 0", but Sigbash's server signing service
+  // still returns "server_error: Signing service error". Nothing in this
+  // repository may claim end-to-end live signing works until Sigbash
+  // resolves that server-side failure.
   async signPSBT(tx: AdapterTx, policy: SoloPolicy): Promise<SigbashSignResult> {
     if (!('psbtBase64' in tx) || !tx.psbtBase64 || !policy.keyId) {
       throw new Error('live signing requires tx.psbtBase64 and policy.keyId');
