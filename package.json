@@ -12,7 +12,7 @@
     "web:test:db": "tsx web/tests/broadcast-db-acceptance.ts",
     "web:test:browser": "playwright test web/browser-tests/passkey-prf.spec.ts",
     "web:migrate": "tsx web/scripts/migrate.ts",
-    "web:create-invite": "tsx web/scripts/create-invite.ts",
+    "web:create-invite": "NODE_OPTIONS=--conditions=react-server tsx web/scripts/create-invite.ts",
     "web:watch-chain": "NODE_OPTIONS=--conditions=react-server tsx web/scripts/watch-chain.ts",
     "web:record-funding": "NODE_OPTIONS=--conditions=react-server tsx web/scripts/record-funding.ts",
     "web:release-status": "tsx web/scripts/release-status.ts",
@@ -72,6 +72,7 @@
     "sigbash-live-setup": "tsx src/cli.ts sigbash-live-setup",
     "typecheck": "tsc --noEmit",
     "live-policy-dry-run": "tsx src/cli.ts live-policy-dry-run",
+    "live-predeployment-proof": "tsx src/cli.ts live-policy-dry-run --sign true",
     "ceremony-start": "tsx src/cli.ts ceremony-start",
     "ceremony-nonce": "tsx src/cli.ts ceremony-nonce",
     "ceremony-partial": "tsx src/cli.ts ceremony-partial",
@@ -96,6 +97,7 @@
     "react-dom": "^19.2.4",
     "server-only": "^0.0.1",
     "tiny-secp256k1": "^2.2.4",
+    "tsx": "^4.23.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {
@@ -103,7 +105,6 @@
     "@types/node": "^26.1.0",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
-    "tsx": "^4.23.0",
     "typescript": "^6.0.3"
   }
 }

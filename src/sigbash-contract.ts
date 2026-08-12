@@ -17,6 +17,7 @@ import type {
 import {
   normalizeSigbashSigningResult,
   resolveSigbashCredentials,
+  sigbashVerificationExplicitlyRejected,
   sigbashVerificationPassed,
   validateWasmSha384,
   type SigbashVerifyResult,
@@ -118,6 +119,13 @@ function verificationGateChecks(): ContractCheck[] {
       sigbashVerificationPassed(absentBoolean) === false,
     ),
     check('verification fails when passed === false', sigbashVerificationPassed(failing) === false),
+    check(
+      'hostile rejection accepts only an explicit passed false verdict',
+      sigbashVerificationExplicitlyRejected(failing) === true &&
+        sigbashVerificationExplicitlyRejected(passing) === false &&
+        sigbashVerificationExplicitlyRejected(absentBoolean) === false &&
+        sigbashVerificationExplicitlyRejected(null) === false,
+    ),
     check(
       'verification fails when passed === true but an error is present',
       sigbashVerificationPassed(passedWithError) === false,

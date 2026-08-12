@@ -90,6 +90,13 @@ export function sigbashVerificationPassed(
   return result?.passed === true && result.error === undefined;
 }
 
+/** Only the service's explicit negative verdict counts as hostile-PSBT rejection. */
+export function sigbashVerificationExplicitlyRejected(
+  result: SigbashVerifyResult | { passed?: boolean } | null | undefined,
+): boolean {
+  return result?.passed === false;
+}
+
 export interface NormalizedSigningResult {
   success: boolean;
   txHex: string | null;

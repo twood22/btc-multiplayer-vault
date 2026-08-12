@@ -3,20 +3,27 @@ import { existsSync } from 'node:fs';
 import { loadEnvFile } from 'node:process';
 import postgres from 'postgres';
 import { getBlockchainInfo } from '../../src/bitcoin-rpc';
+import { databaseEndpointCheck } from '../lib/database-config';
+import { EXPECTED_MIGRATION_VERSIONS } from '../lib/migrations';
 
 if (existsSync('.env.local')) loadEnvFile('.env.local');
 
 interface Check { name: string; ok: boolean; detail?: string }
 const checks: Check[] = [];
 const manualGates = [
+  'The predeployment live-predeployment-proof output must show a real consensus-authorized Sigbash mainnet signature.',
   'Each friend must complete setup and recovery with two real, distinct PRF-capable passkeys.',
   'Each friend must independently review the unanimous roster and tiny-mainnet economics.',
   'The selected production database backup and restore procedure must be exercised.',
   'Funding remains a separate explicit decision after this report passes.',
 ];
 
-const nodeMajor = Number(process.versions.node.split('.')[0]);
-checks.push(check('declared Node runtime is active', nodeMajor >= 22, `Node ${process.versions.node}`));
+const reviewedNodeVersion = '22.23.2';
+checks.push(check(
+  'reviewed Node runtime is active',
+  process.versions.node === reviewedNodeVersion,
+  `Node ${process.versions.node}; expected ${reviewedNodeVersion}`,
+));
 
 const rpId = process.env.WEBAUTHN_RP_ID;
 const webauthnOrigin = parsedOrigin(process.env.WEBAUTHN_ORIGIN);
@@ -84,71 +91,69 @@ if (process.env.DATABASE_URL) {
     databaseEndpoint.ok,
     databaseEndpoint.detail,
   ));
-  const sql = postgres(process.env.DATABASE_URL, { max: 1, connect_timeout: 10 });
-  try {
-    const version = await sql<Array<{ version: string }>>`SELECT version()`;
-    checks.push(check('production database is PostgreSQL 16 or newer',
-      /PostgreSQL (1[6-9]|[2-9][0-9])\./u.test(version[0]?.version || '')));
-    const migrations = await sql<Array<{ version: string }>>`
-      SELECT version FROM schema_migrations ORDER BY version
-    `;
-    const expectedMigrations = [
-      '001_passkey_custody',
-      '002_multi_passkey_recovery',
-      '003_roster_ceremony',
-      '004_sigbash_custody',
-      '005_vault_runtime',
-      '006_sigbash_readiness',
-      '007_broadcast_approval',
-      '008_security_rate_limits',
-    ];
+  if (!databaseEndpoint.ok) {
     checks.push(check(
-      'all required database migrations are applied',
-      JSON.stringify(migrations.map((row) => row.version)) === JSON.stringify(expectedMigrations),
-      `${migrations.length}/${expectedMigrations.length} migrations`,
+      'production database readiness query succeeds',
+      false,
+      'not attempted until the database endpoint passes TLS validation',
     ));
-    const states = await sql<Array<{
-      vaults: number;
-      ready_vaults: number;
-      members: number;
-      recovery_ready_members: number;
-      live_sigbash_keys: number;
-      roster_confirmations: number;
-      readiness_proofs: number;
-      current_coins: number;
-    }>>`
-      SELECT
-        (SELECT count(*)::integer FROM vaults) AS vaults,
-        (SELECT count(*)::integer FROM vaults WHERE status = 'ready') AS ready_vaults,
-        (SELECT count(*)::integer FROM vault_members) AS members,
-        (SELECT count(*)::integer FROM (
-          SELECT user_id FROM webauthn_credentials c
-          JOIN passkey_envelopes e USING (credential_id)
-          WHERE c.prf_enabled = true
-          GROUP BY user_id HAVING count(DISTINCT c.credential_id) >= 2
-        ) recovered) AS recovery_ready_members,
-        (SELECT count(*)::integer FROM participant_sigbash_keys) AS live_sigbash_keys,
-        (SELECT count(*)::integer FROM roster_confirmations) AS roster_confirmations,
-        (SELECT count(*)::integer FROM participant_sigbash_readiness_proofs) AS readiness_proofs,
-        (SELECT count(*)::integer FROM vault_coins WHERE status = 'current') AS current_coins
-    `;
-    const state = states[0]!;
-    checks.push(check('exactly one three-person private-beta vault exists',
-      state.vaults === 1 && state.members === 3, `${state.vaults} vault(s); ${state.members} member(s)`));
-    checks.push(check('all three participants have two completed PRF passkey envelopes',
-      state.recovery_ready_members === 3, `${state.recovery_ready_members}/3 participants`));
-    checks.push(check('the immutable roster has nine live Sigbash keys and three confirmations',
-      state.live_sigbash_keys === 9 && state.roster_confirmations === 3,
-      `${state.live_sigbash_keys}/9 keys; ${state.roster_confirmations}/3 confirmations`));
-    checks.push(check('all nine server-verified Sigbash readiness proofs are recorded',
-      state.readiness_proofs === 9 && state.ready_vaults === 1,
-      `${state.readiness_proofs}/9 proofs; ${state.ready_vaults} ready vault(s)`));
-    checks.push(check('the pre-funding database contains no current Bitcoin coin',
-      state.current_coins === 0, `${state.current_coins} current coin(s)`));
-  } catch (error) {
-    checks.push(check('production database readiness query succeeds', false, safeError(error)));
-  } finally {
-    await sql.end();
+  } else {
+    const sql = postgres(process.env.DATABASE_URL, { max: 1, connect_timeout: 10 });
+    try {
+      const version = await sql<Array<{ version: string }>>`SELECT version()`;
+      checks.push(check('production database is PostgreSQL 16 or newer',
+        /PostgreSQL (1[6-9]|[2-9][0-9])\./u.test(version[0]?.version || '')));
+      const migrations = await sql<Array<{ version: string }>>`
+        SELECT version FROM schema_migrations ORDER BY version
+      `;
+      checks.push(check(
+        'all required database migrations are applied',
+        JSON.stringify(migrations.map((row) => row.version)) === JSON.stringify(EXPECTED_MIGRATION_VERSIONS),
+        `${migrations.length}/${EXPECTED_MIGRATION_VERSIONS.length} migrations`,
+      ));
+      const states = await sql<Array<{
+        vaults: number;
+        ready_vaults: number;
+        members: number;
+        recovery_ready_members: number;
+        live_sigbash_keys: number;
+        roster_confirmations: number;
+        readiness_proofs: number;
+        current_coins: number;
+      }>>`
+        SELECT
+          (SELECT count(*)::integer FROM vaults) AS vaults,
+          (SELECT count(*)::integer FROM vaults WHERE status = 'ready') AS ready_vaults,
+          (SELECT count(*)::integer FROM vault_members) AS members,
+          (SELECT count(*)::integer FROM (
+            SELECT user_id FROM webauthn_credentials c
+            JOIN passkey_envelopes e USING (credential_id)
+            WHERE c.prf_enabled = true
+            GROUP BY user_id HAVING count(DISTINCT c.credential_id) >= 2
+          ) recovered) AS recovery_ready_members,
+          (SELECT count(*)::integer FROM participant_sigbash_keys) AS live_sigbash_keys,
+          (SELECT count(*)::integer FROM roster_confirmations) AS roster_confirmations,
+          (SELECT count(*)::integer FROM participant_sigbash_readiness_proofs) AS readiness_proofs,
+          (SELECT count(*)::integer FROM vault_coins WHERE status = 'current') AS current_coins
+      `;
+      const state = states[0]!;
+      checks.push(check('exactly one three-person private-beta vault exists',
+        state.vaults === 1 && state.members === 3, `${state.vaults} vault(s); ${state.members} member(s)`));
+      checks.push(check('all three participants have two completed PRF passkey envelopes',
+        state.recovery_ready_members === 3, `${state.recovery_ready_members}/3 participants`));
+      checks.push(check('the immutable roster has nine live Sigbash keys and three confirmations',
+        state.live_sigbash_keys === 9 && state.roster_confirmations === 3,
+        `${state.live_sigbash_keys}/9 keys; ${state.roster_confirmations}/3 confirmations`));
+      checks.push(check('all nine server-verified Sigbash readiness proofs are recorded',
+        state.readiness_proofs === 9 && state.ready_vaults === 1,
+        `${state.readiness_proofs}/9 proofs; ${state.ready_vaults} ready vault(s)`));
+      checks.push(check('the pre-funding database contains no current Bitcoin coin',
+        state.current_coins === 0, `${state.current_coins} current coin(s)`));
+    } catch (error) {
+      checks.push(check('production database readiness query succeeds', false, safeError(error)));
+    } finally {
+      await sql.end();
+    }
   }
 } else {
   checks.push(check('production database is configured', false));
@@ -168,11 +173,16 @@ if (process.env.BITCOIN_BACKEND || process.env.BITCOIN_RPC_URL) {
 
 const automatedPreflightPassed = checks.every((item) => item.ok);
 console.log(JSON.stringify({
+  phase: 'funding',
   automatedPreflightPassed,
-  deploymentAndFundingAllowed: false,
+  fundingAllowed: false,
+  deploymentGate: {
+    evaluatedByThisReport: false,
+    command: 'SIGBASH_MODE=live npm run live-predeployment-proof -- --round alice,bob,carol --leaver alice',
+  },
   reason: automatedPreflightPassed
-    ? 'Automated checks passed; complete and document every manual gate before deployment. Funding is always a later, separate approval.'
-    : 'One or more mandatory automated gates are incomplete. Do not deploy or fund.',
+    ? 'Automated funding checks passed; complete and document every manual gate. Funding still requires a later, separate approval.'
+    : 'One or more mandatory automated funding gates are incomplete. Do not fund. This report does not evaluate the separate predeployment gate.',
   checks,
   manualGates,
 }, null, 2));
@@ -198,21 +208,6 @@ function explicitInteger(name: string): number | null {
   if (!raw || !/^\d+$/u.test(raw)) return null;
   const value = Number(raw);
   return Number.isSafeInteger(value) ? value : null;
-}
-
-function databaseEndpointCheck(raw: string): { ok: boolean; detail?: string } {
-  try {
-    const url = new URL(raw);
-    const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1';
-    const sslMode = url.searchParams.get('sslmode');
-    return {
-      ok: (url.protocol === 'postgres:' || url.protocol === 'postgresql:') &&
-        !local && (sslMode === 'require' || sslMode === 'verify-full'),
-      detail: local ? 'local database endpoint' : `sslmode=${sslMode || 'absent'}`,
-    };
-  } catch {
-    return { ok: false, detail: 'database URL is malformed' };
-  }
 }
 
 async function runtimePinCheck(name: string, rawUrl: string, expected: string | undefined): Promise<void> {

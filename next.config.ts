@@ -2,8 +2,23 @@ import type { NextConfig } from 'next';
 import path from 'node:path';
 
 const nextConfig: NextConfig = {
+  output: 'standalone',
   poweredByHeader: false,
   typescript: { tsconfigPath: './tsconfig.web.json' },
+  async headers() {
+    return [{
+      source: '/:path*',
+      headers: [
+        { key: 'Strict-Transport-Security', value: 'max-age=31536000' },
+        { key: 'Referrer-Policy', value: 'no-referrer' },
+        { key: 'X-Content-Type-Options', value: 'nosniff' },
+        { key: 'X-Frame-Options', value: 'DENY' },
+        { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), payment=()' },
+        { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
+        { key: 'Cross-Origin-Resource-Policy', value: 'same-origin' },
+      ],
+    }];
+  },
   // The authoritative vault core is Node ESM and correctly spells its local
   // imports with .js extensions. During the web build those imports point at
   // TypeScript source, so Webpack must apply the standard TS ESM extension

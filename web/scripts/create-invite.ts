@@ -2,6 +2,8 @@ import { randomBytes, createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { loadEnvFile } from 'node:process';
 import postgres from 'postgres';
+import { assertDatabaseUrl } from '../lib/database-config';
+import { webConfig } from '../lib/server/config';
 
 if (existsSync('.env.local')) loadEnvFile('.env.local');
 const args = parseArgs(process.argv.slice(2));
@@ -9,9 +11,10 @@ const participantId = required(args, 'participant');
 if (!['alice', 'bob', 'carol'].includes(participantId)) {
   throw new Error('--participant must be alice, bob, or carol');
 }
-const url = process.env.DATABASE_URL;
-if (!url) throw new Error('DATABASE_URL is required');
-const appOrigin = new URL(process.env.APP_ORIGIN || 'http://localhost:3000').origin;
+const url = assertDatabaseUrl(process.env.DATABASE_URL, {
+  production: process.env.NODE_ENV === 'production',
+});
+const appOrigin = webConfig().appOrigin;
 const hours = Number(args['expires-hours'] || 48);
 if (!Number.isInteger(hours) || hours < 1 || hours > 168) {
   throw new Error('--expires-hours must be an integer from 1 to 168');

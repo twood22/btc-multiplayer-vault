@@ -75,6 +75,7 @@ import {
   evaluatePolicy,
   normalizeSigbashSigningResult,
   resolveSigbashCredentials,
+  sigbashVerificationExplicitlyRejected,
   sigbashVerificationPassed,
   toPoetPolicy,
 } from './sigbash.js';
@@ -110,7 +111,7 @@ import {
   type VaultState,
 } from './types.js';
 import type { RpcTransaction, RpcTxInput, RpcTxOut, RpcTxOutput } from './bitcoin-rpc.js';
-import type { SigbashLiveClient, SigbashVerifyResult } from './sigbash.js';
+import type { SigbashLiveClient, SigbashSignResult, SigbashVerifyResult } from './sigbash.js';
 
 loadDotenv();
 
@@ -2452,8 +2453,8 @@ async function liveSoloWithdrawal() {
   ];
 
   let liveVerification = null;
-  let liveSignature = null;
-  let signedArtifacts = null;
+  let liveSignature: SigbashSignResult | null = null;
+  let signedArtifacts: ReturnType<typeof normalizeSigbashSigningResult> | null = null;
   let authorization: SoloSigningAuthorization | null = null;
   if (checks.every((item) => item.ok)) {
     const adapter = await createSigbashAdapter({ participantId: leaverId });
@@ -2532,11 +2533,12 @@ async function liveSoloWithdrawal() {
 
 // Pre-funding proving ground: builds the solo-withdrawal PSBT for a given (or
 // placeholder) vault outpoint and runs live Sigbash verifyPSBT on the valid
-// PSBT plus the three tamper variants — without touching Bitcoin Core and
-// without consuming a signing nullifier. Because every policy carries a
-// descriptor-mode REQKEY, a pass here also proves the tapscript leaf key we
-// derived from the key's xpub matches what Sigbash itself derives. Run this
-// for every (round, leaver) before funding anything.
+// PSBT plus the three tamper variants without touching Bitcoin Core. With the
+// explicit --sign true deployment gate, it additionally consumes one signing
+// nullifier, requests a real mainnet service signature, and independently
+// authorizes the returned transaction. Because every policy carries a
+// descriptor-mode REQKEY, a pass also proves the tapscript leaf key we derived
+// from the key's xpub matches what Sigbash itself derives.
 async function livePolicyDryRun() {
   assert(
     process.env.SIGBASH_MODE === 'live',
@@ -2548,6 +2550,7 @@ async function livePolicyDryRun() {
   const txid = stringArg(args, 'txid') || 'f'.repeat(64);
   const vout = Number(args.vout ?? 0);
   const valueSats = Number(stringArg(args, 'value-sats') ?? expectedVaultValueSats(currentIds));
+  const requestSignature = args.sign === true || args.sign === 'true';
   const state = createConfiguredState();
   const round = roundId(currentIds);
   const leafKey = sigbashRoundKey(participantById(state, leaverId), round);
@@ -2569,20 +2572,72 @@ async function livePolicyDryRun() {
   const checks = [
     check('Sigbash verifyPSBT accepts the valid solo PSBT (REQKEY leaf-key assumption holds)', sigbashVerificationPassed(liveValid), liveValid),
     ...Object.entries(liveTampered).map(([name, result]) =>
-      check(`Sigbash verifyPSBT rejects tampered ${name} PSBT`, !sigbashVerificationPassed(result), result),
+      check(
+        `Sigbash verifyPSBT explicitly rejects tampered ${name} PSBT`,
+        sigbashVerificationExplicitlyRejected(result),
+        result,
+      ),
     ),
   ];
-  printResult('live policy dry-run (no chain lookup, no nullifier consumed)', {
+  let liveSignature: SigbashSignResult | null = null;
+  let signedArtifacts: ReturnType<typeof normalizeSigbashSigningResult> | null = null;
+  let authorization: SoloSigningAuthorization | null = null;
+  if (requestSignature && checks.every((item) => item.ok)) {
+    liveSignature = await adapter.signPSBT({ psbtBase64: variants.valid.psbtBase64 }, policy);
+    signedArtifacts = normalizeSigbashSigningResult(liveSignature);
+    const artifactsReturned = Boolean(
+      signedArtifacts.success && (signedArtifacts.txHex || signedArtifacts.signedPsbtBase64),
+    );
+    checks.push(check(
+      'Sigbash live signPSBT returns a transaction or signed PSBT artifact',
+      artifactsReturned,
+      signedArtifacts,
+    ));
+    if (artifactsReturned) {
+      try {
+        authorization = authorizeSoloSigningArtifacts(
+          state,
+          currentIds,
+          leaverId,
+          variants.valid.psbtBase64,
+          {
+            txHex: signedArtifacts.txHex,
+            signedPsbtBase64: signedArtifacts.signedPsbtBase64,
+          },
+        );
+        checks.push(check(
+          'live Sigbash artifact is the exact consensus-valid policy-leaf transaction',
+          Boolean(authorization.finalTxid && authorization.consensus),
+          authorization,
+        ));
+      } catch (error) {
+        checks.push(check(
+          'live Sigbash artifact is the exact consensus-valid policy-leaf transaction',
+          false,
+          { error: errorMessage(error) },
+        ));
+      }
+    }
+  }
+  printResult(requestSignature
+    ? 'live predeployment Sigbash mainnet signing proof'
+    : 'live policy dry-run (no chain lookup, no nullifier consumed)', {
     round,
     leaverId,
     keyId,
     outpoint: `${txid}:${vout}`,
     valueSats,
     placeholderOutpoint: stringArg(args, 'txid') === undefined,
+    signatureRequested: requestSignature,
+    liveSignature,
+    signedArtifacts,
+    authorization,
     checks,
     passed: checks.every((item) => item.ok),
   });
-  assert(checks.every((item) => item.ok), 'live policy dry-run failed');
+  assert(checks.every((item) => item.ok), requestSignature
+    ? 'live predeployment Sigbash mainnet signing proof failed'
+    : 'live policy dry-run failed');
 }
 
 async function liveSoloTamperCheck() {
@@ -2633,7 +2688,11 @@ async function liveSoloTamperCheck() {
     ),
     check('Sigbash verifyPSBT accepts the valid solo PSBT', sigbashVerificationPassed(liveValid), liveValid),
     ...Object.entries(liveTampered).map(([name, result]) =>
-      check(`Sigbash verifyPSBT rejects tampered ${name} PSBT`, !sigbashVerificationPassed(result), result),
+      check(
+        `Sigbash verifyPSBT explicitly rejects tampered ${name} PSBT`,
+        sigbashVerificationExplicitlyRejected(result),
+        result,
+      ),
     ),
   ];
 

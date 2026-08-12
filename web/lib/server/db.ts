@@ -1,12 +1,14 @@
 import 'server-only';
 import postgres, { type Sql, type TransactionSql } from 'postgres';
+import { assertDatabaseUrl } from '../database-config';
 
 let client: Sql | undefined;
 
 export function db(): Sql {
   if (client) return client;
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error('DATABASE_URL is required');
+  const url = assertDatabaseUrl(process.env.DATABASE_URL, {
+    production: process.env.NODE_ENV === 'production',
+  });
   client = postgres(url, {
     max: 5,
     idle_timeout: 20,

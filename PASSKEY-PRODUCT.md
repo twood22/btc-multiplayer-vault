@@ -128,6 +128,12 @@ npm test
 npm audit
 ```
 
+The production container exposes `/api/health/live` and
+`/api/health/ready`. Readiness proves only that the web process can reach the
+database and sees the exact reviewed migration set. Its response always says
+`fundingAuthorized: false`; only `web:release-status` evaluates the product
+gates, and even that report never authorizes funding.
+
 `web:test` currently proves encryption/decryption, wrong-passkey rejection,
 authenticated-identity tamper rejection, two-credential rewrapping of the same
 participant identity, passkey-shared Sigbash custody, SDK-exact credential
@@ -154,16 +160,24 @@ two ciphertext envelopes in PostgreSQL, and inspects server-bound assertions
 to ensure PRF results never leave the browser. This is meaningful browser-level
 coverage, but virtual authenticators do not satisfy the physical-passkey gate.
 
-`web:release-status` prints only non-secret gate summaries. It verifies the
+`web:release-status` is the post-deployment funding report and prints only
+non-secret gate summaries. It verifies the
 declared Node runtime, HTTPS WebAuthn/RP binding, independent chain source,
 explicit tiny-mainnet amount cap and recovery delay, current upstream Sigbash
 runtime hashes, a non-local TLS PostgreSQL endpoint and migrations, the exact
 three-member/two-passkey/nine-key/three-confirmation/nine-proof database state,
 absence of a pre-funding coin, and a mainnet Bitcoin backend. It always keeps
-deployment and funding disallowed until the listed real-device and operational
-review items are documented; funding remains a later separate decision.
+funding gate closed until the listed real-device and operational review items
+are documented; funding remains a later separate decision. The earlier
+deployment gate is the explicit `live-predeployment-proof` command described in
+`DEPLOYMENT.md`.
 
-## Hard gates before deployment or funding
+## Sequenced hard gates
+
+Before deployment, `live-predeployment-proof` must return a real Sigbash
+mainnet signature that the local consensus authorizer accepts. After that
+single external capability is proven and the service is privately deployed,
+the following gates remain mandatory before funding:
 
 1. Complete the second-passkey ceremony for every participant and validate it
    with real browsers/authenticators. A synced copy of the same credential is
@@ -193,10 +207,13 @@ review items are documented; funding remains a later separate decision.
    watcher against the selected production Bitcoin backend. Verify rejection,
    duplicate submission, interrupted submission, mempool, confirmation, and
    reorganization operations before funding.
-8. Deploy behind private access control, run the full security checklist on the
-   deployed HTTPS origin, and only then allow deliberately tiny mainnet funding.
+8. Confirm the service remains behind private access control, run the full
+   security checklist on the deployed HTTPS origin, and only then consider
+   deliberately tiny mainnet funding.
 
-Until every gate passes, do not deploy or fund the product. The broadcast
-server path remains unreachable without an active vault coin, which itself can
-only be recorded after all nine live Sigbash readiness proofs. No local success
-or visual readiness overrides that rule.
+Do not deploy until the explicit `live-predeployment-proof` command returns a
+real, locally authorized Sigbash mainnet signature. After private deployment,
+do not fund until every remaining gate passes. The broadcast server path
+remains unreachable without an active vault coin, which itself can only be
+recorded after all nine live Sigbash readiness proofs. No local, dry-run, or
+visual readiness result overrides either rule.
