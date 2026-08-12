@@ -1,0 +1,65 @@
+'use client';
+
+import { MAINNET_GENESIS_HASH } from '../../../src/network.js';
+import {
+  vaultCoinSnapshotDigest,
+  type VaultCoinSnapshot,
+} from '../../../src/vault-runtime.js';
+
+interface EsploraTransaction {
+  txid: string;
+  vout: Array<{ scriptpubkey: string; value: number }>;
+  status: { confirmed: boolean; block_height?: number };
+}
+
+/** Query an allowlisted Esplora server directly from the participant's browser. */
+export async function observeVaultCoin(
+  sourceOrigin: string,
+  coin: VaultCoinSnapshot,
+): Promise<{
+  snapshotDigest: string;
+  sourceOrigin: string;
+  confirmations: number;
+  observedUnspent: true;
+}> {
+  const source = new URL(sourceOrigin);
+  if (source.origin !== sourceOrigin || source.protocol !== 'https:') {
+    throw new Error('chain observation source must be an HTTPS origin');
+  }
+  const base = `${source.origin}/api`;
+  const [genesisResponse, transactionResponse, outspendResponse, tipResponse] = await Promise.all([
+    fetch(`${base}/block-height/0`, { cache: 'no-store', credentials: 'omit' }),
+    fetch(`${base}/tx/${coin.txid}`, { cache: 'no-store', credentials: 'omit' }),
+    fetch(`${base}/tx/${coin.txid}/outspend/${coin.vout}`, { cache: 'no-store', credentials: 'omit' }),
+    fetch(`${base}/blocks/tip/height`, { cache: 'no-store', credentials: 'omit' }),
+  ]);
+  if (!genesisResponse.ok || (await genesisResponse.text()).trim() !== MAINNET_GENESIS_HASH) {
+    throw new Error('independent chain source is not Bitcoin mainnet');
+  }
+  if (!transactionResponse.ok) throw new Error('independent chain source did not find the vault transaction');
+  if (!outspendResponse.ok) throw new Error('independent chain source could not verify the vault output');
+  if (!tipResponse.ok) throw new Error('independent chain source did not return its tip height');
+  const transaction = await transactionResponse.json() as EsploraTransaction;
+  const outspend = await outspendResponse.json() as { spent?: unknown };
+  const tip = Number((await tipResponse.text()).trim());
+  const output = transaction.vout?.[coin.vout];
+  if (transaction.txid !== coin.txid || !output) {
+    throw new Error('independent chain transaction does not contain the expected outpoint');
+  }
+  if (output.value !== coin.valueSats || output.scriptpubkey !== coin.scriptPubKeyHex) {
+    throw new Error('independent chain output differs from the committed value or script');
+  }
+  if (outspend.spent !== false) throw new Error('independent chain source reports the vault output spent');
+  if (!transaction.status?.confirmed || !Number.isSafeInteger(transaction.status.block_height)) {
+    throw new Error('vault output is not confirmed on mainnet');
+  }
+  if (!Number.isSafeInteger(tip) || tip < transaction.status.block_height!) {
+    throw new Error('independent chain source returned an invalid tip height');
+  }
+  return {
+    snapshotDigest: vaultCoinSnapshotDigest(coin),
+    sourceOrigin: source.origin,
+    confirmations: tip - transaction.status.block_height! + 1,
+    observedUnspent: true,
+  };
+}

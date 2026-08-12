@@ -15,6 +15,14 @@ import {
 } from '../../src/roster-ceremony.js';
 import { planSigbashProvisioning } from '../../src/sigbash-provisioning.js';
 import { asSats, type VaultEconomics } from '../../src/types.js';
+import {
+  assertProposalStatusTransition,
+  buildVaultProposal,
+  validateVaultCoin,
+  vaultCoinSnapshotDigest,
+  vaultProposalDigest,
+  type VaultCoinSnapshot,
+} from '../../src/vault-runtime.js';
 import { unlockPublishedVault } from '../lib/client/vault-signing.js';
 import {
   createRosterState,
@@ -195,6 +203,128 @@ check('browser signing state accepts only the exact artifact digest and particip
   }), /does not reproduce/);
 });
 
+check('runtime coin snapshots are bound to the exact roster, script, round, and value', () => {
+  const coin = roundOneCoin();
+  const validated = validateVaultCoin(artifact, coin);
+  assert.deepEqual(validated.currentParticipantIds, ['alice', 'bob', 'carol']);
+  assert.match(vaultCoinSnapshotDigest(coin), /^[0-9a-f]{64}$/);
+  assert.throws(
+    () => validateVaultCoin(artifact, { ...coin, rosterDigest: '00'.repeat(32) }),
+    /different vault roster/,
+  );
+  assert.throws(
+    () => validateVaultCoin(artifact, { ...coin, scriptPubKeyHex: `5120${'00'.repeat(32)}` }),
+    /committed vault round/,
+  );
+  assert.throws(
+    () => validateVaultCoin(artifact, { ...coin, valueSats: coin.valueSats - 1 }),
+    /committed funding value/,
+  );
+});
+
+check('every proposal digest commits the current coin, exact PSBT, actor, and expiry', () => {
+  const coin = roundOneCoin();
+  const expiresAt = '2030-01-01T00:00:00.000Z';
+  const solo = buildVaultProposal({
+    artifact,
+    coin,
+    kind: 'solo',
+    actorParticipantId: 'alice',
+    expiresAt,
+  });
+  assert.deepEqual(solo.requiredSignerIds, ['alice']);
+  assert.equal(solo.commitment.unsignedTxid, solo.unsignedTxid);
+  assert.notEqual(
+    solo.digest,
+    vaultProposalDigest({ ...solo.commitment, expiresAt: '2030-01-02T00:00:00.000Z' }),
+  );
+  assert.notEqual(
+    solo.digest,
+    vaultProposalDigest({ ...solo.commitment, actorParticipantId: 'bob' }),
+  );
+
+  const cooperative = buildVaultProposal({ artifact, coin, kind: 'cooperative', expiresAt });
+  assert.deepEqual(cooperative.requiredSignerIds, ['alice', 'bob', 'carol']);
+  const recovery = buildVaultProposal({
+    artifact,
+    coin,
+    kind: 'recovery',
+    actorParticipantId: 'carol',
+    expiresAt,
+  });
+  assert.deepEqual(recovery.requiredSignerIds, ['alice', 'bob']);
+});
+
+check('confirmed solo outputs advance through the pair round to the final owner coin', () => {
+  const expiresAt = '2030-01-01T00:00:00.000Z';
+  const first = buildVaultProposal({
+    artifact,
+    coin: roundOneCoin(),
+    kind: 'solo',
+    actorParticipantId: 'alice',
+    expiresAt,
+  });
+  const firstInspection = inspectPsbt(first.psbtBase64);
+  const pairOutput = firstInspection.outputs[1]!;
+  const pairCoin: VaultCoinSnapshot = {
+    vaultId,
+    rosterDigest: digest,
+    kind: 'vault',
+    roundId: 'bobcarol',
+    ownerParticipantId: null,
+    txid: first.unsignedTxid,
+    vout: pairOutput.index,
+    valueSats: pairOutput.valueSats,
+    scriptPubKeyHex: pairOutput.scriptPubKeyHex,
+  };
+  validateVaultCoin(artifact, pairCoin);
+  const second = buildVaultProposal({
+    artifact,
+    coin: pairCoin,
+    kind: 'solo',
+    actorParticipantId: 'bob',
+    expiresAt,
+  });
+  const secondInspection = inspectPsbt(second.psbtBase64);
+  const payoutOutput = secondInspection.outputs[1]!;
+  const payoutCoin: VaultCoinSnapshot = {
+    vaultId,
+    rosterDigest: digest,
+    kind: 'final_payout',
+    roundId: null,
+    ownerParticipantId: 'carol',
+    txid: second.unsignedTxid,
+    vout: payoutOutput.index,
+    valueSats: payoutOutput.valueSats,
+    scriptPubKeyHex: payoutOutput.scriptPubKeyHex,
+  };
+  validateVaultCoin(artifact, payoutCoin);
+  const sweep = buildVaultProposal({
+    artifact,
+    coin: payoutCoin,
+    kind: 'final_sweep',
+    actorParticipantId: 'carol',
+    expiresAt,
+  });
+  assert.deepEqual(sweep.requiredSignerIds, ['carol']);
+  assert.throws(() => buildVaultProposal({
+    artifact,
+    coin: payoutCoin,
+    kind: 'final_sweep',
+    actorParticipantId: 'bob',
+    expiresAt,
+  }), /must own/);
+});
+
+check('proposal lifecycle rejects replay from terminal and backwards states', () => {
+  assert.doesNotThrow(() => assertProposalStatusTransition('collecting', 'finalized'));
+  assert.doesNotThrow(() => assertProposalStatusTransition('finalized', 'broadcast'));
+  assert.doesNotThrow(() => assertProposalStatusTransition('broadcast', 'confirmed'));
+  assert.throws(() => assertProposalStatusTransition('confirmed', 'broadcast'), /invalid proposal/);
+  assert.throws(() => assertProposalStatusTransition('rejected', 'collecting'), /invalid proposal/);
+  assert.throws(() => assertProposalStatusTransition('broadcast', 'finalized'), /invalid proposal/);
+});
+
 console.log(JSON.stringify({ passed: checks.every((item) => item.ok), checks }, null, 2));
 
 function check(name: string, run: () => void): void {
@@ -268,6 +398,20 @@ function tinyEconomics(): VaultEconomics {
     recoveryFeeSats: asSats(500),
     finalSweepFeeSats: asSats(300),
     recoveryDelayBlocks: 12,
+  };
+}
+
+function roundOneCoin(): VaultCoinSnapshot {
+  return {
+    vaultId,
+    rosterDigest: digest,
+    kind: 'vault',
+    roundId: artifact.funding.round,
+    ownerParticipantId: null,
+    txid: '44'.repeat(32),
+    vout: 0,
+    valueSats: artifact.funding.valueSats,
+    scriptPubKeyHex: artifact.funding.outputScriptHex,
   };
 }
 

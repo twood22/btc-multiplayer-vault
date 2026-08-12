@@ -1169,6 +1169,12 @@ export function inspectPsbt(psbtBase64: string): PsbtInspection {
   };
 }
 
+/** Transaction id of the exact unsigned transaction committed by a PSBT. */
+export function psbtUnsignedTxid(psbtBase64: string): string {
+  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: BITCOIN_NETWORK });
+  return unsignedTx(psbt).getId();
+}
+
 /** Convert a parsed PSBT into the exact local Sigbash policy view. */
 export function psbtInspectionToPolicyTx({
   state,

@@ -79,13 +79,20 @@ export async function getRosterCeremonyStatus(userId: string): Promise<RosterCer
 /** Full public artifact for local signing, available only after unanimity. */
 export async function getConfirmedVaultArtifact(userId: string): Promise<ConfirmedVaultArtifact> {
   const membership = await membershipForUser(userId);
+  return getConfirmedVaultArtifactForVault(membership.vault_id);
+}
+
+/** Internal coordinator lookup. Callers must establish membership separately. */
+export async function getConfirmedVaultArtifactForVault(
+  vaultId: string,
+): Promise<ConfirmedVaultArtifact> {
   const rows = await db()<StoredRosterRow[]>`
     SELECT vault_id, artifact_json, digest, funding_address, status
     FROM vault_rosters
-    WHERE vault_id = ${membership.vault_id}::uuid AND status = 'confirmed'
+    WHERE vault_id = ${vaultId}::uuid AND status = 'confirmed'
   `;
   if (rows.length !== 1) throw new Error('the immutable vault roster is not unanimously confirmed');
-  const artifact = await readStoredRoster(membership.vault_id);
+  const artifact = await readStoredRoster(vaultId);
   if (!artifact) throw new Error('confirmed vault artifact is missing');
   return { digest: publishedRosterDigest(artifact), artifact };
 }

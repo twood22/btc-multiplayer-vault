@@ -23,6 +23,25 @@ export function webConfig(): WebConfig {
   return { rpName, rpID, origin, appOrigin };
 }
 
+export function chainObservationOrigins(): string[] {
+  const app = webConfig();
+  const origins = required('CHAIN_OBSERVATION_ORIGINS')
+    .split(',')
+    .map((value) => normalizedOrigin(value.trim(), 'CHAIN_OBSERVATION_ORIGINS'));
+  if (origins.length === 0 || new Set(origins).size !== origins.length) {
+    throw new Error('CHAIN_OBSERVATION_ORIGINS must contain distinct HTTPS origins');
+  }
+  for (const origin of origins) {
+    if (new URL(origin).protocol !== 'https:') {
+      throw new Error('CHAIN_OBSERVATION_ORIGINS must use HTTPS');
+    }
+    if (origin === app.appOrigin || origin === app.origin) {
+      throw new Error('chain observation origin must be independent from the vault service');
+    }
+  }
+  return origins;
+}
+
 function normalizedOrigin(value: string, name: string): string {
   const url = new URL(value);
   if (url.pathname !== '/' || url.search || url.hash || url.username || url.password) {

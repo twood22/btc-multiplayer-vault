@@ -4,13 +4,14 @@ export function proxy(request: NextRequest) {
   const nonce = Buffer.from(crypto.randomUUID()).toString('base64');
   const isDev = process.env.NODE_ENV === 'development';
   const sigbashConnectSources = sigbashConnectSource();
+  const chainConnectSources = chainObservationConnectSources();
   const csp = [
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'wasm-unsafe-eval'${isDev ? " 'unsafe-eval'" : ''}`,
     `style-src 'self' 'nonce-${nonce}'${isDev ? " 'unsafe-inline'" : ''}`,
     "img-src 'self' blob: data:",
     "font-src 'self'",
-    `connect-src 'self' ${sigbashConnectSources}`,
+    `connect-src 'self' ${sigbashConnectSources} ${chainConnectSources}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
@@ -30,6 +31,23 @@ export function proxy(request: NextRequest) {
   response.headers.set('Cross-Origin-Opener-Policy', 'same-origin');
   response.headers.set('Cross-Origin-Resource-Policy', 'same-origin');
   return response;
+}
+
+function chainObservationConnectSources(): string {
+  try {
+    const appOrigins = new Set([
+      process.env.WEBAUTHN_ORIGIN,
+      process.env.APP_ORIGIN,
+    ].filter(Boolean).map((value) => new URL(value!).origin));
+    return [...new Set((process.env.CHAIN_OBSERVATION_ORIGINS || '')
+      .split(',')
+      .filter(Boolean)
+      .map((value) => externalHttpsUrl(value.trim()).origin))]
+      .filter((origin) => !appOrigins.has(origin))
+      .join(' ');
+  } catch {
+    return '';
+  }
 }
 
 function sigbashConnectSource(): string {
