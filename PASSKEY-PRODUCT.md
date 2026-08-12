@@ -176,8 +176,10 @@ deployment gate is the explicit `live-predeployment-proof` command described in
 ## Sequenced hard gates
 
 Before deployment, `live-predeployment-proof` must return a real Sigbash
-mainnet signature that the local consensus authorizer accepts. After that
-single external capability is proven and the service is privately deployed,
+mainnet signature that the local consensus authorizer accepts. The preceding
+`live-predeployment-setup` creates exactly two pair-round proof keys and does
+not pre-create or stand in for the nine participant-owned product keys. After
+that single external capability is proven and the service is privately deployed,
 the following gates remain mandatory before funding:
 
 1. Complete the second-passkey ceremony for every participant and validate it

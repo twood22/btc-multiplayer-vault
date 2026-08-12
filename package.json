@@ -77,6 +77,7 @@
     "sigbash-live-setup": "tsx src/cli.ts sigbash-live-setup",
     "typecheck": "tsc --noEmit",
     "live-policy-dry-run": "tsx src/cli.ts live-policy-dry-run",
+    "live-predeployment-setup": "tsx src/cli.ts sigbash-live-setup --proof-round alice,bob",
     "live-predeployment-proof": "tsx src/cli.ts live-policy-dry-run --sign true",
     "ceremony-start": "tsx src/cli.ts ceremony-start",
     "ceremony-nonce": "tsx src/cli.ts ceremony-nonce",

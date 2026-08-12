@@ -208,7 +208,7 @@ Bitcoin Core mainnet RPC: `rpc-gettxout`, `rpc-decode-tx`,
 `cooperative-readiness`, `recovery-readiness`.
 
 Live Sigbash: `sigbash-live-setup`, `sigbash-sign-psbt`, `live-readiness`,
-`live-predeployment-proof`,
+`live-predeployment-setup`, `live-predeployment-proof`,
 `live-solo-withdrawal`, `live-solo-tamper-check`, `live-solo-audit`,
 `live-cooperative-audit`, `live-recovery-audit`, `live-final-sweep-audit`,
 `live-run-audit`, `live-acceptance-evidence`.
@@ -251,7 +251,8 @@ input scriptPubKey, so you only pass `--participant`.
    npm run sigbash-bootstrap
    ```
 
-   This exclusively creates `.env` with mode `0600` and prints only its
+   This exclusively creates `.env` with mode `0600`, including a fresh proof
+   vault seed and the reviewed Sigbash runtime pins, and prints only its
    non-secret `apikeyHash`. It refuses to overwrite an existing file. Back up
    that file before asking Sigbash to enable the hash for mainnet.
 

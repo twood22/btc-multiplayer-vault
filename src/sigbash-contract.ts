@@ -91,6 +91,7 @@ async function credentialFileChecks(): Promise<ContractCheck[]> {
       values.SIGBASH_API_KEY,
       values.SIGBASH_USER_KEY,
       values.SIGBASH_SECRET_KEY,
+      values.VAULT_DEMO_SEED,
     ];
     let overwriteRejected = false;
     try {
@@ -107,10 +108,10 @@ async function credentialFileChecks(): Promise<ContractCheck[]> {
     }
     return [
       check(
-        'credential bootstrap exclusively creates three distinct 256-bit values with mode 0600',
+        'credential bootstrap exclusively creates a triplet and vault seed as distinct 256-bit values with mode 0600',
         (statSync(credentialFile).mode & 0o777) === 0o600 &&
           secrets.every((value) => /^[0-9a-f]{64}$/u.test(value ?? '')) &&
-          new Set(secrets).size === 3,
+          new Set(secrets).size === 4,
       ),
       check(
         'credential bootstrap returns only the non-secret organization hash',

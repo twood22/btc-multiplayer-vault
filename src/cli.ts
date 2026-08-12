@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
+  lstatSync,
+  mkdirSync,
   readFileSync,
 } from 'node:fs';
+import { dirname } from 'node:path';
 import { assertReviewedNodeRuntime } from './runtime-version.js';
 import { createSigbashCredentialFile } from './sigbash-credentials.js';
 import {
@@ -3371,9 +3375,21 @@ async function sigbashLiveSetup() {
     process.env.SIGBASH_MODE === 'live',
     'sigbash-live-setup mutates Sigbash server state; rerun with SIGBASH_MODE=live',
   );
+  const setupArgs = parseArgs(process.argv.slice(3));
+  const proofRoundRaw = stringArg(setupArgs, 'proof-round');
   const bootstrapState = createDemoState();
   const allIds = participantIds(bootstrapState);
   const roundOne = roundId(allIds);
+  const proofRoundIds = proofRoundRaw?.split(',');
+  if (proofRoundIds) {
+    assert(
+      proofRoundIds.length === 2 &&
+        new Set(proofRoundIds).size === 2 &&
+        proofRoundIds.every((id) => allIds.includes(id)),
+      '--proof-round must contain exactly two distinct participants from alice,bob,carol',
+    );
+  }
+  const proofRound = proofRoundIds ? roundId(proofRoundIds) : null;
   const leafOverrides: Record<
     string,
     Record<string, { key: string; xpub: string; identificationKey: string }>
@@ -3384,13 +3400,28 @@ async function sigbashLiveSetup() {
   // and resumed runs build the leaf overrides through the same
   // checkpointRegistrationToOverride() so they can never derive different
   // vault addresses; legacy/mixed/incomplete checkpoint lines abort the run.
-  const checkpointPath = process.env.SIGBASH_SETUP_CHECKPOINT || 'live-run/setup-checkpoint.jsonl';
+  const checkpointPath = process.env.SIGBASH_SETUP_CHECKPOINT || (proofRound
+    ? 'live-run/predeployment-setup-checkpoint.jsonl'
+    : 'live-run/setup-checkpoint.jsonl');
+  mkdirSync(dirname(checkpointPath), { recursive: true, mode: 0o700 });
+  if (existsSync(checkpointPath)) {
+    const checkpointStat = lstatSync(checkpointPath);
+    assert(checkpointStat.isFile() && !checkpointStat.isSymbolicLink(),
+      'Sigbash setup checkpoint must be a regular file, not a link');
+    assert((checkpointStat.mode & 0o077) === 0,
+      'Sigbash setup checkpoint must not be accessible by group or other users');
+  }
   const registrations: LiveKeyRegistration[] = [];
   const doneKeys = new Set<string>();
   if (existsSync(checkpointPath)) {
     for (const line of readFileSync(checkpointPath, 'utf8').split('\n')) {
       if (!line.trim()) continue;
       const registration = parseSetupCheckpointLine(line);
+      if (proofRound && (
+        registration.round !== proofRound || !proofRoundIds!.includes(registration.participantId)
+      )) {
+        throw new Error('predeployment checkpoint contains a key outside the selected pair round');
+      }
       registrations.push(registration);
       doneKeys.add(`${registration.participantId}:${registration.round}`);
       leafOverrides[registration.participantId]![registration.round] =
@@ -3439,10 +3470,53 @@ async function sigbashLiveSetup() {
     leafOverrides[participantId]![round] = checkpointRegistrationToOverride(registration);
     registrations.push(registration);
     doneKeys.add(`${participantId}:${round}`);
-    appendFileSync(checkpointPath, `${JSON.stringify(registration)}\n`);
-    console.error(`  registered ${participantId}:${round} as keyId ${created.keyId} (${doneKeys.size}/9)`);
+    appendFileSync(checkpointPath, `${JSON.stringify(registration)}\n`, {
+      encoding: 'utf8',
+      flag: 'a',
+      mode: 0o600,
+    });
+    chmodSync(checkpointPath, 0o600);
+    console.error(
+      `  registered ${participantId}:${round} as keyId ${created.keyId} ` +
+      `(${doneKeys.size}/${proofRound ? 2 : 9})`,
+    );
     client.disconnect?.();
   };
+
+  if (proofRound && proofRoundIds) {
+    for (const participantId of proofRoundIds) {
+      await registerKey(bootstrapState, participantId, proofRound);
+    }
+    const proofState = createDemoState({ sigbashLeafOverrides: leafOverrides });
+    const proofVault = requireVault(proofState, proofRoundIds);
+    const proofRegistrations = registrations.filter((registration) =>
+      registration.round === proofRound && proofRoundIds.includes(registration.participantId));
+    assert(proofRegistrations.length === 2,
+      'predeployment setup must contain exactly both pair-round registrations');
+    printResult('live Sigbash predeployment pair setup', {
+      warning: 'This is a real immutable mainnet pair-round vault setup. Do not fund its address.',
+      round: proofRound,
+      participants: proofRoundIds,
+      registrations: proofRegistrations,
+      envExports: [
+        `SIGBASH_LEAF_KEYS_JSON='${JSON.stringify(leafOverrides)}'`,
+        ...proofRegistrations.map(
+          (registration) => `${registration.keyIdEnvName}=${registration.keyId}`,
+        ),
+      ],
+      vault: {
+        address: proofVault.address,
+        descriptor: proofVault.descriptor,
+        tapscriptLeaves: proofVault.tapscriptLeaves,
+      },
+      policies: proofRoundIds.map((participantId) =>
+        requirePolicy(proofState, proofRoundIds, participantId)),
+      next:
+        `Export envExports, then run live-predeployment-proof with --round ${proofRoundIds.join(',')} ` +
+        `--leaver ${proofRoundIds[0]}.`,
+    });
+    return;
+  }
 
   for (const participant of bootstrapState.participants) {
     for (const round of participantLeaveRounds(participant.id, allIds)) {

@@ -180,7 +180,8 @@ console.log(JSON.stringify({
   fundingAllowed: false,
   deploymentGate: {
     evaluatedByThisReport: false,
-    command: 'SIGBASH_MODE=live npm run live-predeployment-proof -- --round alice,bob,carol --leaver alice',
+    setupCommand: 'SIGBASH_MODE=live npm run live-predeployment-setup',
+    proofCommand: 'SIGBASH_MODE=live npm run live-predeployment-proof -- --round alice,bob --leaver alice',
   },
   reason: automatedPreflightPassed
     ? 'Automated funding checks passed; complete and document every manual gate. Funding still requires a later, separate approval.'
