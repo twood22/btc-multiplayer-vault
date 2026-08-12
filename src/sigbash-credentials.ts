@@ -3,10 +3,12 @@ import {
   chmodSync,
   closeSync,
   constants as fsConstants,
+  lstatSync,
+  mkdirSync,
   openSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { getAuthHash } from '@sigbash/sdk';
 
 export interface CreatedSigbashCredentialFile {
@@ -22,6 +24,15 @@ export async function createSigbashCredentialFile(
   const credentialFile = resolve(rawOutputPath);
   if (basename(credentialFile) === '.env.example') {
     throw new Error('refusing to write credentials to .env.example');
+  }
+  const credentialParent = dirname(credentialFile);
+  mkdirSync(credentialParent, { recursive: true, mode: 0o700 });
+  const parentStat = lstatSync(credentialParent);
+  if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
+    throw new Error('credential parent must be a real directory, not a link');
+  }
+  if ((parentStat.mode & 0o077) !== 0) {
+    throw new Error('credential parent must not be accessible by group or other users');
   }
 
   const apiKey = randomBytes(32).toString('hex');

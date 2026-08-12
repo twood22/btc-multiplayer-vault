@@ -81,19 +81,22 @@ rejected by the release report.
 
    ```bash
    npm run sigbash-bootstrap
-   npm run sigbash-org-id -- --participant alice
+   npm run sigbash-proof-org-id
    SIGBASH_MODE=live npm run live-predeployment-setup
-   # Export the two printed key IDs and SIGBASH_LEAF_KEYS_JSON, then:
-   SIGBASH_MODE=live npm run live-predeployment-proof -- \
-     --round alice,bob --leaver alice
+   SIGBASH_MODE=live npm run live-predeployment-proof
    ```
 
    Setup creates only the two immutable mainnet keys needed for one real
    pair-round vault, rather than creating all nine product keys before the
-   product participants exist. It is resumable and its address must never be
-   funded. The proof command must end with `passed: true` and a non-null
-   consensus authorization. The current external service result is unproven;
-   no local or dry-run success substitutes for this command.
+   product participants exist. It is resumable, journals each remote key, and
+   keeps the credential triplet in owner-only
+   `live-run/proof-credentials.env` while writing the derived non-secret key
+   configuration to `live-run/predeployment.env`; the proof command loads both
+   automatically. The whole `live-run` directory is excluded from Git and the
+   container build context. Its address must never be funded. The proof command
+   must end with `passed: true` and a non-null consensus authorization. The
+   current external service result is unproven; no local or dry-run success
+   substitutes for this command.
 2. Build the immutable image in CI and record its digest. Do not inject runtime
    secrets during the build.
 3. Restore the latest encrypted database backup into an isolated database and

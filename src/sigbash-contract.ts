@@ -14,7 +14,15 @@ import type {
   VerifyPSBTResult,
   WasmLoaderOptions,
 } from '@sigbash/sdk';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSigbashCredentialFile } from './sigbash-credentials.js';
@@ -106,6 +114,17 @@ async function credentialFileChecks(): Promise<ContractCheck[]> {
     } catch {
       exampleRejected = true;
     }
+    const permissiveParent = join(directory, 'permissive-parent');
+    const unsafeCredentialFile = join(permissiveParent, 'credentials.env');
+    mkdirSync(permissiveParent, { mode: 0o700 });
+    chmodSync(permissiveParent, 0o750);
+    let permissiveParentRejected = false;
+    try {
+      await createSigbashCredentialFile(unsafeCredentialFile);
+    } catch (error) {
+      permissiveParentRejected = error instanceof Error &&
+        error.message.includes('credential parent must not be accessible');
+    }
     return [
       check(
         'credential bootstrap exclusively creates a triplet and vault seed as distinct 256-bit values with mode 0600',
@@ -121,6 +140,10 @@ async function credentialFileChecks(): Promise<ContractCheck[]> {
       check(
         'credential bootstrap refuses overwrite and the tracked example file',
         overwriteRejected && contentAfter === contentBefore && exampleRejected,
+      ),
+      check(
+        'credential bootstrap rejects an unsafe parent before creating a file',
+        permissiveParentRejected && !existsSync(unsafeCredentialFile),
       ),
     ];
   } finally {

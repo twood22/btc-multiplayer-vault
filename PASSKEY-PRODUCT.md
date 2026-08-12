@@ -178,9 +178,12 @@ deployment gate is the explicit `live-predeployment-proof` command described in
 Before deployment, `live-predeployment-proof` must return a real Sigbash
 mainnet signature that the local consensus authorizer accepts. The preceding
 `live-predeployment-setup` creates exactly two pair-round proof keys and does
-not pre-create or stand in for the nine participant-owned product keys. After
-that single external capability is proven and the service is privately deployed,
-the following gates remain mandatory before funding:
+not pre-create or stand in for the nine participant-owned product keys. Its
+owner-only checkpoint and generated proof environment make the irreversible
+provider setup resumable without copying credentials through the terminal;
+the entire proof directory is excluded from the container build context.
+After that single external capability is proven and the service is privately
+deployed, the following gates remain mandatory before funding:
 
 1. Complete the second-passkey ceremony for every participant and validate it
    with real browsers/authenticators. A synced copy of the same credential is

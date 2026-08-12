@@ -180,8 +180,9 @@ console.log(JSON.stringify({
   fundingAllowed: false,
   deploymentGate: {
     evaluatedByThisReport: false,
+    organizationCommand: 'npm run sigbash-proof-org-id',
     setupCommand: 'SIGBASH_MODE=live npm run live-predeployment-setup',
-    proofCommand: 'SIGBASH_MODE=live npm run live-predeployment-proof -- --round alice,bob --leaver alice',
+    proofCommand: 'SIGBASH_MODE=live npm run live-predeployment-proof',
   },
   reason: automatedPreflightPassed
     ? 'Automated funding checks passed; complete and document every manual gate. Funding still requires a later, separate approval.'

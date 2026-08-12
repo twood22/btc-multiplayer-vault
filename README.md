@@ -251,16 +251,25 @@ input scriptPubKey, so you only pass `--participant`.
    npm run sigbash-bootstrap
    ```
 
-   This exclusively creates `.env` with mode `0600`, including a fresh proof
-   vault seed and the reviewed Sigbash runtime pins, and prints only its
-   non-secret `apikeyHash`. It refuses to overwrite an existing file. Back up
-   that file before asking Sigbash to enable the hash for mainnet.
+   This exclusively creates `live-run/proof-credentials.env` inside an
+   owner-only directory, including a fresh proof vault seed and the reviewed
+   Sigbash runtime pins, and prints only its non-secret `apikeyHash`. It refuses
+   to overwrite an existing file. `live-run` is excluded from both Git and the
+   container build context. Back up that credential file before asking Sigbash
+   to enable the hash for mainnet.
+
+   Every CLI command loads its selected protected environment before importing
+   vault configuration and refuses linked or group/other-readable files or a
+   parent directory where another user could replace them. The proof commands
+   select the credential file above automatically; general CLI commands default
+   to `.env`. The proof seed, economics, runtime pins, and credentials therefore
+   reach one consistent configuration snapshot.
 
    For command-line credentials, print only the non-secret activation value
    without exposing the triplet:
 
    ```bash
-   npm run sigbash-org-id -- --participant alice
+   npm run sigbash-proof-org-id
    ```
 
 3. **Create the nine keys:**
@@ -274,6 +283,13 @@ input scriptPubKey, so you only pass `--participant`.
    prints `envExports`: a `SIGBASH_LEAF_KEYS_JSON` value plus one
    `SIGBASH_KEY_ID_<PARTICIPANT>_<ROUND>` per key. Export all of them before
    running any other command. Never fund a printed helper `p2trAddress`.
+
+   The smaller deployment gate uses `live-predeployment-setup`. It creates
+   only one real pair's two keys and writes their non-secret derived
+   configuration to owner-only `live-run/predeployment.env`; the corresponding
+   `live-predeployment-proof` package command loads it together with the
+   separately protected credential file automatically. Never fund the proof
+   address.
 
    *Leaf-key assumption:* the tapscript leaf key is derived from each key's
    BIP-328 xpub at child path 0/0, matching the SDK's documented
