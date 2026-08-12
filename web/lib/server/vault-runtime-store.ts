@@ -1,8 +1,11 @@
 import 'server-only';
 import { Buffer } from 'buffer';
+import * as bitcoin from 'bitcoinjs-lib';
 import type { AuthenticatorTransportFuture, Base64URLString } from '@simplewebauthn/server';
 import type { TrustedVaultInput } from '../../../src/types';
 import { authorizeSoloSigningArtifacts } from '../../../src/psbt';
+import { authorizeFinalSweep } from '../../../src/custody';
+import { verifyVaultTransaction } from '../../../src/consensus';
 import {
   ceremonyAggregate,
   ceremonyStart,
@@ -680,6 +683,89 @@ export async function recordCooperativeContribution(input: {
       requiredCount,
       finalizedTxid,
     };
+  });
+}
+
+export async function finalizeStoredFinalSweep(input: {
+  userId: string;
+  proposalId: string;
+  proposalDigest: string;
+  transactionHex: string;
+}): Promise<{ txid: string; consensusChecks: string[] }> {
+  if (!/^[0-9a-f]{64}$/u.test(input.proposalDigest)) throw new Error('proposal digest is invalid');
+  if (!/^[0-9a-f]+$/u.test(input.transactionHex) || input.transactionHex.length > 400_000) {
+    throw new Error('final transaction hex is invalid');
+  }
+  const membership = await membershipForUser(input.userId);
+  const confirmed = await getConfirmedVaultArtifactForVault(membership.vault_id);
+  return transaction(async (sql) => {
+    const proposals = await sql<LockedProposalRow[]>`
+      SELECT id, vault_id, roster_digest, input_coin_id, kind, round_id,
+             actor_participant_id, proposal_digest, unsigned_txid,
+             psbt_base64, final_txid, status, expires_at
+      FROM vault_transaction_proposals
+      WHERE id = ${input.proposalId}::uuid AND vault_id = ${membership.vault_id}::uuid
+        AND status = 'collecting' AND expires_at > now()
+      FOR UPDATE
+    `;
+    const proposal = proposals[0];
+    if (!proposal || proposal.kind !== 'final_sweep') {
+      throw new Error('final-sweep proposal is missing, expired, or no longer collecting');
+    }
+    if (proposal.actor_participant_id !== membership.participant_id) {
+      throw new Error('only the final payout owner can finalize this sweep');
+    }
+    if (
+      proposal.proposal_digest.toString('hex') !== input.proposalDigest ||
+      proposal.roster_digest.toString('hex') !== confirmed.digest
+    ) throw new Error('final-sweep proposal differs from the confirmed vault commitment');
+    const coins = await sql<StoredCoinRow[]>`
+      SELECT id, vault_id, roster_digest, kind, round_id, owner_participant_id,
+             txid, vout::text, value_sats::text, script_pubkey, status,
+             confirmed_height::text
+      FROM vault_coins
+      WHERE id = ${proposal.input_coin_id}::uuid AND vault_id = ${membership.vault_id}::uuid
+        AND status = 'current'
+      FOR UPDATE
+    `;
+    if (coins.length !== 1) throw new Error('proposal input is no longer the current payout coin');
+    const coin = storedCoinSnapshot(coins[0]!);
+    const validated = validateVaultCoin(confirmed.artifact, coin);
+    const rebuilt = buildVaultProposal({
+      artifact: confirmed.artifact,
+      coin,
+      kind: 'final_sweep',
+      actorParticipantId: membership.participant_id,
+      expiresAt: proposal.expires_at.toISOString(),
+    });
+    if (
+      rebuilt.digest !== input.proposalDigest || rebuilt.psbtBase64 !== proposal.psbt_base64 ||
+      rebuilt.unsignedTxid !== proposal.unsigned_txid.toString('hex')
+    ) throw new Error('stored final sweep does not reproduce from the current payout coin');
+    const authorization = authorizeFinalSweep({
+      state: validated.state,
+      participantId: membership.participant_id,
+      psbtBase64: proposal.psbt_base64,
+      trustedInput: coin,
+      feeSats: validated.state.economics.finalSweepFeeSats,
+    });
+    const signed = bitcoin.Transaction.fromHex(input.transactionHex);
+    if (signed.getId() !== authorization.unsignedTxid || signed.getId() !== rebuilt.unsignedTxid) {
+      throw new Error('final sweep signature changed the committed transaction');
+    }
+    const consensus = verifyVaultTransaction({
+      txHex: input.transactionHex,
+      prevouts: [{ scriptPubKeyHex: coin.scriptPubKeyHex, valueSats: coin.valueSats }],
+    });
+    const updated = await sql<Array<{ id: string }>>`
+      UPDATE vault_transaction_proposals
+      SET status = 'finalized', finalized_tx_hex = ${input.transactionHex},
+          final_txid = ${Buffer.from(signed.getId(), 'hex')}, updated_at = now()
+      WHERE id = ${proposal.id}::uuid AND status = 'collecting'
+      RETURNING id
+    `;
+    if (updated.length !== 1) throw new Error('final-sweep proposal changed during finalization');
+    return { txid: signed.getId(), consensusChecks: consensus.checks };
   });
 }
 

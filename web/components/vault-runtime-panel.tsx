@@ -15,6 +15,7 @@ import { withUnlockedVaultCustody } from '../lib/client/unlocked-vault-custody';
 import {
   createAuthorizedCooperativeNonce,
   createAuthorizedCooperativePartial,
+  signAuthorizedFinalSweep,
   signAuthorizedSoloWithdrawal,
 } from '../lib/client/vault-signing';
 import {
@@ -322,6 +323,63 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
     }
   }
 
+  async function createFinalSweepProposal() {
+    if (!runtime) return;
+    setWorking(true);
+    try {
+      await postJson('/api/vault/proposals', {
+        kind: 'final_sweep',
+        actorParticipantId: runtime.participantId,
+      });
+      await refresh();
+      setMessage('Final payout sweep created; nothing has been signed or broadcast');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not create final sweep');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function signFinalSweepProposal() {
+    if (!runtime?.coin || !runtime.proposal || !credentialId) return;
+    const proposal = runtime.proposal;
+    setWorking(true);
+    try {
+      const result = await withUnlockedVaultCustody({
+        credentialId,
+        action: async ({ unlocked }) => {
+          const rebuilt = buildVaultProposal({
+            artifact: unlocked.artifact,
+            coin: runtime.coin!,
+            kind: 'final_sweep',
+            actorParticipantId: unlocked.signer.participantId,
+            expiresAt: proposal.expiresAt,
+          });
+          if (
+            rebuilt.digest !== proposal.digest || rebuilt.psbtBase64 !== proposal.psbtBase64 ||
+            rebuilt.unsignedTxid !== proposal.unsignedTxid
+          ) throw new Error('coordinator final sweep does not reproduce in this browser');
+          const signed = signAuthorizedFinalSweep({
+            unlocked,
+            psbtBase64: proposal.psbtBase64,
+            trustedInput: runtime.coin!,
+          });
+          return postJson('/api/vault/proposals/finalize-sweep', {
+            proposalId: proposal.id,
+            proposalDigest: proposal.digest,
+            transactionHex: signed.signed.transactionHex,
+          });
+        },
+      });
+      await refresh();
+      setMessage(`Final payout sweep verified as ${String(result.txid)}; not broadcast`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Final sweep signing failed');
+    } finally {
+      setWorking(false);
+    }
+  }
+
   const observed = Boolean(runtime?.coin?.observedParticipantIds.includes(runtime.participantId));
   const currentRoundIds = runtime?.coin?.roundId ? participantIdsForRound(runtime.coin.roundId) : [];
   const canSolo = runtime?.coin?.kind === 'vault'
@@ -329,7 +387,15 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
     && !runtime.proposal
     && observed;
   const canCooperate = canSolo;
+  const canCreateFinalSweep = runtime?.coin?.kind === 'final_payout'
+    && runtime.coin.ownerParticipantId === runtime.participantId
+    && !runtime.proposal
+    && observed;
   const canSignSolo = runtime?.proposal?.kind === 'solo'
+    && runtime.proposal.actorParticipantId === runtime.participantId
+    && runtime.proposal.status === 'collecting'
+    && observed;
+  const canSignFinalSweep = runtime?.proposal?.kind === 'final_sweep'
     && runtime.proposal.actorParticipantId === runtime.participantId
     && runtime.proposal.status === 'collecting'
     && observed;
@@ -376,8 +442,14 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
         {canCooperate && (
           <button disabled={working} onClick={createCooperativeProposal} type="button">Propose an equal cooperative refund</button>
         )}
+        {canCreateFinalSweep && (
+          <button disabled={working} onClick={createFinalSweepProposal} type="button">Create my final payout sweep</button>
+        )}
         {canSignSolo && (
           <button disabled={working} onClick={signSoloProposal} type="button">Verify and sign my solo withdrawal</button>
+        )}
+        {canSignFinalSweep && (
+          <button disabled={working} onClick={signFinalSweepProposal} type="button">Verify and sign my final payout sweep</button>
         )}
         {proposalReview && runtime?.proposal?.kind === 'solo' && (
           <div className="activation-code">
@@ -394,6 +466,14 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
             {proposalReview.outputs.map((output, index) => (
               <p key={output.index}>Participant {index + 1}: {output.valueSats.toLocaleString()} sats</p>
             ))}
+            <p>Miner fee: {proposalReview.feeSats.toLocaleString()} sats</p>
+            <code>{runtime.proposal.digest}</code>
+          </div>
+        )}
+        {proposalReview && runtime?.proposal?.kind === 'final_sweep' && (
+          <div className="activation-code">
+            <span>Final payout sweep</span>
+            <p>Destination amount: {proposalReview.outputs[0]?.valueSats.toLocaleString()} sats</p>
             <p>Miner fee: {proposalReview.feeSats.toLocaleString()} sats</p>
             <code>{runtime.proposal.digest}</code>
           </div>
