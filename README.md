@@ -32,6 +32,7 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Sigbash co-signing a live mainnet withdrawal | ⛔ browser proof gate implemented; external execution not proven |
 | Per-participant key custody | ✅ browser-distributed and passkey protected |
 | Recoverable passkey custody + encrypted Sigbash credentials/kits | ✅ implemented; real authenticator run still required |
+| Browser PRF setup/recovery/sign-in/unlock | ✅ Chromium + two virtual authenticators; physical devices still required |
 | Immutable three-passkey roster gate | ✅ implemented; PostgreSQL 16 migrations verified, real authenticator run still required |
 | User-facing solo/cooperative/recovery/final signing | ✅ implemented and server re-authorized |
 | Explicit passkey-approved broadcast + confirmation watcher | ✅ implemented; real backend execution still required |

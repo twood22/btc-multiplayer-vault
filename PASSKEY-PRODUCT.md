@@ -121,6 +121,7 @@ secrets; send each one only to its intended friend and let it expire quickly.
 npm run web:typecheck
 npm run web:test
 npm run web:test:db # requires a disposable or dedicated empty PostgreSQL database
+npm run web:test:browser # requires the migrated database, running web app, and Playwright Chromium
 npm run web:build
 npm run web:release-status # read-only; exits nonzero until every automated gate passes
 npm test
@@ -143,6 +144,15 @@ state, auditable retry after failure, proposal-digest foreign-key binding, and
 atomic concurrent rate-limit counting/reset without raw subject storage;
 that is not a substitute for the selected production database and a complete
 real-authenticator/backend run.
+
+The Playwright test runs the production HTTP and PostgreSQL paths in Chromium
+with two separate PRF-capable virtual authenticators: a platform passkey and a
+USB recovery key. It registers and encrypts the participant key, authorizes and
+rewraps the exact same identity for recovery, clears sessions, signs in and
+unlocks independently with each credential, verifies one public identity and
+two ciphertext envelopes in PostgreSQL, and inspects server-bound assertions
+to ensure PRF results never leave the browser. This is meaningful browser-level
+coverage, but virtual authenticators do not satisfy the physical-passkey gate.
 
 `web:release-status` prints only non-secret gate summaries. It verifies the
 declared Node runtime, HTTPS WebAuthn/RP binding, independent chain source,
@@ -175,9 +185,8 @@ review items are documented; funding remains a later separate decision.
    with real authenticators. The migrations pass PostgreSQL 16 locally, but no
    real Sigbash registrations are present and the database-backed ceremony has
    not yet been run end to end.
-6. Expand the seeded database integration test from broadcast approval to the
-   full roster/signing lifecycle; add automated WebAuthn browser tests with
-   virtual authenticators and PRF support,
+6. Expand the seeded database and virtual-authenticator browser tests from
+   passkey custody and broadcast approval to the full roster/signing lifecycle;
    rate limiting, audit events that never contain secrets, backup/restore
    drills, and operational monitoring.
 7. Exercise the implemented passkey-approved broadcast and private chain

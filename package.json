@@ -10,6 +10,7 @@
     "web:typecheck": "tsc --noEmit -p tsconfig.web.json",
     "web:test": "tsx web/tests/passkey-acceptance.ts && tsx web/tests/sigbash-custody-acceptance.ts && tsx web/tests/roster-acceptance.ts && tsx web/tests/vault-runtime-acceptance.ts && tsx web/tests/broadcast-lifecycle-acceptance.ts",
     "web:test:db": "tsx web/tests/broadcast-db-acceptance.ts",
+    "web:test:browser": "playwright test web/browser-tests/passkey-prf.spec.ts",
     "web:migrate": "tsx web/scripts/migrate.ts",
     "web:create-invite": "tsx web/scripts/create-invite.ts",
     "web:watch-chain": "tsx web/scripts/watch-chain.ts",
@@ -96,6 +97,7 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/node": "^26.1.0",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",

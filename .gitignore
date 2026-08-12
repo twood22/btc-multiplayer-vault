@@ -5,3 +5,5 @@ web/.next/
 .env
 *.env.local
 live-run/
+test-results/
+playwright-report/
