@@ -3,6 +3,13 @@ import { Buffer } from 'buffer';
 import * as bitcoin from 'bitcoinjs-lib';
 import type { AuthenticatorTransportFuture, Base64URLString } from '@simplewebauthn/server';
 import type { TrustedVaultInput } from '../../../src/types';
+import { getRawTransaction, sendRawTransaction } from '../../../src/bitcoin-rpc';
+import {
+  assertAuthorizedBroadcaster,
+  assertExactBroadcastTransaction,
+  confirmedBlockHeight,
+  type BroadcastContributionKind,
+} from '../../../src/broadcast-lifecycle';
 import { authorizeSoloSigningArtifacts } from '../../../src/psbt';
 import {
   aggregateRecoveryShares,
@@ -79,6 +86,20 @@ interface ConfirmableProposalRow extends LockedProposalRow {
   finalized_tx_hex: string;
 }
 
+interface BroadcastApprovalRow {
+  id: string;
+  proposal_id: string;
+  vault_id: string;
+  proposal_digest: Buffer;
+  final_txid: Buffer;
+  user_id: string;
+  participant_id: string;
+  credential_id: Base64URLString;
+  challenge: string;
+  status: 'pending' | 'approved' | 'submitting' | 'broadcast' | 'failed';
+  expires_at: Date;
+}
+
 export interface VaultRuntimeStatus {
   vaultId: string;
   participantId: string;
@@ -103,6 +124,7 @@ export interface VaultRuntimeStatus {
     psbtBase64: string;
     requiredSignerIds: string[];
     status: StoredProposalRow['status'];
+    finalTxid: string | null;
     expiresAt: string;
     cooperativeContributions: {
       pubnonces: Record<string, string>;
@@ -229,6 +251,7 @@ export async function getVaultRuntimeStatus(userId: string): Promise<VaultRuntim
       psbtBase64: proposal.psbt_base64,
       requiredSignerIds: rebuiltProposal!.requiredSignerIds,
       status: proposal.status,
+      finalTxid: proposal.final_txid?.toString('hex') ?? null,
       expiresAt: proposal.expires_at.toISOString(),
       cooperativeContributions,
       recoveryShares: proposal?.kind === 'recovery'
@@ -236,6 +259,367 @@ export async function getVaultRuntimeStatus(userId: string): Promise<VaultRuntim
         : null,
     } : null,
   };
+}
+
+export interface BroadcastApprovalChallenge {
+  id: string;
+  challenge: string;
+  proposalId: string;
+  vaultId: string;
+  proposalDigest: string;
+  finalTxid: string;
+  participantId: string;
+  credential: StoredCredential;
+}
+
+/** Issue a fresh passkey ceremony bound to one exact finalized transaction. */
+export async function createBroadcastApprovalChallenge(input: {
+  userId: string;
+  credentialId: string;
+  challenge: string;
+  proposalId: string;
+  proposalDigest: string;
+  finalTxid: string;
+}): Promise<BroadcastApprovalChallenge> {
+  if (!/^[0-9a-f]{64}$/u.test(input.proposalDigest) || !/^[0-9a-f]{64}$/u.test(input.finalTxid)) {
+    throw new Error('broadcast commitment is invalid');
+  }
+  const membership = await membershipForUser(input.userId);
+  const confirmed = await getConfirmedVaultArtifactForVault(membership.vault_id);
+  const result = await transaction(async (sql) => {
+    await sql`
+      DELETE FROM vault_broadcast_approvals
+      WHERE proposal_id = ${input.proposalId}::uuid
+        AND status = 'pending'
+        AND (expires_at <= now() OR user_id = ${input.userId}::uuid)
+    `;
+    const proposals = await sql<ConfirmableProposalRow[]>`
+      SELECT p.id, p.vault_id, p.roster_digest, p.input_coin_id, p.kind, p.round_id,
+             p.actor_participant_id, p.proposal_digest, p.unsigned_txid,
+             p.psbt_base64, p.finalized_tx_hex, p.final_txid, p.status, p.expires_at
+      FROM vault_transaction_proposals p
+      JOIN vaults v ON v.id = p.vault_id AND v.status = 'active'
+      WHERE p.id = ${input.proposalId}::uuid
+        AND p.vault_id = ${membership.vault_id}::uuid
+        AND p.status = 'finalized' AND p.expires_at > now()
+      FOR UPDATE OF p
+    `;
+    const proposal = proposals[0];
+    if (!proposal || !proposal.final_txid) {
+      throw new Error('proposal is not an unexpired finalized transaction in an active vault');
+    }
+    if (proposal.roster_digest.toString('hex') !== confirmed.digest ||
+        proposal.proposal_digest.toString('hex') !== input.proposalDigest ||
+        proposal.final_txid.toString('hex') !== input.finalTxid) {
+      throw new Error('broadcast commitment differs from the finalized vault proposal');
+    }
+    const coins = await sql<StoredCoinRow[]>`
+      SELECT id, vault_id, roster_digest, kind, round_id, owner_participant_id,
+             txid, vout::text, value_sats::text, script_pubkey, status,
+             confirmed_height::text
+      FROM vault_coins
+      WHERE id = ${proposal.input_coin_id}::uuid
+        AND vault_id = ${membership.vault_id}::uuid AND status = 'current'
+      FOR UPDATE
+    `;
+    if (coins.length !== 1) throw new Error('finalized proposal no longer spends the current vault coin');
+    const coin = storedCoinSnapshot(coins[0]!);
+    validateVaultCoin(confirmed.artifact, coin);
+    const rebuilt = buildVaultProposal({
+      artifact: confirmed.artifact,
+      coin,
+      kind: proposal.kind,
+      ...(proposal.actor_participant_id
+        ? { actorParticipantId: proposal.actor_participant_id }
+        : {}),
+      expiresAt: proposal.expires_at.toISOString(),
+    });
+    if (rebuilt.digest !== input.proposalDigest || rebuilt.psbtBase64 !== proposal.psbt_base64 ||
+        rebuilt.unsignedTxid !== proposal.unsigned_txid.toString('hex')) {
+      throw new Error('finalized proposal does not reproduce from the current vault coin');
+    }
+    assertExactBroadcastTransaction({
+      finalizedTxHex: proposal.finalized_tx_hex,
+      finalTxid: input.finalTxid,
+      observedTxid: input.finalTxid,
+    });
+    verifyVaultTransaction({
+      txHex: proposal.finalized_tx_hex,
+      prevouts: [{ scriptPubKeyHex: coin.scriptPubKeyHex, valueSats: coin.valueSats }],
+    });
+    const contributions = await sql<Array<{ kind: BroadcastContributionKind }>>`
+      SELECT kind FROM vault_proposal_contributions
+      WHERE proposal_id = ${proposal.id}::uuid
+        AND participant_id = ${membership.participant_id}
+        AND kind IN ('musig_partial', 'recovery_share')
+    `;
+    assertAuthorizedBroadcaster({
+      kind: proposal.kind,
+      actorParticipantId: proposal.actor_participant_id,
+      requiredSignerIds: rebuilt.requiredSignerIds,
+      participantId: membership.participant_id,
+      contributionKinds: contributions.map((item) => item.kind),
+    });
+    const credentials = await sql<Array<{
+      credential_id: Base64URLString;
+      credential_name: string;
+      public_key: Buffer;
+      counter: string;
+      transports: AuthenticatorTransportFuture[];
+    }>>`
+      SELECT credential_id, credential_name, public_key, counter, transports
+      FROM webauthn_credentials
+      WHERE user_id = ${input.userId}::uuid
+        AND credential_id = ${input.credentialId} AND prf_enabled = true
+    `;
+    const credential = credentials[0];
+    if (!credential) throw new Error('selected passkey is unavailable');
+    const inserted = await sql<Array<{ id: string }>>`
+      INSERT INTO vault_broadcast_approvals (
+        proposal_id, vault_id, proposal_digest, final_txid, user_id,
+        participant_id, credential_id, challenge, expires_at
+      ) VALUES (
+        ${proposal.id}::uuid, ${membership.vault_id}::uuid,
+        ${Buffer.from(input.proposalDigest, 'hex')}, ${Buffer.from(input.finalTxid, 'hex')},
+        ${input.userId}::uuid, ${membership.participant_id},
+        ${credential.credential_id}, ${input.challenge}, now() + interval '5 minutes'
+      ) RETURNING id
+    `;
+    return { proposal, credential, approvalId: inserted[0]!.id };
+  });
+  return {
+    id: result.approvalId,
+    challenge: input.challenge,
+    proposalId: result.proposal.id,
+    vaultId: membership.vault_id,
+    proposalDigest: input.proposalDigest,
+    finalTxid: input.finalTxid,
+    participantId: membership.participant_id,
+    credential: {
+      id: result.credential.credential_id,
+      name: result.credential.credential_name,
+      userId: input.userId,
+      publicKey: Uint8Array.from(result.credential.public_key),
+      counter: Number(result.credential.counter),
+      transports: result.credential.transports,
+      vaultId: membership.vault_id,
+      participantId: membership.participant_id,
+    },
+  };
+}
+
+export async function getBroadcastApprovalChallenge(input: {
+  approvalId: string;
+  userId: string;
+}): Promise<BroadcastApprovalChallenge> {
+  const rows = await db()<Array<BroadcastApprovalRow & {
+    credential_name: string;
+    public_key: Buffer;
+    counter: string;
+    transports: AuthenticatorTransportFuture[];
+  }>>`
+    SELECT a.*, c.credential_name, c.public_key, c.counter, c.transports
+    FROM vault_broadcast_approvals a
+    JOIN webauthn_credentials c
+      ON c.credential_id = a.credential_id AND c.user_id = a.user_id AND c.prf_enabled = true
+    JOIN vault_transaction_proposals p
+      ON p.id = a.proposal_id AND p.vault_id = a.vault_id
+      AND p.proposal_digest = a.proposal_digest AND p.final_txid = a.final_txid
+      AND p.status = 'finalized' AND p.expires_at > now()
+    WHERE a.id = ${input.approvalId}::uuid AND a.user_id = ${input.userId}::uuid
+      AND a.status = 'pending' AND a.expires_at > now()
+  `;
+  const row = rows[0];
+  if (!row) throw new Error('broadcast approval challenge is invalid or expired');
+  return {
+    id: row.id,
+    challenge: row.challenge,
+    proposalId: row.proposal_id,
+    vaultId: row.vault_id,
+    proposalDigest: row.proposal_digest.toString('hex'),
+    finalTxid: row.final_txid.toString('hex'),
+    participantId: row.participant_id,
+    credential: {
+      id: row.credential_id,
+      name: row.credential_name,
+      userId: row.user_id,
+      publicKey: Uint8Array.from(row.public_key),
+      counter: Number(row.counter),
+      transports: row.transports,
+      vaultId: row.vault_id,
+      participantId: row.participant_id,
+    },
+  };
+}
+
+export async function completeBroadcastApproval(
+  challenge: BroadcastApprovalChallenge,
+  newCounter: number,
+): Promise<string> {
+  return transaction(async (sql) => {
+    const credentials = await sql<Array<{ credential_id: string }>>`
+      UPDATE webauthn_credentials SET counter = ${newCounter}, last_used_at = now()
+      WHERE credential_id = ${challenge.credential.id}
+        AND user_id = ${challenge.credential.userId}::uuid
+        AND prf_enabled = true AND counter = ${challenge.credential.counter}
+      RETURNING credential_id
+    `;
+    if (credentials.length !== 1) throw new Error('passkey counter changed during broadcast approval');
+    const approved = await sql<Array<{ id: string }>>`
+      UPDATE vault_broadcast_approvals
+      SET status = 'approved', consumed_at = now(), approved_at = now(), updated_at = now()
+      WHERE id = ${challenge.id}::uuid AND proposal_id = ${challenge.proposalId}::uuid
+        AND user_id = ${challenge.credential.userId}::uuid
+        AND credential_id = ${challenge.credential.id}
+        AND proposal_digest = ${Buffer.from(challenge.proposalDigest, 'hex')}
+        AND final_txid = ${Buffer.from(challenge.finalTxid, 'hex')}
+        AND status = 'pending' AND expires_at > now()
+      RETURNING id
+    `;
+    if (approved.length !== 1) throw new Error('broadcast approval was already used or expired');
+    return approved[0]!.id;
+  });
+}
+
+/** Submit only the finalized bytes covered by the consumed passkey approval. */
+export async function submitApprovedBroadcast(input: {
+  approvalId: string;
+  userId?: string;
+}): Promise<{ txid: string }> {
+  const rows = await db()<Array<{
+    id: string;
+    proposal_id: string;
+    vault_id: string;
+    final_txid: Buffer;
+    finalized_tx_hex: string;
+    status: BroadcastApprovalRow['status'];
+    script_pubkey: Buffer;
+    value_sats: string;
+  }>>`
+    SELECT a.id, a.proposal_id, a.vault_id, a.final_txid, a.status,
+           p.finalized_tx_hex, coin.script_pubkey, coin.value_sats::text
+    FROM vault_broadcast_approvals a
+    JOIN vault_transaction_proposals p
+      ON p.id = a.proposal_id AND p.vault_id = a.vault_id
+      AND p.final_txid = a.final_txid AND p.status = 'finalized'
+    JOIN vault_coins coin ON coin.id = p.input_coin_id AND coin.status = 'current'
+    WHERE a.id = ${input.approvalId}::uuid
+      AND (${input.userId ?? null}::uuid IS NULL OR a.user_id = ${input.userId ?? null}::uuid)
+      AND a.status IN ('approved', 'submitting')
+  `;
+  const row = rows[0];
+  if (!row) throw new Error('broadcast approval is unavailable or transaction state changed');
+  const expectedTxid = row.final_txid.toString('hex');
+  assertExactBroadcastTransaction({
+    finalizedTxHex: row.finalized_tx_hex,
+    finalTxid: expectedTxid,
+    observedTxid: expectedTxid,
+  });
+  verifyVaultTransaction({
+    txHex: row.finalized_tx_hex,
+    prevouts: [{
+      scriptPubKeyHex: row.script_pubkey.toString('hex'),
+      valueSats: exactSafeInteger(row.value_sats, 'coin value'),
+    }],
+  });
+  if (row.status === 'approved') {
+    const claimed = await db()<Array<{ id: string }>>`
+      UPDATE vault_broadcast_approvals SET status = 'submitting', updated_at = now()
+      WHERE id = ${row.id}::uuid AND status = 'approved' RETURNING id
+    `;
+    if (claimed.length !== 1) throw new Error('broadcast approval was claimed by another request');
+  }
+  try {
+    const returnedTxid = await sendRawTransaction(row.finalized_tx_hex);
+    assertExactBroadcastTransaction({
+      finalizedTxHex: row.finalized_tx_hex,
+      finalTxid: expectedTxid,
+      observedTxid: returnedTxid,
+    });
+  } catch (broadcastError) {
+    try {
+      const observed = await getRawTransaction(expectedTxid, true);
+      assertExactBroadcastTransaction({
+        finalizedTxHex: row.finalized_tx_hex,
+        finalTxid: expectedTxid,
+        observedTxid: observed.txid,
+        observedTxHex: observed.hex,
+      });
+    } catch {
+      await db()`
+        UPDATE vault_broadcast_approvals
+        SET status = 'failed', failure_reason = ${boundedFailure(broadcastError)}, updated_at = now()
+        WHERE id = ${row.id}::uuid AND status = 'submitting'
+      `;
+      throw broadcastError;
+    }
+  }
+  await transaction(async (sql) => {
+    const proposal = await sql<Array<{ id: string }>>`
+      UPDATE vault_transaction_proposals SET status = 'broadcast', updated_at = now()
+      WHERE id = ${row.proposal_id}::uuid AND vault_id = ${row.vault_id}::uuid
+        AND final_txid = ${row.final_txid} AND status = 'finalized'
+      RETURNING id
+    `;
+    if (proposal.length !== 1) throw new Error('finalized proposal changed after mainnet submission');
+    const approval = await sql<Array<{ id: string }>>`
+      UPDATE vault_broadcast_approvals
+      SET status = 'broadcast', submitted_at = now(), updated_at = now()
+      WHERE id = ${row.id}::uuid AND status = 'submitting' RETURNING id
+    `;
+    if (approval.length !== 1) throw new Error('broadcast approval changed after mainnet submission');
+  });
+  return { txid: expectedTxid };
+}
+
+export async function pollVaultChain(): Promise<{
+  resumedBroadcasts: string[];
+  confirmedTransactions: string[];
+}> {
+  const interrupted = await db()<Array<{ id: string }>>`
+    SELECT id FROM vault_broadcast_approvals
+    WHERE status = 'submitting' AND updated_at < now() - interval '30 seconds'
+    ORDER BY updated_at
+  `;
+  const resumedBroadcasts: string[] = [];
+  for (const approval of interrupted) {
+    const submitted = await submitApprovedBroadcast({ approvalId: approval.id });
+    resumedBroadcasts.push(submitted.txid);
+  }
+  const broadcasts = await db()<Array<{
+    vault_id: string;
+    final_txid: Buffer;
+    finalized_tx_hex: string;
+  }>>`
+    SELECT vault_id, final_txid, finalized_tx_hex
+    FROM vault_transaction_proposals
+    WHERE status = 'broadcast' ORDER BY updated_at
+  `;
+  const confirmedTransactions: string[] = [];
+  for (const proposal of broadcasts) {
+    const expectedTxid = proposal.final_txid.toString('hex');
+    const observed = await getRawTransaction(expectedTxid, true);
+    assertExactBroadcastTransaction({
+      finalizedTxHex: proposal.finalized_tx_hex,
+      finalTxid: expectedTxid,
+      observedTxid: observed.txid,
+      observedTxHex: observed.hex,
+    });
+    const height = confirmedBlockHeight(observed);
+    if (height === null) continue;
+    await recordConfirmedVaultProposal({
+      vaultId: proposal.vault_id,
+      txid: expectedTxid,
+      confirmedHeight: height,
+    });
+    confirmedTransactions.push(expectedTxid);
+  }
+  return { resumedBroadcasts, confirmedTransactions };
+}
+
+function boundedFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : 'Bitcoin backend rejected broadcast';
+  return message.slice(0, 500);
 }
 
 /**

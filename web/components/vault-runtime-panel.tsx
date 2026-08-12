@@ -50,6 +50,7 @@ interface RuntimeStatus {
     psbtBase64: string;
     requiredSignerIds: string[];
     status: string;
+    finalTxid: string | null;
     expiresAt: string;
     cooperativeContributions: {
       pubnonces: Record<string, string>;
@@ -65,6 +66,7 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
   const [message, setMessage] = useState('Loading current vault state…');
   const [working, setWorking] = useState(false);
   const [browserReady, setBrowserReady] = useState(false);
+  const [broadcastConfirmed, setBroadcastConfirmed] = useState(false);
 
   async function refresh() {
     const next = await postJson('/api/vault/runtime', {}) as unknown as RuntimeStatus;
@@ -492,6 +494,40 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
     }
   }
 
+  async function broadcastProposal() {
+    if (!runtime?.proposal || !runtime.proposal.finalTxid || !credentialId || !broadcastConfirmed) return;
+    const proposal = runtime.proposal;
+    setWorking(true);
+    try {
+      setMessage('Waiting for your passkey approval to broadcast this exact transaction to Bitcoin mainnet…');
+      const options = await postJson('/api/vault/broadcast/options', {
+        credentialId,
+        proposalId: proposal.id,
+        proposalDigest: proposal.digest,
+        finalTxid: proposal.finalTxid,
+      });
+      if (options.proposalId !== proposal.id || options.proposalDigest !== proposal.digest ||
+          options.finalTxid !== proposal.finalTxid) {
+        throw new Error('broadcast challenge differs from the finalized transaction shown here');
+      }
+      const response = await assertPasskey(options.options as Record<string, unknown>);
+      const result = await postJson('/api/vault/broadcast/finish', {
+        approvalId: options.approvalId,
+        proposalId: proposal.id,
+        proposalDigest: proposal.digest,
+        finalTxid: proposal.finalTxid,
+        response,
+      });
+      setBroadcastConfirmed(false);
+      await refresh();
+      setMessage(`Broadcast submitted to Bitcoin mainnet as ${String(result.txid)}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Mainnet broadcast failed');
+    } finally {
+      setWorking(false);
+    }
+  }
+
   const observed = Boolean(runtime?.coin?.observedParticipantIds.includes(runtime.participantId));
   const currentRoundIds = runtime?.coin?.roundId ? participantIdsForRound(runtime.coin.roundId) : [];
   const canSolo = runtime?.coin?.kind === 'vault'
@@ -536,6 +572,16 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
   );
   const hasOwnPartial = Boolean(
     runtime && coop?.partialSigs[runtime.participantPersonalPublicKeyHex],
+  );
+  const canApproveBroadcast = Boolean(
+    runtime?.proposal?.status === 'finalized' &&
+    runtime.proposal.finalTxid &&
+    runtime.proposal.requiredSignerIds.includes(runtime.participantId) &&
+    ((runtime.proposal.kind === 'solo' || runtime.proposal.kind === 'final_sweep')
+      ? runtime.proposal.actorParticipantId === runtime.participantId
+      : runtime.proposal.kind === 'cooperative'
+        ? hasOwnPartial
+        : hasOwnRecoveryShare),
   );
   const allPubnonces = Boolean(
     runtime?.proposal && coop &&
@@ -666,6 +712,30 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
         )}
         {runtime?.proposal?.kind === 'recovery' && runtime.proposal.status === 'finalized' && (
           <p>Recovery finalized and held for explicit broadcast approval.</p>
+        )}
+        {canApproveBroadcast && runtime?.proposal?.finalTxid && (
+          <div className="activation-code">
+            <span>Ready for explicit mainnet broadcast</span>
+            <p>This sends the finalized transaction below to Bitcoin mainnet. It cannot be undone.</p>
+            <code>{runtime.proposal.finalTxid}</code>
+            <label>
+              <input
+                checked={broadcastConfirmed}
+                disabled={working}
+                onChange={(event) => setBroadcastConfirmed(event.target.checked)}
+                type="checkbox"
+              />
+              I reviewed this transaction and want to broadcast it to Bitcoin mainnet
+            </label>
+            <button
+              disabled={working || !broadcastConfirmed}
+              onClick={broadcastProposal}
+              type="button"
+            >Approve with passkey and broadcast to mainnet</button>
+          </div>
+        )}
+        {runtime?.proposal?.status === 'broadcast' && runtime.proposal.finalTxid && (
+          <p>Broadcast to Bitcoin mainnet as <code>{runtime.proposal.finalTxid}</code>; waiting for confirmation.</p>
         )}
         <p className="form-message" role="status">{working ? `Working · ${message}` : message}</p>
       </div>

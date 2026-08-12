@@ -63,6 +63,15 @@ participant-only MuSig2 path, or the timelocked recovery path.
   shares, and the final owner's sweep. Every signer rebuilds the transaction
   locally; the server re-authorizes and consensus-verifies the result; no path
   broadcasts automatically.
+- A separate passkey broadcast ceremony binds the credential assertion to the
+  exact finalized proposal digest and transaction ID. Only the solo/final
+  payout owner, or a cooperative/recovery signer whose verified contribution
+  is already stored, may approve it. The server submits only the stored
+  consensus-verified bytes and records interrupted/failed attempts without
+  silently changing the transaction.
+- A private scheduler entry point resumes only previously passkey-approved
+  submissions and advances protocol state only when the configured mainnet
+  backend returns the exact stored bytes with a confirmed block height.
 - Confirmed broadcast transactions can atomically spend the old coordinator
   coin, derive the exact surviving pair or final-owner coin after a solo exit,
   or close the vault after a terminal cooperative, recovery, or final sweep.
@@ -149,11 +158,14 @@ for a production database and real-authenticator run.
    automated WebAuthn browser tests with virtual authenticators and PRF support,
    rate limiting, audit events that never contain secrets, backup/restore
    drills, and operational monitoring.
-7. Add an explicit, reviewed broadcast workflow and a chain watcher around the
-   implemented confirmation transition; neither may bypass the finalized
-   proposal or readiness gates.
+7. Exercise the implemented passkey-approved broadcast and private chain
+   watcher against the selected production Bitcoin backend. Verify rejection,
+   duplicate submission, interrupted submission, mempool, confirmation, and
+   reorganization operations before funding.
 8. Deploy behind private access control, run the full security checklist on the
    deployed HTTPS origin, and only then allow deliberately tiny mainnet funding.
 
-Until every gate passes, the product must keep funding and broadcast controls
-absent. No local success or visual readiness overrides that rule.
+Until every gate passes, do not deploy or fund the product. The broadcast
+server path remains unreachable without an active vault coin, which itself can
+only be recorded after all nine live Sigbash readiness proofs. No local success
+or visual readiness overrides that rule.

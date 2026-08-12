@@ -33,7 +33,8 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Per-participant key custody | ✅ browser-distributed and passkey protected |
 | Recoverable passkey custody + encrypted Sigbash credentials/kits | ✅ implemented; real authenticator run still required |
 | Immutable three-passkey roster gate | ✅ implemented; PostgreSQL 16 migrations verified, real authenticator run still required |
-| User-facing solo/cooperative/recovery/final signing | ✅ implemented and server re-authorized; never auto-broadcasts |
+| User-facing solo/cooperative/recovery/final signing | ✅ implemented and server re-authorized |
+| Explicit passkey-approved broadcast + confirmation watcher | ✅ implemented; real backend execution still required |
 | Runs without local Bitcoin Core | ✅ `BITCOIN_BACKEND=esplora` |
 
 ## Requirements
@@ -203,6 +204,13 @@ Live Sigbash: `sigbash-live-setup`, `sigbash-sign-psbt`, `live-readiness`,
 `live-solo-withdrawal`, `live-solo-tamper-check`, `live-solo-audit`,
 `live-cooperative-audit`, `live-recovery-audit`, `live-final-sweep-audit`,
 `live-run-audit`, `live-acceptance-evidence`.
+
+The user-facing server never broadcasts during signing or finalization. After
+reviewing the exact finalized transaction, an eligible signer must check the
+mainnet warning and complete a separate passkey assertion. The server submits
+only those stored bytes. Run `npm run web:watch-chain` from a private scheduler
+to resume an interrupted approved submission and advance a broadcast proposal
+only after the backend returns the exact transaction as confirmed.
 
 `policy-check-psbt` and `sigbash-sign-psbt` infer the round from the PSBT's
 input scriptPubKey, so you only pass `--participant`.
