@@ -18,6 +18,7 @@ import { asSats, type VaultEconomics } from '../../src/types.js';
 import {
   assertProposalStatusTransition,
   buildVaultProposal,
+  deriveNextVaultCoin,
   validateVaultCoin,
   vaultCoinSnapshotDigest,
   vaultProposalDigest,
@@ -264,19 +265,14 @@ check('confirmed solo outputs advance through the pair round to the final owner 
     actorParticipantId: 'alice',
     expiresAt,
   });
-  const firstInspection = inspectPsbt(first.psbtBase64);
-  const pairOutput = firstInspection.outputs[1]!;
-  const pairCoin: VaultCoinSnapshot = {
-    vaultId,
-    rosterDigest: digest,
-    kind: 'vault',
-    roundId: 'bobcarol',
-    ownerParticipantId: null,
-    txid: first.unsignedTxid,
-    vout: pairOutput.index,
-    valueSats: pairOutput.valueSats,
-    scriptPubKeyHex: pairOutput.scriptPubKeyHex,
-  };
+  const pairCoin = deriveNextVaultCoin({
+    artifact,
+    coin: roundOneCoin(),
+    proposal: first,
+    confirmedTxid: first.unsignedTxid,
+  })!;
+  assert.equal(pairCoin.kind, 'vault');
+  assert.equal(pairCoin.roundId, 'bobcarol');
   validateVaultCoin(artifact, pairCoin);
   const second = buildVaultProposal({
     artifact,
@@ -285,19 +281,14 @@ check('confirmed solo outputs advance through the pair round to the final owner 
     actorParticipantId: 'bob',
     expiresAt,
   });
-  const secondInspection = inspectPsbt(second.psbtBase64);
-  const payoutOutput = secondInspection.outputs[1]!;
-  const payoutCoin: VaultCoinSnapshot = {
-    vaultId,
-    rosterDigest: digest,
-    kind: 'final_payout',
-    roundId: null,
-    ownerParticipantId: 'carol',
-    txid: second.unsignedTxid,
-    vout: payoutOutput.index,
-    valueSats: payoutOutput.valueSats,
-    scriptPubKeyHex: payoutOutput.scriptPubKeyHex,
-  };
+  const payoutCoin = deriveNextVaultCoin({
+    artifact,
+    coin: pairCoin,
+    proposal: second,
+    confirmedTxid: second.unsignedTxid,
+  })!;
+  assert.equal(payoutCoin.kind, 'final_payout');
+  assert.equal(payoutCoin.ownerParticipantId, 'carol');
   validateVaultCoin(artifact, payoutCoin);
   const sweep = buildVaultProposal({
     artifact,
@@ -314,6 +305,44 @@ check('confirmed solo outputs advance through the pair round to the final owner 
     actorParticipantId: 'bob',
     expiresAt,
   }), /must own/);
+});
+
+check('confirmed transition derivation rejects replay and ends terminal exits', () => {
+  const coin = roundOneCoin();
+  const expiresAt = '2030-01-01T00:00:00.000Z';
+  const solo = buildVaultProposal({ artifact, coin, kind: 'solo', actorParticipantId: 'alice', expiresAt });
+  assert.throws(() => deriveNextVaultCoin({
+    artifact,
+    coin: { ...coin, txid: '33'.repeat(32) },
+    proposal: solo,
+    confirmedTxid: solo.unsignedTxid,
+  }), /supplied current coin|reproduce/);
+  assert.throws(() => deriveNextVaultCoin({
+    artifact,
+    coin,
+    proposal: { ...solo, digest: '00'.repeat(32) },
+    confirmedTxid: solo.unsignedTxid,
+  }), /digest/);
+  const cooperative = buildVaultProposal({ artifact, coin, kind: 'cooperative', expiresAt });
+  assert.equal(deriveNextVaultCoin({
+    artifact,
+    coin,
+    proposal: cooperative,
+    confirmedTxid: cooperative.unsignedTxid,
+  }), null);
+  const recovery = buildVaultProposal({
+    artifact,
+    coin,
+    kind: 'recovery',
+    actorParticipantId: 'carol',
+    expiresAt,
+  });
+  assert.equal(deriveNextVaultCoin({
+    artifact,
+    coin,
+    proposal: recovery,
+    confirmedTxid: recovery.unsignedTxid,
+  }), null);
 });
 
 check('proposal lifecycle rejects replay from terminal and backwards states', () => {

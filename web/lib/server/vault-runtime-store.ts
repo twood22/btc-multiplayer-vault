@@ -21,6 +21,7 @@ import {
 import { sha256Hex } from '../../../src/crypto';
 import {
   buildVaultProposal,
+  deriveNextVaultCoin,
   validateVaultCoin,
   vaultCoinSnapshotDigest,
   type BuiltVaultProposal,
@@ -71,6 +72,10 @@ interface LockedProposalRow extends StoredProposalRow {
   vault_id: string;
   roster_digest: Buffer;
   input_coin_id: string;
+}
+
+interface ConfirmableProposalRow extends LockedProposalRow {
+  finalized_tx_hex: string;
 }
 
 export interface VaultRuntimeStatus {
@@ -1141,6 +1146,118 @@ export async function recordConfirmedFundingCoin(input: {
       throw new Error('vault has not passed the live Sigbash mainnet readiness gate');
     }
     return { id: inserted[0]!.id, snapshotDigest };
+  });
+}
+
+/**
+ * Chain-watcher boundary for a confirmed transaction previously marked as
+ * broadcast. It re-verifies the stored transaction before atomically spending
+ * the old coin and deriving the only possible next coin from the confirmed
+ * roster. Terminal exits close the vault instead.
+ */
+export async function recordConfirmedVaultProposal(input: {
+  vaultId: string;
+  txid: string;
+  confirmedHeight: number;
+}): Promise<{ nextCoin: VaultCoinSnapshot | null; closed: boolean }> {
+  if (!/^[0-9a-f]{64}$/u.test(input.txid)) throw new Error('confirmed transaction id is invalid');
+  if (!Number.isSafeInteger(input.confirmedHeight) || input.confirmedHeight <= 0) {
+    throw new Error('confirmed transaction height must be a positive integer');
+  }
+  const confirmed = await getConfirmedVaultArtifactForVault(input.vaultId);
+  return transaction(async (sql) => {
+    const proposals = await sql<ConfirmableProposalRow[]>`
+      SELECT id, vault_id, roster_digest, input_coin_id, kind, round_id,
+             actor_participant_id, proposal_digest, unsigned_txid,
+             psbt_base64, finalized_tx_hex, final_txid, status, expires_at
+      FROM vault_transaction_proposals
+      WHERE vault_id = ${input.vaultId}::uuid
+        AND final_txid = ${Buffer.from(input.txid, 'hex')}
+        AND status = 'broadcast'
+      FOR UPDATE
+    `;
+    if (proposals.length !== 1) {
+      throw new Error('confirmed transaction is not the vault’s single broadcast proposal');
+    }
+    const proposal = proposals[0]!;
+    if (proposal.roster_digest.toString('hex') !== confirmed.digest) {
+      throw new Error('broadcast proposal belongs to a different confirmed roster');
+    }
+    const coinRows = await sql<StoredCoinRow[]>`
+      SELECT id, vault_id, roster_digest, kind, round_id, owner_participant_id,
+             txid, vout::text, value_sats::text, script_pubkey, status,
+             confirmed_height::text
+      FROM vault_coins
+      WHERE id = ${proposal.input_coin_id}::uuid
+        AND vault_id = ${input.vaultId}::uuid AND status = 'current'
+      FOR UPDATE
+    `;
+    if (coinRows.length !== 1) throw new Error('broadcast proposal no longer spends the current vault coin');
+    const coin = storedCoinSnapshot(coinRows[0]!);
+    const validated = validateVaultCoin(confirmed.artifact, coin);
+    const transactionResult = bitcoin.Transaction.fromHex(proposal.finalized_tx_hex);
+    if (transactionResult.getId() !== input.txid ||
+        proposal.final_txid?.toString('hex') !== input.txid) {
+      throw new Error('confirmed txid differs from the finalized vault transaction');
+    }
+    verifyVaultTransaction({
+      txHex: proposal.finalized_tx_hex,
+      prevouts: [{ scriptPubKeyHex: coin.scriptPubKeyHex, valueSats: coin.valueSats }],
+    });
+    const built = buildVaultProposal({
+      artifact: confirmed.artifact,
+      coin,
+      kind: proposal.kind,
+      ...(proposal.actor_participant_id
+        ? { actorParticipantId: proposal.actor_participant_id }
+        : {}),
+      expiresAt: proposal.expires_at.toISOString(),
+    });
+    if (built.digest !== proposal.proposal_digest.toString('hex') ||
+        built.psbtBase64 !== proposal.psbt_base64 ||
+        built.unsignedTxid !== proposal.unsigned_txid.toString('hex')) {
+      throw new Error('broadcast proposal does not reproduce from the current vault coin');
+    }
+    const nextCoin = deriveNextVaultCoin({
+      artifact: confirmed.artifact,
+      coin: validated.coin,
+      proposal: built,
+      confirmedTxid: input.txid,
+    });
+    const spent = await sql<Array<{ id: string }>>`
+      UPDATE vault_coins
+      SET status = 'spent', spent_by_txid = ${Buffer.from(input.txid, 'hex')}, updated_at = now()
+      WHERE id = ${coin.id}::uuid AND status = 'current'
+      RETURNING id
+    `;
+    if (spent.length !== 1) throw new Error('current vault coin changed during confirmation');
+    if (nextCoin) {
+      await sql`
+        INSERT INTO vault_coins (
+          vault_id, roster_digest, kind, round_id, owner_participant_id,
+          txid, vout, value_sats, script_pubkey, confirmed_height
+        ) VALUES (
+          ${input.vaultId}::uuid, ${Buffer.from(confirmed.digest, 'hex')},
+          ${nextCoin.kind}, ${nextCoin.roundId}, ${nextCoin.ownerParticipantId},
+          ${Buffer.from(nextCoin.txid, 'hex')}, ${nextCoin.vout}, ${nextCoin.valueSats},
+          ${Buffer.from(nextCoin.scriptPubKeyHex, 'hex')}, ${input.confirmedHeight}
+        )
+      `;
+    } else {
+      const closed = await sql<Array<{ id: string }>>`
+        UPDATE vaults SET status = 'closed'
+        WHERE id = ${input.vaultId}::uuid AND status = 'active'
+        RETURNING id
+      `;
+      if (closed.length !== 1) throw new Error('active vault status changed during terminal confirmation');
+    }
+    const advanced = await sql<Array<{ id: string }>>`
+      UPDATE vault_transaction_proposals SET status = 'confirmed', updated_at = now()
+      WHERE id = ${proposal.id}::uuid AND status = 'broadcast'
+      RETURNING id
+    `;
+    if (advanced.length !== 1) throw new Error('broadcast proposal changed during confirmation');
+    return { nextCoin, closed: nextCoin === null };
   });
 }
 

@@ -8,6 +8,7 @@ import {
   buildFinalSweepPsbt,
   buildRecoveryPsbt,
   buildSoloWithdrawalPsbt,
+  inspectPsbt,
   psbtUnsignedTxid,
 } from './psbt.js';
 import {
@@ -238,6 +239,75 @@ export function buildVaultProposal(input: {
 
 export function vaultProposalDigest(commitment: VaultProposalCommitment): string {
   return sha256Hex(JSON.stringify(commitment));
+}
+
+/**
+ * Derive the only possible next coordinated coin after a confirmed proposal.
+ * Cooperative exits, recovery, and final sweeps end the vault. A solo exit
+ * advances output 1 into either the surviving pair vault or the last
+ * participant's final payout coin.
+ */
+export function deriveNextVaultCoin(input: {
+  artifact: PublishedRosterArtifact;
+  coin: VaultCoinSnapshot;
+  proposal: BuiltVaultProposal;
+  confirmedTxid: string;
+}): VaultCoinSnapshot | null {
+  if (!/^[0-9a-f]{64}$/u.test(input.confirmedTxid)) throw new Error('confirmed transaction id is invalid');
+  const validated = validateVaultCoin(input.artifact, input.coin);
+  if (input.proposal.digest !== vaultProposalDigest(input.proposal.commitment)) {
+    throw new Error('proposal digest does not match its commitment');
+  }
+  if (
+    input.proposal.commitment.vaultId !== input.coin.vaultId ||
+    input.proposal.commitment.rosterDigest !== input.coin.rosterDigest ||
+    input.proposal.commitment.coinSnapshotDigest !== vaultCoinSnapshotDigest(input.coin)
+  ) throw new Error('proposal does not spend the supplied current coin');
+  const rebuilt = buildVaultProposal({
+    artifact: input.artifact,
+    coin: input.coin,
+    kind: input.proposal.commitment.kind,
+    ...(input.proposal.commitment.actorParticipantId
+      ? { actorParticipantId: input.proposal.commitment.actorParticipantId }
+      : {}),
+    expiresAt: input.proposal.commitment.expiresAt,
+  });
+  if (
+    rebuilt.digest !== input.proposal.digest || rebuilt.psbtBase64 !== input.proposal.psbtBase64 ||
+    rebuilt.unsignedTxid !== input.proposal.unsignedTxid ||
+    rebuilt.unsignedTxid !== input.confirmedTxid
+  ) throw new Error('confirmed proposal does not reproduce from the current vault state');
+  if (input.proposal.commitment.kind !== 'solo') return null;
+  const leaverId = input.proposal.commitment.actorParticipantId;
+  if (!leaverId) throw new Error('confirmed solo proposal has no leaver');
+  const survivors = validated.currentParticipantIds.filter((id) => id !== leaverId);
+  const leftover = inspectPsbt(rebuilt.psbtBase64).outputs[1];
+  if (!leftover) throw new Error('confirmed solo proposal has no leftover output');
+  const next: VaultCoinSnapshot = survivors.length === 2 ? {
+    vaultId: input.coin.vaultId,
+    rosterDigest: input.coin.rosterDigest,
+    kind: 'vault',
+    roundId: input.artifact.vaults.find((vault) =>
+      vault.participantIds.length === 2 &&
+      vault.participantIds.every((id) => survivors.includes(id)))?.round ?? null,
+    ownerParticipantId: null,
+    txid: input.confirmedTxid,
+    vout: leftover.index,
+    valueSats: leftover.valueSats,
+    scriptPubKeyHex: leftover.scriptPubKeyHex,
+  } : {
+    vaultId: input.coin.vaultId,
+    rosterDigest: input.coin.rosterDigest,
+    kind: 'final_payout',
+    roundId: null,
+    ownerParticipantId: survivors[0] ?? null,
+    txid: input.confirmedTxid,
+    vout: leftover.index,
+    valueSats: leftover.valueSats,
+    scriptPubKeyHex: leftover.scriptPubKeyHex,
+  };
+  validateVaultCoin(input.artifact, next);
+  return next;
 }
 
 export function assertProposalStatusTransition(
