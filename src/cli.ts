@@ -48,6 +48,7 @@ import {
   signRecoveryPsbt,
   signSoloWithdrawalPsbt,
   soloLeavesOf,
+  type SoloSigningAuthorization,
 } from './psbt.js';
 import {
   LocalSigbashAdapter,
@@ -719,11 +720,16 @@ async function sigbashSignPsbt() {
     signedArtifacts.success && (signedArtifacts.txHex || signedArtifacts.signedPsbtBase64),
     'Sigbash signing succeeded but returned no txHex or signedPSBT artifact',
   );
+  const authorization = authorizeSoloSigningArtifacts(state, vault.participantIds, participantId, psbtBase64, {
+    txHex: signedArtifacts.txHex,
+    signedPsbtBase64: signedArtifacts.signedPsbtBase64,
+  });
   printResult('Sigbash signed PSBT', {
     keyId,
     participantId,
     verification,
     ...signedArtifacts,
+    authorization,
     nextCommands: sigbashSignedNextCommands(signedArtifacts),
   });
 }
@@ -1610,6 +1616,58 @@ async function dualLeafAcceptance() {
     /not the xpub's child 0\/0/,
   );
 
+  // Regression: remote-signer artifact authorization accepts exactly the
+  // locally signed solo transaction and rejects every deterministic tamper
+  // fixture (output mutation, identification-leaf witness, identification-leaf
+  // tapScriptSig).
+  const soloAuthorization = authorizeSoloSigningArtifacts(state, roundOneIds, 'alice', solo.psbtBase64, {
+    txHex: signedSolo.transactionHex,
+  });
+  assert(
+    soloAuthorization.txHexVerified &&
+      soloAuthorization.finalTxid === signedSolo.txid &&
+      soloAuthorization.consensus !== null,
+    'artifact authorization must accept the exact locally signed solo transaction',
+  );
+  const tamperFixtures = buildSoloAuthorizationTamperFixtures({
+    state,
+    currentIds: roundOneIds,
+    leaverId: 'alice',
+    transactionHex: signedSolo.transactionHex,
+    psbtBase64: solo.psbtBase64,
+  });
+  const expectAuthorizationRejected = (
+    label: string,
+    artifacts: { txHex?: string; signedPsbtBase64?: string },
+    pattern: RegExp,
+  ) => {
+    let message = '';
+    try {
+      authorizeSoloSigningArtifacts(state, roundOneIds, 'alice', solo.psbtBase64, artifacts);
+    } catch (error) {
+      message = errorMessage(error);
+    }
+    assert(
+      pattern.test(message),
+      `${label} artifact was not rejected with a clear reason (${message || 'accepted'})`,
+    );
+  };
+  expectAuthorizationRejected(
+    'output-mutation transaction',
+    { txHex: tamperFixtures.outputMutationTxHex },
+    /changed output 0's value/,
+  );
+  expectAuthorizationRejected(
+    'identification-leaf witness transaction',
+    { txHex: tamperFixtures.identificationWitnessTxHex },
+    /witness spends the identification leaf/,
+  );
+  expectAuthorizationRejected(
+    'identification-leaf tapScriptSig PSBT',
+    { signedPsbtBase64: tamperFixtures.identificationTapScriptSigPsbtBase64 },
+    /tapScriptSig for the identification leaf/,
+  );
+
   printResult('dual-leaf acceptance', {
     passed: true,
     checks: [
@@ -1621,6 +1679,7 @@ async function dualLeafAcceptance() {
       'checkpoint fresh/resume and xpub-only overrides derive one canonical dual-leaf vault',
       'live solo PSBTs carry a tapBip32Derivation for the policy leaf child 0/0 only',
       'legacy, incomplete, and mixed checkpoints/overrides are rejected outright',
+      'artifact authorization accepts the exact signed solo transaction and rejects output-mutation, identification-witness, and identification-tapScriptSig tampering',
     ],
   });
 }
@@ -2213,6 +2272,7 @@ async function liveSoloWithdrawal() {
   let liveVerification = null;
   let liveSignature = null;
   let signedArtifacts = null;
+  let authorization: SoloSigningAuthorization | null = null;
   if (checks.every((item) => item.ok)) {
     const adapter = await createSigbashAdapter({ participantId: leaverId });
     const policy = {
@@ -2226,13 +2286,39 @@ async function liveSoloWithdrawal() {
     if (verificationPassed && args.sign !== 'false') {
       liveSignature = await adapter.signPSBT({ psbtBase64: psbt.psbtBase64 }, policy);
       signedArtifacts = normalizeSigbashSigningResult(liveSignature);
+      const artifactsReturned = Boolean(
+        signedArtifacts.success && (signedArtifacts.txHex || signedArtifacts.signedPsbtBase64),
+      );
       checks.push(
         check(
           'Sigbash live signPSBT returned a broadcast or signed-PSBT artifact',
-          signedArtifacts.success && (signedArtifacts.txHex || signedArtifacts.signedPsbtBase64),
+          artifactsReturned,
           signedArtifacts,
         ),
       );
+      if (artifactsReturned) {
+        try {
+          authorization = authorizeSoloSigningArtifacts(state, currentIds, leaverId, psbt.psbtBase64, {
+            txHex: signedArtifacts.txHex,
+            signedPsbtBase64: signedArtifacts.signedPsbtBase64,
+          });
+          checks.push(
+            check(
+              'signer artifacts are authorized for broadcast (exact transaction, policy-spend leaf only)',
+              true,
+              authorization,
+            ),
+          );
+        } catch (error) {
+          checks.push(
+            check(
+              'signer artifacts are authorized for broadcast (exact transaction, policy-spend leaf only)',
+              false,
+              { error: errorMessage(error) },
+            ),
+          );
+        }
+      }
     }
   }
 
@@ -2249,12 +2335,15 @@ async function liveSoloWithdrawal() {
     liveVerification,
     liveSignature,
     signedArtifacts,
+    authorization,
     checks,
     passed: checks.every((item) => item.ok),
-    nextCommands: signedArtifacts ? sigbashSignedNextCommands(signedArtifacts) : [],
+    nextCommands: signedArtifacts && authorization ? sigbashSignedNextCommands(signedArtifacts) : [],
     nextStep:
       liveSignature === null
         ? 'Resolve failed checks or rerun without --sign false to request Sigbash signing.'
+        : authorization === null
+          ? 'Do not broadcast: the signer artifact failed local authorization.'
         : 'Broadcast txHex directly when present; otherwise merge/finalize signedPsbtBase64, broadcast it, then locate output 1 for the next round.',
   });
   assert(checks.every((item) => item.ok), 'live solo withdrawal failed');
