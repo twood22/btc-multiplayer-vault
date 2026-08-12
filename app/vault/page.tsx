@@ -7,6 +7,7 @@ import { SigbashCustodySetup } from '@/web/components/sigbash-custody-setup';
 import { SigbashReadinessProof } from '@/web/components/sigbash-readiness-proof';
 import { FinishKeySetup } from '@/web/components/finish-key-setup';
 import { VaultRuntimePanel } from '@/web/components/vault-runtime-panel';
+import { FundingCeremony } from '@/web/components/funding-ceremony';
 import { getRosterCeremonyStatus } from '@/web/lib/server/roster-store';
 import { getSigbashReadinessStatus } from '@/web/lib/server/sigbash-readiness-store';
 import { requireSessionUser } from '@/web/lib/server/session';
@@ -60,6 +61,9 @@ export default async function VaultPage() {
       )}
       {participant.setupComplete && participant.recoveryComplete && roster.review?.unanimous && readiness && (
         <SigbashReadinessProof passkeys={participant.passkeys} initialStatus={readiness} />
+      )}
+      {participant.setupComplete && participant.recoveryComplete && readiness?.ready && (
+        <FundingCeremony passkeys={participant.passkeys} />
       )}
       {participant.setupComplete && participant.recoveryComplete && (
         <RosterConfirmation

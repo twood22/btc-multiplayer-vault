@@ -16,6 +16,7 @@ const manualGates = [
   'Sigbash must explicitly enable mainnet for all three independent participant organization hashes.',
   'Each friend must complete setup and recovery with two real, distinct PRF-capable passkeys.',
   'Each friend must independently review the unanimous roster and tiny-mainnet economics.',
+  'Before initial wallet signing, all three friends must review the same funding PSBT fingerprint, inputs, change outputs, vault output, and fee.',
   'The selected production database backup and restore procedure must be exercised.',
   'Funding remains a separate explicit decision after this report passes.',
 ];
@@ -53,6 +54,7 @@ const deposit = explicitInteger('VAULT_DEPOSIT_SATS');
 const depositCap = explicitInteger('PRIVATE_BETA_MAX_DEPOSIT_SATS');
 const recoveryDelay = explicitInteger('RECOVERY_DELAY_BLOCKS');
 const confirmationsRequired = explicitInteger('VAULT_CONFIRMATIONS_REQUIRED');
+const fundingFee = explicitInteger('VAULT_FUNDING_FEE_SATS');
 checks.push(check(
   'tiny-mainnet amount is explicit and within the private-beta cap',
   deposit !== null && depositCap !== null && deposit >= 10_000 && deposit <= depositCap,
@@ -67,6 +69,11 @@ checks.push(check(
   'confirmation depth for funding and transitions is explicit',
   confirmationsRequired !== null && confirmationsRequired >= 1 && confirmationsRequired <= 144,
   confirmationsRequired === null ? undefined : `${confirmationsRequired} confirmations`,
+));
+checks.push(check(
+  'three-wallet funding fee is explicit and cannot consume one deposit',
+  fundingFee !== null && deposit !== null && fundingFee >= 500 && fundingFee < deposit,
+  fundingFee === null ? undefined : `${fundingFee} sats total`,
 ));
 
 const sigbashServer = parsedOrigin(process.env.SIGBASH_SERVER_URL);

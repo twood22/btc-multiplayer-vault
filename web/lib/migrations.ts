@@ -7,6 +7,7 @@ export const EXPECTED_MIGRATION_VERSIONS = [
   '006_sigbash_readiness',
   '007_broadcast_approval',
   '008_security_rate_limits',
+  '009_funding_ceremony',
 ] as const;
 
 export const EXPECTED_MIGRATION_FILES = EXPECTED_MIGRATION_VERSIONS

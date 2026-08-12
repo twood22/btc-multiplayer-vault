@@ -63,6 +63,12 @@ participant-only MuSig2 path, or the timelocked recovery path.
   shares, and the final owner's sweep. Every signer rebuilds the transaction
   locally; the server re-authorizes and consensus-verifies the result; no path
   broadcasts automatically.
+- After all nine proofs, each participant can register exactly one confirmed
+  P2WPKH or P2TR wallet coin and change destination. The browser observes it
+  through an independent mainnet source, the server resolves it independently,
+  and the participant's passkey approves the exact evidence and fee. Three
+  distinct approvals deterministically produce one unsigned funding PSBT that
+  every browser rebuilds before any external wallet signature exists.
 - A separate passkey broadcast ceremony binds the credential assertion to the
   exact finalized proposal digest and transaction ID. Only the solo/final
   payout owner, or a cooperative/recovery signer whose verified contribution
@@ -147,12 +153,15 @@ stripping, exact public key and BYO Sigbash-share compatibility,
 offline-roster rejection, xpub/leaf binding, deterministic roster digests,
 proposal replay resistance, exact confirmed-state advancement, fresh recovery
 observations, no funding address or output-script disclosure before unanimity,
-database-enforced one-time broadcast approvals, and adversarial rejection of
-malformed or single-funder activation transactions. The complete migrations
-through 008 have also been applied and re-applied idempotently on an isolated
+database-enforced one-time broadcast approvals, passkey-bound registration of
+one independently observed and server-verified wallet coin per participant,
+deterministic three-input funding PSBT reproduction, and adversarial rejection
+of malformed or single-funder activation transactions. The complete migrations
+through 009 have also been applied and re-applied idempotently on an isolated
 PostgreSQL 16 instance. The database acceptance test proves one-winner
 concurrent approval creation and submission claims, required passkey-consumed
-state, auditable retry after failure, proposal-digest foreign-key binding, and
+state, globally unique funding outpoints, one immutable funding approval per
+seat, auditable retry after failure, proposal-digest foreign-key binding, and
 atomic concurrent rate-limit counting/reset without raw subject storage;
 that is not a substitute for the selected production database and a complete
 real-authenticator/backend run.
@@ -169,7 +178,7 @@ coverage, but virtual authenticators do not satisfy the physical-passkey gate.
 `web:release-status` is the post-deployment funding report and prints only
 non-secret gate summaries. It verifies the
 declared Node runtime, HTTPS WebAuthn/RP binding, independent chain source,
-explicit tiny-mainnet amount cap and recovery delay, current upstream Sigbash
+explicit tiny-mainnet amount cap, funding fee, and recovery delay, current upstream Sigbash
 runtime hashes, a non-local TLS PostgreSQL endpoint and migrations, the exact
 three-member/two-passkey/nine-key/three-confirmation/nine-proof database state,
 absence of a pre-funding coin, and a mainnet Bitcoin backend. It always keeps
@@ -225,6 +234,17 @@ deployed, the following gates remain mandatory before funding:
 8. Confirm the service remains behind private access control, run the full
    security checklist on the deployed HTTPS origin, and only then consider
    deliberately tiny mainnet funding.
+
+After the nine live Sigbash proofs move the vault to `ready`, the web product
+opens a real three-wallet funding ceremony. Each friend supplies one confirmed
+mainnet wallet outpoint and a change address. The browser resolves that coin
+from an independent mainnet source, the server separately resolves the same
+unspent output, and a passkey approves the exact outpoint, value, script, total
+fee, evidence source, and change destination. Only three distinct immutable
+approvals can produce the canonical unsigned PSBT, which every browser rebuilds
+from the confirmed roster and all three approvals. Bitcoin private keys remain
+in the friends' external wallets. The current checkpoint intentionally stops
+before collecting those wallet signatures or broadcasting.
 
 Do not deploy until the explicit `live-predeployment-proof` command returns a
 real, locally authorized Sigbash mainnet signature. After private deployment,

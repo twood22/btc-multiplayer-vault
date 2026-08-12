@@ -10,6 +10,7 @@ const sql = postgres(databaseUrl, { max: 8 });
 const checks: Array<{ name: string; ok: boolean }> = [];
 const vaultId = '11111111-1111-4111-8111-111111111111';
 const userId = '22222222-2222-4222-8222-222222222222';
+const bobUserId = '22222222-2222-4222-8222-222222222223';
 const coinId = '33333333-3333-4333-8333-333333333333';
 const proposalId = '44444444-4444-4444-8444-444444444444';
 const rosterDigest = Buffer.alloc(32, 0x11);
@@ -68,6 +69,77 @@ try {
     assert.equal(stored[0]?.encoded, subjectHash.toString('hex'));
     assert.equal(stored[0]?.attempts, 20);
     assert(!JSON.stringify(stored).includes(rawSubject));
+  });
+
+  await check('migration 009 permits one immutable passkey-approved funding input per participant', async () => {
+    const versions = await sql<Array<{ count: string }>>`
+      SELECT count(*)::text AS count FROM schema_migrations
+      WHERE version = '009_funding_ceremony'
+    `;
+    assert.equal(versions[0]?.count, '1');
+    const challengeId = '99999999-9999-4999-8999-999999999991';
+    await insertFundingChallenge({
+      id: challengeId,
+      userId,
+      participantId: 'alice',
+      credentialId: 'credential-alice',
+      txidByte: 0xa1,
+      challenge: 'funding-a',
+    });
+    await assert.rejects(() => insertFundingChallenge({
+      id: '99999999-9999-4999-8999-999999999992',
+      userId,
+      participantId: 'alice',
+      credentialId: 'credential-alice',
+      txidByte: 0xa2,
+      challenge: 'funding-a-replay',
+    }), /funding_input_one_open_challenge_idx/);
+    await sql`
+      UPDATE funding_input_challenges SET consumed_at = now()
+      WHERE id = ${challengeId}::uuid
+    `;
+    await sql`
+      INSERT INTO participant_funding_inputs (
+        vault_id, user_id, participant_id, roster_digest, txid, vout, value_sats,
+        script_pubkey, change_address, source_origin, confirmations, funding_fee_sats,
+        commitment_digest, credential_id, challenge_id
+      ) VALUES (
+        ${vaultId}::uuid, ${userId}::uuid, 'alice', ${rosterDigest}, ${Buffer.alloc(32, 0xa1)},
+        0, 10530, ${Buffer.from(`5120${'a1'.repeat(32)}`, 'hex')}, 'bc1pacceptancechange',
+        'https://chain.example', 2, 600, ${Buffer.alloc(32, 0xb1)},
+        'credential-alice', ${challengeId}::uuid
+      )
+    `;
+    const aliceRows = await sql<Array<{ count: string }>>`
+      SELECT count(*)::text AS count FROM participant_funding_inputs
+      WHERE vault_id = ${vaultId}::uuid AND participant_id = 'alice'
+    `;
+    assert.equal(aliceRows[0]?.count, '1');
+  });
+
+  await check('migration 009 rejects reuse of one wallet coin by a different participant', async () => {
+    const challengeId = '99999999-9999-4999-8999-999999999993';
+    await insertFundingChallenge({
+      id: challengeId,
+      userId: bobUserId,
+      participantId: 'bob',
+      credentialId: 'credential-bob',
+      txidByte: 0xa1,
+      challenge: 'funding-b',
+    });
+    await sql`UPDATE funding_input_challenges SET consumed_at = now() WHERE id = ${challengeId}::uuid`;
+    await assert.rejects(() => sql`
+      INSERT INTO participant_funding_inputs (
+        vault_id, user_id, participant_id, roster_digest, txid, vout, value_sats,
+        script_pubkey, change_address, source_origin, confirmations, funding_fee_sats,
+        commitment_digest, credential_id, challenge_id
+      ) VALUES (
+        ${vaultId}::uuid, ${bobUserId}::uuid, 'bob', ${rosterDigest}, ${Buffer.alloc(32, 0xa1)},
+        0, 10530, ${Buffer.from(`5120${'a2'.repeat(32)}`, 'hex')}, 'bc1pacceptancechange',
+        'https://chain.example', 2, 600, ${Buffer.alloc(32, 0xb2)},
+        'credential-bob', ${challengeId}::uuid
+      )
+    `, /participant_funding_inputs_txid_vout_key/);
   });
 
   await check('an expired rate-limit window resets atomically to one attempt', async () => {
@@ -191,11 +263,14 @@ async function seed(): Promise<void> {
       VALUES (${vaultId}::uuid, 'Broadcast acceptance vault', 'active')
     `;
     await tx`
-      INSERT INTO users (id, display_name) VALUES (${userId}::uuid, 'Alice')
+      INSERT INTO users (id, display_name) VALUES
+        (${userId}::uuid, 'Alice'), (${bobUserId}::uuid, 'Bob')
     `;
     await tx`
       INSERT INTO vault_members (vault_id, user_id, participant_id)
-      VALUES (${vaultId}::uuid, ${userId}::uuid, 'alice')
+      VALUES
+        (${vaultId}::uuid, ${userId}::uuid, 'alice'),
+        (${vaultId}::uuid, ${bobUserId}::uuid, 'bob')
     `;
     await tx`
       INSERT INTO webauthn_credentials (
@@ -203,6 +278,15 @@ async function seed(): Promise<void> {
         device_type, backed_up, prf_enabled
       ) VALUES (
         'credential-alice', ${userId}::uuid, ${Buffer.alloc(65, 0x55)}, 0,
+        ARRAY['internal'], 'multiDevice', true, true
+      )
+    `;
+    await tx`
+      INSERT INTO webauthn_credentials (
+        credential_id, user_id, public_key, counter, transports,
+        device_type, backed_up, prf_enabled
+      ) VALUES (
+        'credential-bob', ${bobUserId}::uuid, ${Buffer.alloc(65, 0x56)}, 0,
         ARRAY['internal'], 'multiDevice', true, true
       )
     `;
@@ -237,6 +321,29 @@ async function seed(): Promise<void> {
       )
     `;
   });
+}
+
+async function insertFundingChallenge(input: {
+  id: string;
+  userId: string;
+  participantId: 'alice' | 'bob';
+  credentialId: string;
+  txidByte: number;
+  challenge: string;
+}): Promise<void> {
+  await sql`
+    INSERT INTO funding_input_challenges (
+      id, vault_id, user_id, participant_id, roster_digest, credential_id, challenge,
+      txid, vout, value_sats, script_pubkey, change_address, source_origin,
+      confirmations, funding_fee_sats, commitment_digest, expires_at
+    ) VALUES (
+      ${input.id}::uuid, ${vaultId}::uuid, ${input.userId}::uuid, ${input.participantId},
+      ${rosterDigest}, ${input.credentialId}, ${input.challenge}, ${Buffer.alloc(32, input.txidByte)},
+      0, 10530, ${Buffer.from(`5120${input.txidByte.toString(16).padStart(2, '0').repeat(32)}`, 'hex')},
+      'bc1pacceptancechange', 'https://chain.example', 2, 600,
+      ${Buffer.alloc(32, input.txidByte + 1)}, now() + interval '5 minutes'
+    )
+  `;
 }
 
 async function insertPending(id: string, challenge: string): Promise<void> {

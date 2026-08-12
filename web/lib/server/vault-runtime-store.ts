@@ -8,6 +8,7 @@ import {
   authorizeConfirmedFundingTransaction,
   type ConfirmedFundingAuthorization,
 } from '../../../src/funding';
+import { authorizeConfirmedFundingProposal } from '../../../src/funding-ceremony';
 import {
   assertAuthorizedBroadcaster,
   assertExactBroadcastTransaction,
@@ -44,6 +45,7 @@ import { db, transaction } from './db';
 import { chainConfirmationsRequired, chainObservationOrigins } from './config';
 import { getConfirmedVaultArtifactForVault } from './roster-store';
 import type { StoredCredential } from './webauthn-store';
+import { getApprovedFundingProposalForVault } from './funding-ceremony-store';
 
 const PROPOSAL_LIFETIME_MS = 15 * 60 * 1000;
 
@@ -1499,6 +1501,7 @@ export async function recordConfirmedFundingCoin(input: {
 }): Promise<{
   id: string;
   snapshotDigest: string;
+  fundingProposalDigest: string;
   fundingAuthorization: ConfirmedFundingAuthorization;
 }> {
   if (!Number.isSafeInteger(input.confirmedHeight) || input.confirmedHeight <= 0) {
@@ -1509,6 +1512,8 @@ export async function recordConfirmedFundingCoin(input: {
     throw new Error(`funding requires at least ${chainConfirmationsRequired()} confirmations`);
   }
   const confirmed = await getConfirmedVaultArtifactForVault(input.vaultId);
+  const approvedProposal = await getApprovedFundingProposalForVault(input.vaultId);
+  authorizeConfirmedFundingProposal(input.fundingTransaction, approvedProposal);
   const fundingAuthorization = authorizeConfirmedFundingTransaction({
     transaction: input.fundingTransaction,
     expectedTxid: input.trustedInput.txid,
@@ -1558,7 +1563,12 @@ export async function recordConfirmedFundingCoin(input: {
     if (activated.length !== 1) {
       throw new Error('vault has not passed the live Sigbash mainnet readiness gate');
     }
-    return { id: inserted[0]!.id, snapshotDigest, fundingAuthorization };
+    return {
+      id: inserted[0]!.id,
+      snapshotDigest,
+      fundingProposalDigest: approvedProposal.digest,
+      fundingAuthorization,
+    };
   });
 }
 

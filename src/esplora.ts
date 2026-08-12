@@ -128,6 +128,7 @@ export async function esploraGetRawTransaction(txid: string): Promise<RpcTransac
   return {
     txid: tx.txid,
     version: tx.version,
+    locktime: tx.locktime,
     vin: tx.vin.map((input) => ({
       txid: input.txid,
       vout: input.vout,

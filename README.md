@@ -37,6 +37,7 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Browser PRF setup/recovery/sign-in/unlock | ✅ Chromium + two virtual authenticators; physical devices still required |
 | Immutable three-passkey roster gate | ✅ implemented; PostgreSQL 16 migrations verified, real authenticator run still required |
 | User-facing solo/cooperative/recovery/final signing | ✅ implemented and server re-authorized |
+| Passkey-bound three-wallet funding PSBT preparation | ✅ implemented; external wallet signature exchange remains gated |
 | Explicit passkey-approved broadcast + confirmation watcher | ✅ implemented; real backend execution still required |
 | PostgreSQL broadcast approval replay/concurrency checks | ✅ verified on disposable PostgreSQL 16 |
 | Database-atomic sensitive-operation rate limits | ✅ implemented and concurrency-verified |
@@ -305,6 +306,14 @@ input scriptPubKey, so you only pass `--participant`.
    participant, a relayable fee, and no dust change; it derives the output from
    the private beta's committed tiny-mainnet economics:
 
+   The web vault now performs the real preparation ceremony: each friend enters
+   one wallet outpoint and change address, independently observes the coin on
+   mainnet, and approves that exact commitment with a passkey. Once all three
+   approvals exist, every browser rebuilds the same canonical unsigned PSBT.
+   Set `VAULT_FUNDING_FEE_SATS` explicitly before opening this ceremony. Wallet
+   signatures and broadcast remain separate; copying the PSBT does not fund the
+   vault.
+
    ```bash
    npm run funding-psbt -- --inputs-json '[{"participantId":"alice",...},...]' --fee-sats 3000
    # sign with the participants' wallets, broadcast, then:
@@ -321,13 +330,14 @@ input scriptPubKey, so you only pass `--participant`.
    ```
 
    The recorder checks mainnet identity, unspent status, three unique P2WPKH or
-   P2TR inputs each worth at least one participant deposit, exactly one
-   roster-derived vault output, bounded outputs, non-dust change, fee sanity,
-   vault readiness, and the configured confirmation depth before the database
-   can become active. The chain structure cannot identify the human owner of
-   each input, so the three friends must still review their own wallet's input
-   and the final transaction before signing. The recorder is not an HTTP route
-   and must not be run until funding has been separately approved.
+   P2TR inputs each worth at least one participant deposit, the exact input
+   order and outputs from the three passkey-approved PSBT, exactly one
+   roster-derived vault output, non-dust change, fee sanity, vault readiness,
+   and the configured confirmation depth before the database can become active.
+   The chain structure cannot identify the human owner of each input, so the
+   three friends must still review their own wallet's input and the final
+   transaction before signing. The recorder is not an HTTP route and must not
+   be run until funding has been separately approved.
 
 5. **Solo withdrawal** (Alice leaves first):
 

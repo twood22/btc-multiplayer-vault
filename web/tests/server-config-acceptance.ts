@@ -5,9 +5,10 @@ import {
   reviewedNodeRuntimeCheck,
 } from '../../src/runtime-version';
 import { assertDatabaseUrl, databaseEndpointCheck } from '../lib/database-config.js';
-import { chainConfirmationsRequired } from '../lib/server/config.js';
+import { chainConfirmationsRequired, fundingFeeSats } from '../lib/server/config.js';
 
 const previous = process.env.VAULT_CONFIRMATIONS_REQUIRED;
+const previousFundingFee = process.env.VAULT_FUNDING_FEE_SATS;
 try {
   delete process.env.VAULT_CONFIRMATIONS_REQUIRED;
   assert.throws(() => chainConfirmationsRequired(), /VAULT_CONFIRMATIONS_REQUIRED is required/);
@@ -19,6 +20,15 @@ try {
 
   process.env.VAULT_CONFIRMATIONS_REQUIRED = '3';
   assert.equal(chainConfirmationsRequired(), 3);
+
+  delete process.env.VAULT_FUNDING_FEE_SATS;
+  assert.equal(fundingFeeSats(), 600);
+  for (const invalid of ['0', '499', '600.5', '-1', 'not-a-number']) {
+    process.env.VAULT_FUNDING_FEE_SATS = invalid;
+    assert.throws(() => fundingFeeSats(), /integer of at least 500/);
+  }
+  process.env.VAULT_FUNDING_FEE_SATS = '900';
+  assert.equal(fundingFeeSats(), 900);
 
   assert.deepEqual(reviewedNodeRuntimeCheck(REVIEWED_NODE_VERSION), {
     ok: true,
@@ -46,6 +56,8 @@ try {
 } finally {
   if (previous === undefined) delete process.env.VAULT_CONFIRMATIONS_REQUIRED;
   else process.env.VAULT_CONFIRMATIONS_REQUIRED = previous;
+  if (previousFundingFee === undefined) delete process.env.VAULT_FUNDING_FEE_SATS;
+  else process.env.VAULT_FUNDING_FEE_SATS = previousFundingFee;
 }
 
 console.log(JSON.stringify({
@@ -61,6 +73,10 @@ console.log(JSON.stringify({
     },
     {
       name: 'the exact reviewed Node runtime rejects mismatched patch versions',
+      ok: true,
+    },
+    {
+      name: 'funding fee configuration rejects values below the transaction safety floor',
       ok: true,
     },
   ],

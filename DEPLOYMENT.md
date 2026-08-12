@@ -119,6 +119,11 @@ rejected by the release report.
 9. Run `npm run web:release-status`. Only after its automated funding checks and
    manual review are complete may funding be considered. Funding still requires
    a new, explicit approval.
+10. After that separate approval, each participant uses the web funding ceremony
+    to passkey-approve one independently observed wallet coin and its change
+    destination. Confirm that all three browsers reproduce the same PSBT
+    fingerprint before any external wallet signs it. The web service does not
+    possess the three wallet private keys and this step does not broadcast.
 
 ## Backup and monitoring minimums
 
@@ -155,7 +160,8 @@ npm run web:record-funding -- --vault-id <uuid> --txid <txid> --vout <index>
 
 Do not run that command merely because the service is deployed or healthy. It
 rechecks the exact mainnet P2TR output, exactly three unique qualifying funding
-inputs, fee/change sanity, and the database's nine-proof ready state. On-chain
+inputs, the complete transaction against the three passkey-approved PSBT,
+fee/change sanity, and the database's nine-proof ready state. On-chain
 structure cannot prove which friend owns an input, so each friend must verify
 their own wallet contribution and the complete transaction before signing; the
 human funding approval remains mandatory.

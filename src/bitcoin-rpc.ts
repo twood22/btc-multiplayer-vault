@@ -48,6 +48,7 @@ export interface RpcTransaction {
   txid: string;
   hash?: string;
   version?: number;
+  locktime?: number;
   vin: RpcTxInput[];
   vout: RpcTxOutput[];
   confirmations?: number;

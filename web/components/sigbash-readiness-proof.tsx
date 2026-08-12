@@ -157,7 +157,7 @@ export function SigbashReadinessProof({
       const next = completed as unknown as ReadinessStatus;
       setStatus(next);
       setMessage(next.ready
-        ? 'All nine live mainnet Sigbash keys are proven; the vault passed its funding readiness gate'
+        ? 'All nine live mainnet Sigbash keys are proven. Funding remains closed until the separate operational release checks and explicit approval pass.'
         : next.nextRound
           ? `${next.participantProofRounds.length} of 3 personal proofs complete; ${next.nextRound} is next`
           : `Your three proofs are complete; waiting for friends (${next.totalProofCount}/9 total)`);
@@ -174,10 +174,11 @@ export function SigbashReadinessProof({
     <section className={status.participantProofRounds.length === 3 ? 'sigbash-card started' : 'sigbash-card'}>
       <div>
         <p className="eyebrow">Live signing proof</p>
-        <h2>{status.ready ? 'Funding gate passed' : 'Prove every Sigbash round key'}</h2>
+        <h2>{status.ready ? 'Sigbash signing gate passed' : 'Prove every Sigbash round key'}</h2>
         <p>
           Each proof uses a server-random unfunded outpoint. Sigbash must reject three hostile
           transactions and return one real mainnet signature that this service verifies independently.
+          Completing this signer gate does not authorize funding.
         </p>
       </div>
       <div className="sigbash-controls">

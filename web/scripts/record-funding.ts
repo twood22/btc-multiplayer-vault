@@ -63,6 +63,7 @@ console.log(JSON.stringify({
   confirmations,
   confirmedHeight,
   snapshotDigest: recorded.snapshotDigest,
+  fundingProposalDigest: recorded.fundingProposalDigest,
   participantInputCount: recorded.fundingAuthorization.participantInputCount,
   inputValuesSats: recorded.fundingAuthorization.inputValuesSats,
   feeSats: recorded.fundingAuthorization.feeSats,

@@ -1,4 +1,6 @@
 import 'server-only';
+import { DEFAULT_FUNDING_FEE_SATS } from '../../../src/funding-ceremony';
+import { MIN_FUNDING_RELAY_FEE_SATS } from '../../../src/funding';
 
 export interface WebConfig {
   rpName: string;
@@ -47,6 +49,16 @@ export function chainConfirmationsRequired(): number {
   const value = Number(raw);
   if (!/^\d+$/u.test(raw) || !Number.isSafeInteger(value) || value < 1 || value > 144) {
     throw new Error('VAULT_CONFIRMATIONS_REQUIRED must be an integer from 1 to 144');
+  }
+  return value;
+}
+
+/** Total fee all three participants approve before the funding PSBT exists. */
+export function fundingFeeSats(): number {
+  const raw = process.env.VAULT_FUNDING_FEE_SATS;
+  const value = raw === undefined || raw === '' ? DEFAULT_FUNDING_FEE_SATS : Number(raw);
+  if (!Number.isSafeInteger(value) || value < MIN_FUNDING_RELAY_FEE_SATS) {
+    throw new Error(`VAULT_FUNDING_FEE_SATS must be an integer of at least ${MIN_FUNDING_RELAY_FEE_SATS}`);
   }
   return value;
 }

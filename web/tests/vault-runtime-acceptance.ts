@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { observeVaultCoin } from '../lib/client/chain-observation.js';
+import { observeFundingInput, observeVaultCoin } from '../lib/client/chain-observation.js';
 import { MAINNET_GENESIS_HASH } from '../../src/network.js';
 import { vaultCoinSnapshotDigest, type VaultCoinSnapshot } from '../../src/vault-runtime.js';
 import {
@@ -64,6 +64,25 @@ try {
   await check('an unconfirmed vault output is rejected', async () => {
     globalThis.fetch = fakeEsplora({ confirmed: false });
     await assert.rejects(() => observeVaultCoin('https://chain.example', coin), /not confirmed on mainnet/);
+  });
+
+  await check('browser resolves a real confirmed unspent funding outpoint without trusting typed value or script', async () => {
+    globalThis.fetch = fakeEsplora();
+    const observed = await observeFundingInput('https://chain.example', coin.txid, coin.vout);
+    assert.equal(observed.txid, coin.txid);
+    assert.equal(observed.vout, coin.vout);
+    assert.equal(observed.valueSats, coin.valueSats);
+    assert.equal(observed.scriptPubKeyHex, coin.scriptPubKeyHex);
+    assert.equal(observed.confirmations, 2);
+    assert.equal(observed.observedUnspent, true);
+  });
+
+  await check('browser refuses a selected funding outpoint already reported spent', async () => {
+    globalThis.fetch = fakeEsplora({ spent: true });
+    await assert.rejects(
+      () => observeFundingInput('https://chain.example', coin.txid, coin.vout),
+      /reports the funding output spent/,
+    );
   });
 
   await check('browser secret nonces are encrypted, proposal-bound, and burned before use', async () => {
