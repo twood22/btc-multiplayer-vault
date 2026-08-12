@@ -2,6 +2,7 @@ import 'server-only';
 import { Buffer } from 'buffer';
 import type { AuthenticatorTransportFuture, Base64URLString } from '@simplewebauthn/server';
 import type { TrustedVaultInput } from '../../../src/types';
+import { authorizeSoloSigningArtifacts } from '../../../src/psbt';
 import {
   buildVaultProposal,
   validateVaultCoin,
@@ -47,6 +48,12 @@ interface StoredProposalRow {
   psbt_base64: string;
   status: 'collecting' | 'finalized' | 'broadcast' | 'confirmed' | 'rejected' | 'stale';
   expires_at: Date;
+}
+
+interface LockedProposalRow extends StoredProposalRow {
+  vault_id: string;
+  roster_digest: Buffer;
+  input_coin_id: string;
 }
 
 export interface VaultRuntimeStatus {
@@ -331,6 +338,103 @@ export async function createCoinObservationChallenge(input: {
       participantId: membership.participant_id,
     },
   };
+}
+
+export async function finalizeStoredSoloProposal(input: {
+  userId: string;
+  proposalId: string;
+  proposalDigest: string;
+  transactionHex: string;
+  signedPsbtBase64?: string;
+}): Promise<{ txid: string; consensusChecks: string[] }> {
+  if (!/^[0-9a-f]{64}$/u.test(input.proposalDigest)) throw new Error('proposal digest is invalid');
+  if (!/^[0-9a-f]+$/u.test(input.transactionHex) || input.transactionHex.length > 400_000) {
+    throw new Error('final transaction hex is invalid');
+  }
+  if (input.signedPsbtBase64 && input.signedPsbtBase64.length > 100_000) {
+    throw new Error('signed PSBT is too large');
+  }
+  const membership = await membershipForUser(input.userId);
+  const confirmed = await getConfirmedVaultArtifactForVault(membership.vault_id);
+  return transaction(async (sql) => {
+    const proposals = await sql<LockedProposalRow[]>`
+      SELECT id, vault_id, roster_digest, input_coin_id, kind, round_id,
+             actor_participant_id, proposal_digest, unsigned_txid,
+             psbt_base64, status, expires_at
+      FROM vault_transaction_proposals
+      WHERE id = ${input.proposalId}::uuid
+        AND vault_id = ${membership.vault_id}::uuid
+        AND status = 'collecting'
+        AND expires_at > now()
+      FOR UPDATE
+    `;
+    const proposal = proposals[0];
+    if (!proposal) throw new Error('solo proposal is missing, expired, or no longer collecting');
+    if (proposal.kind !== 'solo' || proposal.actor_participant_id !== membership.participant_id) {
+      throw new Error('this participant cannot finalize the requested solo proposal');
+    }
+    if (
+      proposal.proposal_digest.toString('hex') !== input.proposalDigest ||
+      proposal.roster_digest.toString('hex') !== confirmed.digest
+    ) {
+      throw new Error('solo proposal digest differs from the confirmed vault commitment');
+    }
+    const coins = await sql<StoredCoinRow[]>`
+      SELECT id, vault_id, roster_digest, kind, round_id, owner_participant_id,
+             txid, vout::text, value_sats::text, script_pubkey, status,
+             confirmed_height::text
+      FROM vault_coins
+      WHERE id = ${proposal.input_coin_id}::uuid
+        AND vault_id = ${membership.vault_id}::uuid
+        AND status = 'current'
+      FOR UPDATE
+    `;
+    if (coins.length !== 1) throw new Error('proposal input is no longer the current vault coin');
+    const coin = storedCoinSnapshot(coins[0]!);
+    const validated = validateVaultCoin(confirmed.artifact, coin);
+    const rebuilt = buildVaultProposal({
+      artifact: confirmed.artifact,
+      coin,
+      kind: 'solo',
+      actorParticipantId: membership.participant_id,
+      expiresAt: proposal.expires_at.toISOString(),
+    });
+    if (
+      rebuilt.digest !== input.proposalDigest ||
+      rebuilt.psbtBase64 !== proposal.psbt_base64 ||
+      rebuilt.unsignedTxid !== proposal.unsigned_txid.toString('hex')
+    ) {
+      throw new Error('stored solo proposal no longer reproduces from the current vault coin');
+    }
+    const authorization = authorizeSoloSigningArtifacts(
+      validated.state,
+      validated.currentParticipantIds,
+      membership.participant_id,
+      proposal.psbt_base64,
+      {
+        txHex: input.transactionHex,
+        signedPsbtBase64: input.signedPsbtBase64 ?? null,
+      },
+    );
+    if (!authorization.finalTxid || !authorization.consensus) {
+      throw new Error('solo result is not a finalized consensus-valid transaction');
+    }
+    if (authorization.finalTxid !== proposal.unsigned_txid.toString('hex')) {
+      throw new Error('solo signature changed the committed unsigned transaction');
+    }
+    const updated = await sql<Array<{ id: string }>>`
+      UPDATE vault_transaction_proposals
+      SET status = 'finalized', finalized_tx_hex = ${input.transactionHex},
+          final_txid = ${Buffer.from(authorization.finalTxid, 'hex')}, updated_at = now()
+      WHERE id = ${proposal.id}::uuid AND status = 'collecting'
+      RETURNING id
+    `;
+    if (updated.length !== 1) throw new Error('solo proposal status changed during finalization');
+    return {
+      txid: authorization.finalTxid,
+      consensusChecks: authorization.consensus.checks,
+    };
+  });
 }
 
 export async function getCoinObservationChallenge(input: {

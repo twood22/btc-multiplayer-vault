@@ -5,6 +5,7 @@ import { PasskeyRecoverySetup } from '@/web/components/passkey-recovery-setup';
 import { RosterConfirmation } from '@/web/components/roster-confirmation';
 import { SigbashCustodySetup } from '@/web/components/sigbash-custody-setup';
 import { FinishKeySetup } from '@/web/components/finish-key-setup';
+import { VaultRuntimePanel } from '@/web/components/vault-runtime-panel';
 import { getRosterCeremonyStatus } from '@/web/lib/server/roster-store';
 import { requireSessionUser } from '@/web/lib/server/session';
 import { getMemberStatus } from '@/web/lib/server/webauthn-store';
@@ -61,6 +62,9 @@ export default async function VaultPage() {
           participantConfirmed={roster.participantConfirmed}
           passkeys={participant.passkeys}
         />
+      )}
+      {participant.setupComplete && participant.recoveryComplete && roster.review?.unanimous && (
+        <VaultRuntimePanel passkeys={participant.passkeys} />
       )}
       <section className="gate-list">
         <article className={participant.setupComplete ? 'done' : ''}><span>{participant.setupComplete ? 'Done' : 'Required'}</span><h2>Personal key protected</h2><p>Encrypted with your passkey PRF; plaintext is never stored.</p></article>
