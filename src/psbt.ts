@@ -1,11 +1,13 @@
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { AMOUNTS, RECOVERY_DELAY_BLOCKS } from './config.js';
+import { verifyVaultTransaction, type ConsensusVerification } from './consensus.js';
 import { keyAggSecret, taggedHashHex, tapLeafHash, xpubMasterFingerprint } from './crypto.js';
 import { participantById, policyId, roundId, sigbashRoundKey } from './vault.js';
 import type {
   Hex,
   Keypair,
+  Prevout,
   PsbtInspection,
   SoloPolicy,
   VaultKeyPath,
@@ -507,6 +509,218 @@ export function signSoloWithdrawalPsbt({
   };
 }
 
+export interface SoloSigningAuthorization {
+  round: string;
+  leaverId: string;
+  finalTxid: string | null;
+  txHexVerified: boolean;
+  signedPsbtVerified: boolean;
+  signedPsbtFinalized: boolean;
+  partialSignatureCount: number;
+  consensus: ConsensusVerification | null;
+  checks: string[];
+}
+
+/**
+ * Trust boundary for artifacts returned by a remote signing service. The
+ * returned txHex/signedPSBT are treated as hostile: nothing is authorized for
+ * broadcast unless it is exactly the transaction we asked the signer to sign
+ * (version, locktime, every outpoint/sequence/scriptSig, every output value
+ * and script), spends the exact vault witnessUtxo, and commits only to the
+ * leaver's policy-spend leaf. Key-path signatures, identification-leaf
+ * signatures or witnesses, and any transaction mutation are rejected. Final
+ * transactions must additionally pass full consensus verification against the
+ * original vault prevout.
+ */
+export function authorizeSoloSigningArtifacts(
+  state: VaultState,
+  currentIds: string[],
+  leaverId: string,
+  originalPsbtBase64: string,
+  artifacts: { txHex?: string | null; signedPsbtBase64?: string | null },
+): SoloSigningAuthorization {
+  const round = roundId(currentIds);
+  const vault = requireVault(state, currentIds);
+  const { policyLeaf, identificationLeaf } = soloLeavesOf(vault, leaverId);
+  const policyLeafKeyHex = singleKeyLeafKeyHex(policyLeaf.scriptHex, `${leaverId} ${round} policy-spend leaf`);
+  const identificationKeyHex = singleKeyLeafKeyHex(
+    identificationLeaf.scriptHex,
+    `${leaverId} ${round} identification leaf`,
+  );
+  const policyLeafHash = tapLeafHash(Buffer.from(policyLeaf.scriptHex, 'hex'));
+  const policyLeafHashHex = policyLeafHash.toString('hex');
+  const identificationLeafHashHex = tapLeafHash(
+    Buffer.from(identificationLeaf.scriptHex, 'hex'),
+  ).toString('hex');
+
+  const txHex = artifacts.txHex || null;
+  const signedPsbtBase64 = artifacts.signedPsbtBase64 || null;
+  if (!txHex && !signedPsbtBase64) {
+    throw new Error('signer returned no artifacts to authorize');
+  }
+
+  const originalPsbt = bitcoin.Psbt.fromBase64(originalPsbtBase64, { network: bitcoin.networks.testnet });
+  const originalTx = unsignedTx(originalPsbt);
+  if (originalTx.ins.length !== 1) {
+    throw new Error(`solo withdrawal PSBT must have exactly 1 input, got ${originalTx.ins.length}`);
+  }
+  const originalWitnessUtxo = originalPsbt.data.inputs[0]?.witnessUtxo;
+  if (!originalWitnessUtxo) throw new Error('original solo PSBT is missing witnessUtxo');
+  if (Buffer.from(originalWitnessUtxo.script).toString('hex') !== vault.outputScriptHex) {
+    throw new Error(`original solo PSBT witnessUtxo is not the ${round} vault script`);
+  }
+  const vaultValue = BigInt(originalWitnessUtxo.value);
+  const prevout: Prevout = { scriptPubKeyHex: vault.outputScriptHex, valueSats: Number(vaultValue) };
+
+  const checks: string[] = [];
+  const finalTxids: string[] = [];
+  let consensus: ConsensusVerification | null = null;
+  let signedPsbtFinalized = false;
+  let partialSignatureCount = 0;
+
+  if (signedPsbtBase64) {
+    const signedPsbt = bitcoin.Psbt.fromBase64(signedPsbtBase64, { network: bitcoin.networks.testnet });
+    assertSameUnsignedTransaction('signed PSBT', originalTx, unsignedTx(signedPsbt));
+    const input = signedPsbt.data.inputs[0];
+    if (!input?.witnessUtxo) throw new Error('signed PSBT dropped the vault witnessUtxo');
+    if (Buffer.from(input.witnessUtxo.script).toString('hex') !== vault.outputScriptHex) {
+      throw new Error(`signed PSBT witnessUtxo is not the ${round} vault script`);
+    }
+    if (BigInt(input.witnessUtxo.value) !== vaultValue) {
+      throw new Error('signed PSBT witnessUtxo value differs from the original vault value');
+    }
+    for (const psbtInput of signedPsbt.data.inputs) {
+      if (psbtInput.tapKeySig) {
+        throw new Error('signed PSBT carries a tapKeySig; solo signing never authorizes a key-path spend');
+      }
+    }
+    for (const entry of input.tapScriptSig ?? []) {
+      const pubkeyHex = Buffer.from(entry.pubkey).toString('hex');
+      const leafHashHex = Buffer.from(entry.leafHash).toString('hex');
+      if (leafHashHex === identificationLeafHashHex || pubkeyHex === identificationKeyHex) {
+        throw new Error('signed PSBT carries a tapScriptSig for the identification leaf');
+      }
+      if (leafHashHex !== policyLeafHashHex || pubkeyHex !== policyLeafKeyHex) {
+        throw new Error('signed PSBT tapScriptSig is not bound to the leaver policy-spend leaf and key');
+      }
+      const { signature, hashType } = strictPolicySignature(
+        Buffer.from(entry.signature),
+        'signed PSBT tapScriptSig',
+      );
+      const sighash = originalTx.hashForWitnessV1(
+        0,
+        [Buffer.from(originalWitnessUtxo.script)],
+        [vaultValue],
+        hashType,
+        policyLeafHash,
+      );
+      if (!ecc.verifySchnorr(sighash, Buffer.from(entry.pubkey), signature)) {
+        throw new Error('signed PSBT tapScriptSig Schnorr signature is invalid for the policy-spend leaf');
+      }
+      partialSignatureCount += 1;
+    }
+    signedPsbtFinalized = Boolean(input.finalScriptWitness);
+    if (signedPsbtFinalized) {
+      const finalTx = signedPsbt.extractTransaction();
+      assertSameUnsignedTransaction('finalized PSBT transaction', originalTx, finalTx);
+      assertPolicyLeafWitness('finalized PSBT', finalTx, policyLeaf, identificationLeaf);
+      consensus = verifyVaultTransaction({ txHex: finalTx.toHex(), prevouts: [prevout] });
+      finalTxids.push(finalTx.getId());
+      checks.push('finalized signed PSBT spends the exact policy-spend leaf and passes consensus verification');
+    } else {
+      if (partialSignatureCount !== 1) {
+        throw new Error(
+          `unfinalized signed PSBT must carry exactly 1 policy-leaf signature, got ${partialSignatureCount}`,
+        );
+      }
+      checks.push('signed PSBT carries exactly one valid policy-leaf partial signature over the unmodified transaction');
+    }
+  }
+
+  if (txHex) {
+    const finalTx = bitcoin.Transaction.fromHex(txHex);
+    assertSameUnsignedTransaction('final transaction', originalTx, finalTx);
+    assertPolicyLeafWitness('final transaction', finalTx, policyLeaf, identificationLeaf);
+    consensus = verifyVaultTransaction({ txHex, prevouts: [prevout] });
+    finalTxids.push(finalTx.getId());
+    checks.push('final transaction hex spends the exact policy-spend leaf and passes consensus verification');
+  }
+
+  if (finalTxids.length === 2 && finalTxids[0] !== finalTxids[1]) {
+    throw new Error(
+      `signer artifacts disagree: finalized PSBT txid ${finalTxids[0]} vs final transaction txid ${finalTxids[1]}`,
+    );
+  }
+  checks.push('unsigned transaction, witnessUtxo, and leaf bindings match the locally built solo PSBT exactly');
+
+  return {
+    round,
+    leaverId,
+    finalTxid: finalTxids[0] ?? null,
+    txHexVerified: Boolean(txHex),
+    signedPsbtVerified: Boolean(signedPsbtBase64),
+    signedPsbtFinalized,
+    partialSignatureCount,
+    consensus,
+    checks,
+  };
+}
+
+/**
+ * Deterministic hostile-artifact fixtures for authorizeSoloSigningArtifacts
+ * regressions: an output-value mutation, a final witness swapped onto the
+ * identification leaf, and a PSBT whose tapScriptSig targets the
+ * identification leaf. Offline only — no network, no secrets.
+ */
+export function buildSoloAuthorizationTamperFixtures({
+  state,
+  currentIds,
+  leaverId,
+  transactionHex,
+  psbtBase64,
+}: {
+  state: VaultState;
+  currentIds: string[];
+  leaverId: string;
+  transactionHex: string;
+  psbtBase64: string;
+}): {
+  outputMutationTxHex: string;
+  identificationWitnessTxHex: string;
+  identificationTapScriptSigPsbtBase64: string;
+} {
+  const vault = requireVault(state, currentIds);
+  const { identificationLeaf } = soloLeavesOf(vault, leaverId);
+
+  const mutatedOutput = bitcoin.Transaction.fromHex(transactionHex);
+  mutatedOutput.outs[0]!.value += 1n;
+
+  const identificationWitness = bitcoin.Transaction.fromHex(transactionHex);
+  const witness = identificationWitness.ins[0]!.witness;
+  witness[witness.length - 2] = Buffer.from(identificationLeaf.scriptHex, 'hex');
+  witness[witness.length - 1] = Buffer.from(identificationLeaf.controlBlockHex, 'hex');
+
+  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: bitcoin.networks.testnet });
+  psbt.updateInput(0, {
+    tapScriptSig: [
+      {
+        pubkey: Buffer.from(
+          singleKeyLeafKeyHex(identificationLeaf.scriptHex, `${leaverId} identification leaf`),
+          'hex',
+        ),
+        leafHash: tapLeafHash(Buffer.from(identificationLeaf.scriptHex, 'hex')),
+        signature: Buffer.alloc(64),
+      },
+    ],
+  });
+
+  return {
+    outputMutationTxHex: mutatedOutput.toHex(),
+    identificationWitnessTxHex: identificationWitness.toHex(),
+    identificationTapScriptSigPsbtBase64: psbt.toBase64(),
+  };
+}
+
 export function buildCooperativeExitPsbt({
   state,
   currentIds,
@@ -952,6 +1166,81 @@ function requireVault(state: VaultState, currentIds: string[]): VaultRound {
   const vault = state.vaults.get(roundId(currentIds));
   if (!vault) throw new Error(`unknown vault round ${roundId(currentIds)}`);
   return vault;
+}
+
+function singleKeyLeafKeyHex(scriptHex: Hex, label: string): Hex {
+  if (!/^20[0-9a-f]{64}ac$/.test(scriptHex)) {
+    throw new Error(`${label} script is not pk(<xonly key>)`);
+  }
+  return scriptHex.slice(2, 66);
+}
+
+// The vault only ever produces SIGHASH_DEFAULT signatures; SIGHASH_ALL is the
+// only other type that still commits to every input and output. Anything else
+// (NONE/SINGLE/ANYONECANPAY) would let a hostile signer produce a signature
+// replayable against a different spend of the vault UTXO.
+function strictPolicySignature(item: Buffer, label: string): { signature: Buffer; hashType: number } {
+  if (item.length === 64) {
+    return { signature: item, hashType: bitcoin.Transaction.SIGHASH_DEFAULT };
+  }
+  if (item.length === 65 && item[64] === bitcoin.Transaction.SIGHASH_ALL) {
+    return { signature: item.subarray(0, 64), hashType: bitcoin.Transaction.SIGHASH_ALL };
+  }
+  throw new Error(`${label} must be a 64-byte SIGHASH_DEFAULT or 65-byte SIGHASH_ALL signature`);
+}
+
+function assertSameUnsignedTransaction(
+  label: string,
+  original: bitcoin.Transaction,
+  candidate: bitcoin.Transaction,
+): void {
+  if (candidate.version !== original.version) throw new Error(`${label} changed the transaction version`);
+  if (candidate.locktime !== original.locktime) throw new Error(`${label} changed the transaction locktime`);
+  if (candidate.ins.length !== original.ins.length) throw new Error(`${label} changed the input count`);
+  original.ins.forEach((input, index) => {
+    const other = candidate.ins[index]!;
+    if (!Buffer.from(other.hash).equals(Buffer.from(input.hash)) || other.index !== input.index) {
+      throw new Error(`${label} changed input ${index}'s outpoint`);
+    }
+    if (other.sequence !== input.sequence) throw new Error(`${label} changed input ${index}'s sequence`);
+    if (!Buffer.from(other.script).equals(Buffer.from(input.script))) {
+      throw new Error(`${label} changed input ${index}'s scriptSig`);
+    }
+  });
+  if (candidate.outs.length !== original.outs.length) throw new Error(`${label} changed the output count`);
+  original.outs.forEach((output, index) => {
+    const other = candidate.outs[index]!;
+    if (BigInt(other.value) !== BigInt(output.value)) {
+      throw new Error(`${label} changed output ${index}'s value`);
+    }
+    if (!Buffer.from(other.script).equals(Buffer.from(output.script))) {
+      throw new Error(`${label} changed output ${index}'s script`);
+    }
+  });
+}
+
+function assertPolicyLeafWitness(
+  label: string,
+  tx: bitcoin.Transaction,
+  policyLeaf: { scriptHex: Hex; controlBlockHex: Hex },
+  identificationLeaf: { scriptHex: Hex; controlBlockHex: Hex },
+): void {
+  const witness = (tx.ins[0]?.witness ?? []).map((item) => Buffer.from(item));
+  if (witness.length !== 3) {
+    throw new Error(`${label} witness must be [signature, script, control block], got ${witness.length} element(s)`);
+  }
+  const scriptHex = witness[1]!.toString('hex');
+  const controlBlockHex = witness[2]!.toString('hex');
+  if (scriptHex === identificationLeaf.scriptHex || controlBlockHex === identificationLeaf.controlBlockHex) {
+    throw new Error(`${label} witness spends the identification leaf`);
+  }
+  if (scriptHex !== policyLeaf.scriptHex) {
+    throw new Error(`${label} witness script is not the exact policy-spend leaf script`);
+  }
+  if (controlBlockHex !== policyLeaf.controlBlockHex) {
+    throw new Error(`${label} witness control block is not the exact policy-spend control block`);
+  }
+  strictPolicySignature(witness[0]!, `${label} witness signature`);
 }
 
 function recoveryLeafOf(vault: VaultRound) {

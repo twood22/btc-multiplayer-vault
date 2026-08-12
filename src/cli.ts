@@ -33,11 +33,13 @@ import {
   walletProcessPsbt,
 } from './bitcoin-rpc.js';
 import {
+  authorizeSoloSigningArtifacts,
   buildCooperativeExitPsbt,
   buildFinalSweepPsbt,
   buildFundingPsbt,
   buildIdentificationLeafMisusePsbt,
   buildRecoveryPsbt,
+  buildSoloAuthorizationTamperFixtures,
   buildSoloWithdrawalPsbt,
   buildSoloWithdrawalTamperPsbts,
   inspectPsbt,
