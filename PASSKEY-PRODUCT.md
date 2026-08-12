@@ -21,7 +21,10 @@ participant-only MuSig2 path, or the timelocked recovery path.
 - A fresh passkey assertion is required to retrieve and decrypt an envelope.
   The browser re-derives the participant's Bitcoin public identity and compares
   it to setup-time public material before reporting the key usable.
-- Strict CSP with request nonces and no third-party scripts or network origins.
+- Strict CSP with request nonces. The only external connection origin is the
+  configured HTTPS/WSS Sigbash service; its Go runtime is fetched through a
+  same-origin route and checked against an operator-pinned SHA-384 digest, and
+  the WASM is independently pinned before execution.
 - A recovery-passkey ceremony that first unlocks with an existing credential,
   registers a distinct credential, and encrypts the exact same participant
   secret under a credential-specific PRF salt and authenticated envelope. Either
@@ -32,6 +35,19 @@ participant-only MuSig2 path, or the timelocked recovery path.
   output to one canonical SHA-256 digest, and binds each participant's fresh
   passkey assertion to that digest. The round-one address and script are absent
   from responses until all three distinct seats confirm.
+- Browser-generated, SDK-compatible Sigbash credential triplets. A separate
+  HKDF/AES-GCM key derived from the participant secret protects one shared,
+  append-only Sigbash custody history, so either recovery passkey can restore
+  the credential triplet and every per-key recovery kit. The database never
+  receives their plaintext.
+- A fresh passkey assertion issues a bounded 15-minute write lease before that
+  shared custody history can be appended. Key creation is resumable: the next
+  round/index is encrypted before contacting Sigbash, and the recovery kit is
+  exported and encrypted before public registration is published.
+- Browser provisioning follows the original dependency graph: each participant
+  creates two pair-round keys first; round-one key creation is unavailable
+  until all six pair keys exist and the exact pair vault destination can be
+  pinned into the immutable round-one policy.
 
 Recovery enrollment is a ten-minute, one-time server capability. Its creation
 challenge is bound to the existing credential; registration is bound to the
@@ -79,7 +95,9 @@ npm audit
 
 `web:test` currently proves encryption/decryption, wrong-passkey rejection,
 authenticated-identity tamper rejection, two-credential rewrapping of the same
-participant identity, PRF-output stripping, exact public key compatibility,
+participant identity, passkey-shared Sigbash custody, SDK-exact credential
+hashes, corrupt-revision rollback, recovery-kit/key binding, PRF-output
+stripping, exact public key and BYO Sigbash-share compatibility,
 offline-roster rejection, xpub/leaf binding, deterministic roster digests, and
 no funding address or output-script disclosure before unanimity.
 
@@ -88,8 +106,9 @@ no funding address or output-script disclosure before unanimity.
 1. Complete the second-passkey ceremony for every participant and validate it
    with real browsers/authenticators. A synced copy of the same credential is
    convenient but does not satisfy the distinct-credential gate.
-2. Integrate live Sigbash key creation into each participant's passkey session,
-   replacing offline leaf fixtures with service-created public leaf material.
+2. Run the implemented browser Sigbash key-creation/resume flow against three
+   mainnet-enabled participant organizations, replacing offline leaf fixtures
+   with nine service-created public registrations.
 3. Prove an actual live Sigbash mainnet solo signature and hostile-PSBT rejection
    against the exact SDK/server contract. Mainnet access is external and is not
    currently proven.

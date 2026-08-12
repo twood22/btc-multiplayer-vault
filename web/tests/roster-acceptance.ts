@@ -11,6 +11,7 @@ import {
   publishedRosterDigest,
   rosterReview,
 } from '../../src/roster-ceremony.js';
+import { planSigbashProvisioning } from '../../src/sigbash-provisioning.js';
 import {
   createRosterState,
   participantLeaveRounds,
@@ -107,6 +108,33 @@ check('three distinct participant confirmations reveal the committed address', (
   assert.equal(review.confirmations.join(','), 'alice,bob,carol');
 });
 
+check('provisioning creates pair-round keys before the round-one key', () => {
+  const empty = withoutRegistrations(roster, () => false);
+  const plan = planSigbashProvisioning(empty, 'alice');
+  assert.equal(plan.next?.round, 'alicebob');
+  assert.equal(plan.next?.keyIndex, 1);
+});
+
+check('round-one provisioning remains unavailable until all six pair keys exist', () => {
+  const fivePairs = withoutRegistrations(roster, (participantId, round) =>
+    round !== 'alicebobcarol' && !(participantId === 'carol' && round === 'bobcarol'));
+  const plan = planSigbashProvisioning(fivePairs, 'alice');
+  assert.equal(plan.next, null);
+  assert.equal(plan.totalPairRegistrations, 5);
+  assert.deepEqual(plan.waitingFor, ['1 pair-round Sigbash key(s) are still missing']);
+});
+
+check('round-one policy pins the vault built from the actual surviving pair keys', () => {
+  const pairComplete = withoutRegistrations(roster, (_participantId, round) => round !== 'alicebobcarol');
+  const plan = planSigbashProvisioning(pairComplete, 'alice');
+  const state = createRosterState(pairComplete);
+  const survivingPairAddress = state.vaults.get('bobcarol')?.address;
+  assert.equal(plan.next?.round, 'alicebobcarol');
+  assert.equal(plan.next?.keyIndex, 0);
+  assert(survivingPairAddress);
+  assert(JSON.stringify(plan.next.policy).includes(survivingPairAddress));
+});
+
 console.log(JSON.stringify({ passed: checks.every((item) => item.ok), checks }, null, 2));
 
 function check(name: string, run: () => void): void {
@@ -143,6 +171,19 @@ function liveRoster(): RosterEntry[] {
       sigbashRegistrationByRound: registrations,
     };
   });
+}
+
+function withoutRegistrations(
+  source: RosterEntry[],
+  keep: (participantId: string, round: string) => boolean,
+): RosterEntry[] {
+  return structuredClone(source).map((entry) => ({
+    ...entry,
+    sigbashRegistrationByRound: Object.fromEntries(
+      Object.entries(entry.sigbashRegistrationByRound || {})
+        .filter(([round]) => keep(entry.id, round)),
+    ),
+  }));
 }
 
 function syntheticMainnetXpub(label: string): string {

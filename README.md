@@ -31,12 +31,13 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Sigbash policy enforcement + tamper rejection | ✅ historical signet evidence; mainnet unproven |
 | Sigbash co-signing a live mainnet withdrawal | ⛔ external hard gate; not proven |
 | Per-participant key custody | ✅ `vault-keygen` + `verify-roster` |
+| Recoverable passkey custody + encrypted Sigbash credentials/kits | ✅ implemented; real Postgres/authenticator run still required |
 | Immutable three-passkey roster gate | ✅ implemented offline; real Postgres/authenticator run still required |
 | Runs without local Bitcoin Core | ✅ `BITCOIN_BACKEND=esplora` |
 
 ## Requirements
 
-- Node.js 20+ (the code is strict TypeScript, run via `tsx` with no build
+- Node.js 22+ (the code is strict TypeScript, run via `tsx` with no build
   step; `npm test` typechecks with `tsc --noEmit` before running the suite)
 - Nothing else for local mode. Live mode needs participant-specific Sigbash
   mainnet access and a Bitcoin Core mainnet node (or configured mainnet

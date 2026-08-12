@@ -1,5 +1,6 @@
 import { assertNonDefaultSeed } from './config.js';
 import { BITCOIN_NETWORK_NAME } from './network.js';
+import { sigbashConditionConfig } from './sigbash-policy.js';
 import type { PolicyCondition, PolicyNode, PolicyTx, SoloPolicy } from './types.js';
 
 // The live SDK is imported dynamically (it needs WASM + credentials), so its
@@ -213,7 +214,7 @@ class LiveSigbashAdapter implements SigbashAdapter {
   ) {}
 
   toPoetPolicy(policy: SoloPolicy): PoetPolicy {
-    return this.sdk.conditionConfigToPoetPolicy(toConditionConfig(policy));
+    return this.sdk.conditionConfigToPoetPolicy(sigbashConditionConfig(policy));
   }
 
   async verifyPSBT(tx: AdapterTx, policy: SoloPolicy): Promise<SigbashVerifyResult> {
@@ -370,7 +371,7 @@ export function validateWasmSha384(value: string | undefined): string {
 }
 
 export function toPoetPolicy(sdk: SigbashSdk, policy: SoloPolicy): PoetPolicy {
-  return sdk.conditionConfigToPoetPolicy(toConditionConfig(policy));
+  return sdk.conditionConfigToPoetPolicy(sigbashConditionConfig(policy));
 }
 
 export function evaluatePolicy(tx: PolicyTx, policy: PolicyNode | undefined): string[] {
@@ -431,19 +432,6 @@ function evaluateNode(tx: PolicyTx, node: PolicyNode): string[] {
 // Convert the repo's policy objects into the SDK's condition-config shorthand.
 // Fields that only exist for the local policy model (ids, round metadata, the
 // local REQKEY key material) are stripped so Sigbash receives a clean policy.
-function toConditionConfig(policy: PolicyNode | SoloPolicy): unknown {
-  if ('logic' in policy) {
-    return {
-      logic: policy.logic,
-      conditions: policy.conditions.map((condition) => toConditionConfig(condition)),
-    };
-  }
-  const { local_key_identifier: _local, ...condition } = policy as PolicyCondition & {
-    local_key_identifier?: string;
-  };
-  return condition;
-}
-
 function compare(actual: number, operator: string, expected: number): boolean {
   switch (operator) {
     case 'EQ':

@@ -427,7 +427,7 @@ async function readStoredRoster(vaultId: string): Promise<PublishedRosterArtifac
   return rebuilt;
 }
 
-function validateLiveRegistration(
+export function validateLiveRegistration(
   participantId: string,
   round: string,
   registration: SigbashRosterRegistration,
@@ -447,6 +447,10 @@ function validateLiveRegistration(
   if (!/^[0-9a-f]{64}$/u.test(registration.policyRoot)) throw new Error('Sigbash policyRoot is invalid');
   if (!Number.isSafeInteger(registration.keyIndex) || registration.keyIndex < 0) {
     throw new Error('Sigbash keyIndex is invalid');
+  }
+  const expectedIndex = participantLeaveRounds(participantId, ['alice', 'bob', 'carol']).indexOf(round);
+  if (registration.keyIndex !== expectedIndex) {
+    throw new Error(`Sigbash keyIndex must be ${expectedIndex} for ${participantId}:${round}`);
   }
   if (!registration.keyId || registration.keyId.length > 256) throw new Error('Sigbash keyId is invalid');
   return { ...registration, policyLeafXonlyPubkey: policyLeaf, identificationLeafXonlyPubkey: identificationLeaf };

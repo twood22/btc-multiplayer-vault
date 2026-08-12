@@ -27,6 +27,23 @@ export async function deriveParticipantIdentity(
   };
 }
 
+export async function deriveParticipantSigbashPrivateKey(
+  participantSecret: string,
+  participantId: string,
+  round: string,
+): Promise<Uint8Array> {
+  if (!/^(alice|bob|carol)$/u.test(participantId)) {
+    throw new Error('unknown participant id');
+  }
+  if (!/^(alicebobcarol|alicebob|alicecarol|bobcarol)$/u.test(round)) {
+    throw new Error('unknown vault round');
+  }
+  return deterministicPrivateKey(
+    participantSecret,
+    `${participantId}:sigbash-client-share:${round}`,
+  );
+}
+
 async function deterministicPrivateKey(seed: string, label: string): Promise<Uint8Array> {
   for (let counter = 0; counter < 2 ** 16; counter += 1) {
     const material = new TextEncoder().encode(`${seed}:${label}:${counter}`);

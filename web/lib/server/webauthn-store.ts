@@ -67,6 +67,8 @@ export interface MemberStatus {
   participantId: string;
   setupComplete: boolean;
   recoveryComplete: boolean;
+  sigbashCustodyStarted: boolean;
+  sigbashKeyCount: number;
   passkeys: Array<{ id: string; name: string }>;
 }
 
@@ -80,13 +82,21 @@ export async function getMemberStatus(userId: string): Promise<MemberStatus> {
     participant_id: string;
     setup_complete: boolean;
     recovery_complete: boolean;
+    sigbash_custody_started: boolean;
+    sigbash_key_count: string;
   }>>`
     SELECT u.id AS user_id, u.display_name, v.id AS vault_id,
            v.name AS vault_name, v.status AS vault_status, m.participant_id,
            (k.user_id IS NOT NULL) AS setup_complete,
            (SELECT count(*) >= 2 FROM webauthn_credentials c
              JOIN passkey_envelopes e ON e.credential_id = c.credential_id
-             WHERE c.user_id = u.id AND c.prf_enabled = true) AS recovery_complete
+             WHERE c.user_id = u.id AND c.prf_enabled = true) AS recovery_complete,
+           EXISTS (
+             SELECT 1 FROM participant_sigbash_custody_versions s
+             WHERE s.user_id = u.id
+           ) AS sigbash_custody_started,
+           (SELECT count(*) FROM participant_sigbash_keys s
+             WHERE s.user_id = u.id) AS sigbash_key_count
     FROM users u
     JOIN vault_members m ON m.user_id = u.id
     JOIN vaults v ON v.id = m.vault_id
@@ -111,6 +121,8 @@ export async function getMemberStatus(userId: string): Promise<MemberStatus> {
     participantId: row.participant_id,
     setupComplete: row.setup_complete,
     recoveryComplete: row.recovery_complete,
+    sigbashCustodyStarted: row.sigbash_custody_started,
+    sigbashKeyCount: Number(row.sigbash_key_count),
     passkeys: credentials.map((credential) => ({
       id: credential.credential_id,
       name: credential.credential_name,
@@ -432,7 +444,7 @@ export async function createUnlockChallenge(input: {
   userId: string;
   challenge: string;
   credentialId: string;
-  kind?: 'unlock' | 'recovery_authorize';
+  kind?: 'unlock' | 'recovery_authorize' | 'sigbash_custody';
 }): Promise<AssertionChallenge> {
   const rows = await db()<Array<{
     credential_id: string;
@@ -518,7 +530,7 @@ export async function completeUnlock(
 export async function getAssertionChallenge(
   challengeId: string,
   userId: string,
-  kind: 'envelope' | 'unlock' | 'recovery_authorize' | 'recovery_envelope',
+  kind: 'envelope' | 'unlock' | 'recovery_authorize' | 'recovery_envelope' | 'sigbash_custody',
 ): Promise<AssertionChallenge> {
   const rows = await db()<Array<{
     id: string;

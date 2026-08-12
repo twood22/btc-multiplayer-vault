@@ -3,13 +3,14 @@ import { NextRequest, NextResponse } from 'next/server';
 export function proxy(request: NextRequest) {
   const nonce = Buffer.from(crypto.randomUUID()).toString('base64');
   const isDev = process.env.NODE_ENV === 'development';
+  const sigbashConnectSources = sigbashConnectSource();
   const csp = [
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ''}`,
     `style-src 'self' 'nonce-${nonce}'${isDev ? " 'unsafe-inline'" : ''}`,
     "img-src 'self' blob: data:",
     "font-src 'self'",
-    "connect-src 'self'",
+    `connect-src 'self' ${sigbashConnectSources}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
@@ -29,6 +30,33 @@ export function proxy(request: NextRequest) {
   response.headers.set('Cross-Origin-Opener-Policy', 'same-origin');
   response.headers.set('Cross-Origin-Resource-Policy', 'same-origin');
   return response;
+}
+
+function sigbashConnectSource(): string {
+  try {
+    const serverUrl = externalHttpsUrl(
+      process.env.SIGBASH_SERVER_URL || 'https://www.sigbash.com',
+    );
+    const wasmUrl = externalHttpsUrl(
+      process.env.SIGBASH_WASM_URL || 'https://www.sigbash.com/sigbash.wasm',
+    );
+    return [...new Set([
+      serverUrl.origin,
+      wasmUrl.origin,
+      `wss://${serverUrl.host}`,
+    ])].join(' ');
+  } catch {
+    // Fail closed: an invalid operator URL receives no external CSP access.
+    return '';
+  }
+}
+
+function externalHttpsUrl(value: string): URL {
+  const url = new URL(value);
+  if (url.protocol !== 'https:' || url.username || url.password) {
+    throw new Error('invalid Sigbash URL');
+  }
+  return url;
 }
 
 export const config = {

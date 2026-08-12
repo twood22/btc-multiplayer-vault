@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { PasskeyUnlock } from '@/web/components/passkey-unlock';
 import { PasskeyRecoverySetup } from '@/web/components/passkey-recovery-setup';
 import { RosterConfirmation } from '@/web/components/roster-confirmation';
+import { SigbashCustodySetup } from '@/web/components/sigbash-custody-setup';
 import { FinishKeySetup } from '@/web/components/finish-key-setup';
 import { getRosterCeremonyStatus } from '@/web/lib/server/roster-store';
 import { requireSessionUser } from '@/web/lib/server/session';
@@ -41,6 +42,13 @@ export default async function VaultPage() {
         <PasskeyRecoverySetup passkeys={participant.passkeys} />
       )}
       {participant.setupComplete && participant.recoveryComplete && (
+        <SigbashCustodySetup
+          passkeys={participant.passkeys}
+          started={participant.sigbashCustodyStarted}
+          keyCount={participant.sigbashKeyCount}
+        />
+      )}
+      {participant.setupComplete && participant.recoveryComplete && (
         <RosterConfirmation
           available={roster.available}
           missing={roster.missing}
@@ -53,7 +61,7 @@ export default async function VaultPage() {
         <article className={participant.setupComplete ? 'done' : ''}><span>{participant.setupComplete ? 'Done' : 'Required'}</span><h2>Personal key protected</h2><p>Encrypted with your passkey PRF; plaintext is never stored.</p></article>
         <article className={participant.recoveryComplete ? 'done' : ''}><span>{participant.recoveryComplete ? 'Done' : 'Required'}</span><h2>Recovery credential</h2><p>A distinct second passkey protects the same participant identity.</p></article>
         <article className={roster.review?.unanimous ? 'done' : ''}><span>{roster.review?.unanimous ? 'Done' : 'Required'}</span><h2>Three-person roster</h2><p>All friends confirm one immutable digest built from real participant and Sigbash keys.</p></article>
-        <article><span>Blocked</span><h2>Live Sigbash mainnet</h2><p>Prove a real policy-limited solo signature before mainnet funding can turn on.</p></article>
+        <article className={participant.sigbashKeyCount === 3 ? 'done' : ''}><span>{participant.sigbashKeyCount === 3 ? 'Done' : 'Required'}</span><h2>Live Sigbash mainnet</h2><p>Create three immutable personal round keys, then prove a real policy-limited solo signature before funding.</p></article>
       </section>
     </main>
   );

@@ -6,7 +6,10 @@ import {
 } from '../lib/client/key-envelope';
 import { toBase64url } from '../lib/client/base64url';
 import { stripPrfSecrets } from '../lib/client/webauthn';
-import { deriveParticipantIdentity } from '../lib/client/participant-identity';
+import {
+  deriveParticipantIdentity,
+  deriveParticipantSigbashPrivateKey,
+} from '../lib/client/participant-identity';
 import { deriveParticipantKeys } from '../../src/vault.js';
 
 const checks: Array<{ name: string; ok: boolean }> = [];
@@ -83,6 +86,16 @@ await check('browser key derivation exactly matches the existing vault core', as
   const core = deriveParticipantKeys('alice', secret, ['alice', 'bob', 'carol']);
   assert(browser.personalPublicKeyHex === core.personal.publicKeyHex, 'personal public key mismatch');
   assert(browser.payoutXonlyPublicKeyHex === core.payout.xonlyPubKeyHex, 'payout public key mismatch');
+});
+
+await check('browser BYO Sigbash share exactly matches every authoritative round derivation', async () => {
+  const secret = toBase64url(randomBytes(32));
+  const core = deriveParticipantKeys('alice', secret, ['alice', 'bob', 'carol']);
+  for (const [round, key] of Object.entries(core.sigbashByRound)) {
+    const browserPrivateKey = await deriveParticipantSigbashPrivateKey(secret, 'alice', round);
+    assert(Buffer.from(browserPrivateKey).toString('hex') === key.privateKeyHex, `${round} private share mismatch`);
+    browserPrivateKey.fill(0);
+  }
 });
 
 await check('PRF encryption material is removed from server-bound assertions', () => {
