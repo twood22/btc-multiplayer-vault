@@ -48,6 +48,24 @@ participant-only MuSig2 path, or the timelocked recovery path.
   creates two pair-round keys first; round-one key creation is unavailable
   until all six pair keys exist and the exact pair vault destination can be
   pinned into the immutable round-one policy.
+- A passkey-authorized live-readiness ceremony issues a random, unfunded
+  outpoint for each of the nine registered participant/round keys. The browser
+  independently rebuilds the allowed PSBT and three hostile variants, requires
+  Sigbash to reject the hostile set, and requests one real mainnet signature.
+  The server accepts a proof only after independently verifying the finalized
+  policy-leaf witness and exact transaction against the confirmed roster. Only
+  nine distinct successful proofs can move the vault from `roster_confirmed`
+  to `ready`.
+- Authenticated runtime coordination persists the exact current coin, each
+  participant's direct mainnet observation, deterministic proposal digest, and
+  public protocol contributions. Browser signing is implemented for Sigbash
+  solo exits, two-round distributed MuSig2 cooperative exits, CSV recovery
+  shares, and the final owner's sweep. Every signer rebuilds the transaction
+  locally; the server re-authorizes and consensus-verifies the result; no path
+  broadcasts automatically.
+- Confirmed broadcast transactions can atomically spend the old coordinator
+  coin, derive the exact surviving pair or final-owner coin after a solo exit,
+  or close the vault after a terminal cooperative, recovery, or final sweep.
 
 Recovery enrollment is a ten-minute, one-time server capability. Its creation
 challenge is bound to the existing credential; registration is bound to the
@@ -98,8 +116,12 @@ authenticated-identity tamper rejection, two-credential rewrapping of the same
 participant identity, passkey-shared Sigbash custody, SDK-exact credential
 hashes, corrupt-revision rollback, recovery-kit/key binding, PRF-output
 stripping, exact public key and BYO Sigbash-share compatibility,
-offline-roster rejection, xpub/leaf binding, deterministic roster digests, and
-no funding address or output-script disclosure before unanimity.
+offline-roster rejection, xpub/leaf binding, deterministic roster digests,
+proposal replay resistance, exact confirmed-state advancement, fresh recovery
+observations, and no funding address or output-script disclosure before
+unanimity. The complete migrations have also been applied and re-applied
+idempotently on an isolated PostgreSQL 16 instance; that is not a substitute
+for a production database and real-authenticator run.
 
 ## Hard gates before deployment or funding
 
@@ -109,24 +131,27 @@ no funding address or output-script disclosure before unanimity.
 2. Run the implemented browser Sigbash key-creation/resume flow against three
    mainnet-enabled participant organizations, replacing offline leaf fixtures
    with nine service-created public registrations.
-3. Prove an actual live Sigbash mainnet solo signature and hostile-PSBT rejection
-   against the exact SDK/server contract. Mainnet access is external and is not
-   currently proven.
+3. Execute all nine implemented browser readiness proofs against mainnet-enabled
+   Sigbash organizations. A successful allowed signature is independently
+   verifiable by the server; hostile rejection remains browser-observed because
+   the current Sigbash API does not provide a signed negative attestation.
+   Mainnet access is external and is not currently proven.
 4. Validate the now-mainnet-only address, PSBT, policy, RPC, and explorer paths
    against a production-version Bitcoin Core node, including deliberately tiny
    amounts, dust/relay policy, fees, and the chosen recovery delay. The offline
    conversion is complete; real-node acceptance is not.
-5. Run the roster migration and database transaction flow against the
-   production Postgres version, then exercise all three confirmations with real
-   authenticators. The code path exists, but no real Sigbash registrations are
-   present and the database-backed ceremony has not yet been run end to end.
-6. Wire browser-unlocked secrets to the already-authorized MuSig2, independent
-   recovery-share, and final-sweep operations without exporting secrets to the
-   server.
-7. Add database integration tests against the production Postgres version,
+5. Run the database transaction flow against the chosen production Postgres
+   service, then exercise all three confirmations and all nine readiness proofs
+   with real authenticators. The migrations pass PostgreSQL 16 locally, but no
+   real Sigbash registrations are present and the database-backed ceremony has
+   not yet been run end to end.
+6. Add database integration tests with seeded protocol state,
    automated WebAuthn browser tests with virtual authenticators and PRF support,
    rate limiting, audit events that never contain secrets, backup/restore
    drills, and operational monitoring.
+7. Add an explicit, reviewed broadcast workflow and a chain watcher around the
+   implemented confirmation transition; neither may bypass the finalized
+   proposal or readiness gates.
 8. Deploy behind private access control, run the full security checklist on the
    deployed HTTPS origin, and only then allow deliberately tiny mainnet funding.
 

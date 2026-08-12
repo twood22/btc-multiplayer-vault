@@ -17,6 +17,7 @@ export async function withUnlockedVaultCustody<T>(input: {
     unlocked: UnlockedPublishedVault;
     participantSecret: string;
     custody: SigbashCustodyBundle;
+    leaseToken: string;
   }) => Promise<T>;
 }): Promise<T> {
   let prfOutput: Uint8Array | undefined;
@@ -62,7 +63,12 @@ export async function withUnlockedVaultCustody<T>(input: {
       expectedDigest: String(published.digest),
       participantSecret,
     });
-    return await input.action({ unlocked, participantSecret, custody });
+    return await input.action({
+      unlocked,
+      participantSecret,
+      custody,
+      leaseToken: String(authorized.leaseToken),
+    });
   } finally {
     prfOutput?.fill(0);
     participantSecret = '';

@@ -7,13 +7,19 @@ import {
   xpubRootXonly,
 } from '../../src/crypto.js';
 import { auditSpecState } from '../../src/audit.js';
-import { buildSoloWithdrawalPsbt, inspectPsbt } from '../../src/psbt.js';
+import {
+  buildSoloWithdrawalPsbt,
+  inspectPsbt,
+  psbtInspectionToPolicyTx,
+} from '../../src/psbt.js';
 import {
   createPublishedRosterArtifact,
   publishedRosterDigest,
   rosterReview,
 } from '../../src/roster-ceremony.js';
 import { planSigbashProvisioning } from '../../src/sigbash-provisioning.js';
+import { buildSigbashReadinessFixture } from '../../src/sigbash-readiness.js';
+import { evaluatePolicy } from '../../src/sigbash.js';
 import { asSats, type VaultEconomics } from '../../src/types.js';
 import {
   assertFreshMatureRecoveryObservation,
@@ -381,6 +387,51 @@ check('recovery readiness requires both CSV maturity and a fresh chain observati
     observedAtMs: nowMs + 1,
     nowMs,
   }), /timing/);
+});
+
+check('nine readiness fixtures bind every live key and reject each hostile transaction locally', () => {
+  const state = createRosterState(artifact.participants, undefined, artifact.economics);
+  let count = 0;
+  for (const participant of artifact.participants) {
+    for (const round of participantLeaveRounds(participant.id, ids)) {
+      const fixture = buildSigbashReadinessFixture({
+        artifact,
+        rosterDigest: digest,
+        participantId: participant.id,
+        round,
+        inputTxid: sha256Hex(`readiness:${participant.id}:${round}`),
+      });
+      const policy = state.policies.get(`${round}:${participant.id}`)!;
+      const validFailures = evaluatePolicy(
+        psbtInspectionToPolicyTx({ state, inspection: inspectPsbt(fixture.validPsbtBase64) }),
+        policy,
+      );
+      assert.deepEqual(validFailures, []);
+      for (const hostile of Object.values(fixture.tamperedPsbts)) {
+        assert(evaluatePolicy(
+          psbtInspectionToPolicyTx({ state, inspection: inspectPsbt(hostile) }),
+          policy,
+        ).length > 0);
+      }
+      assert.equal(fixture.key.keyId, participant.sigbashRegistrationByRound?.[round]?.keyId);
+      count += 1;
+    }
+  }
+  assert.equal(count, 9);
+  assert.throws(() => buildSigbashReadinessFixture({
+    artifact,
+    rosterDigest: '00'.repeat(32),
+    participantId: 'alice',
+    round: 'alicebobcarol',
+    inputTxid: '11'.repeat(32),
+  }), /confirmed roster digest/);
+  assert.throws(() => buildSigbashReadinessFixture({
+    artifact,
+    rosterDigest: digest,
+    participantId: 'alice',
+    round: 'bobcarol',
+    inputTxid: '11'.repeat(32),
+  }), /missing the challenged/);
 });
 
 console.log(JSON.stringify({ passed: checks.every((item) => item.ok), checks }, null, 2));

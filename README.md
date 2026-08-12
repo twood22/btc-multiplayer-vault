@@ -29,10 +29,11 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Final sweep | ✅ consensus-verified |
 | Mainnet address, PSBT, policy, RPC, and explorer configuration | ✅ offline suite; real Core run still required |
 | Sigbash policy enforcement + tamper rejection | ✅ historical signet evidence; mainnet unproven |
-| Sigbash co-signing a live mainnet withdrawal | ⛔ external hard gate; not proven |
-| Per-participant key custody | ✅ `vault-keygen` + `verify-roster` |
-| Recoverable passkey custody + encrypted Sigbash credentials/kits | ✅ implemented; real Postgres/authenticator run still required |
-| Immutable three-passkey roster gate | ✅ implemented offline; real Postgres/authenticator run still required |
+| Sigbash co-signing a live mainnet withdrawal | ⛔ browser proof gate implemented; external execution not proven |
+| Per-participant key custody | ✅ browser-distributed and passkey protected |
+| Recoverable passkey custody + encrypted Sigbash credentials/kits | ✅ implemented; real authenticator run still required |
+| Immutable three-passkey roster gate | ✅ implemented; PostgreSQL 16 migrations verified, real authenticator run still required |
+| User-facing solo/cooperative/recovery/final signing | ✅ implemented and server re-authorized; never auto-broadcasts |
 | Runs without local Bitcoin Core | ✅ `BITCOIN_BACKEND=esplora` |
 
 ## Requirements
@@ -241,7 +242,10 @@ input scriptPubKey, so you only pass `--participant`.
    the `tweakedAggregate` candidates printed by setup and re-run setup once
    more so the vault addresses match.
 
-4. **Fund round one** with a single 3 BTC output:
+4. **Only after all nine browser readiness proofs pass, fund round one** with
+   the exact configured output. The commands below describe the historical
+   1-BTC-per-person profile; the private beta uses its separately committed
+   tiny-mainnet economics:
 
    ```bash
    npm run funding-psbt -- --inputs-json '[{"participantId":"alice",...},...]' --fee-sats 3000

@@ -4,9 +4,11 @@ import { PasskeyUnlock } from '@/web/components/passkey-unlock';
 import { PasskeyRecoverySetup } from '@/web/components/passkey-recovery-setup';
 import { RosterConfirmation } from '@/web/components/roster-confirmation';
 import { SigbashCustodySetup } from '@/web/components/sigbash-custody-setup';
+import { SigbashReadinessProof } from '@/web/components/sigbash-readiness-proof';
 import { FinishKeySetup } from '@/web/components/finish-key-setup';
 import { VaultRuntimePanel } from '@/web/components/vault-runtime-panel';
 import { getRosterCeremonyStatus } from '@/web/lib/server/roster-store';
+import { getSigbashReadinessStatus } from '@/web/lib/server/sigbash-readiness-store';
 import { requireSessionUser } from '@/web/lib/server/session';
 import { getMemberStatus } from '@/web/lib/server/webauthn-store';
 
@@ -14,10 +16,12 @@ export default async function VaultPage() {
   await connection();
   let participant;
   let roster;
+  let readiness = null;
   try {
     const userId = await requireSessionUser();
     participant = await getMemberStatus(userId);
     roster = await getRosterCeremonyStatus(userId);
+    if (roster.review?.unanimous) readiness = await getSigbashReadinessStatus(userId);
   } catch {
     redirect('/');
   }
@@ -54,6 +58,9 @@ export default async function VaultPage() {
           keyCount={participant.sigbashKeyCount}
         />
       )}
+      {participant.setupComplete && participant.recoveryComplete && roster.review?.unanimous && readiness && (
+        <SigbashReadinessProof passkeys={participant.passkeys} initialStatus={readiness} />
+      )}
       {participant.setupComplete && participant.recoveryComplete && (
         <RosterConfirmation
           available={roster.available}
@@ -70,7 +77,7 @@ export default async function VaultPage() {
         <article className={participant.setupComplete ? 'done' : ''}><span>{participant.setupComplete ? 'Done' : 'Required'}</span><h2>Personal key protected</h2><p>Encrypted with your passkey PRF; plaintext is never stored.</p></article>
         <article className={participant.recoveryComplete ? 'done' : ''}><span>{participant.recoveryComplete ? 'Done' : 'Required'}</span><h2>Recovery credential</h2><p>A distinct second passkey protects the same participant identity.</p></article>
         <article className={roster.review?.unanimous ? 'done' : ''}><span>{roster.review?.unanimous ? 'Done' : 'Required'}</span><h2>Three-person roster</h2><p>All friends confirm one immutable digest built from real participant and Sigbash keys.</p></article>
-        <article className={participant.sigbashKeyCount === 3 ? 'done' : ''}><span>{participant.sigbashKeyCount === 3 ? 'Done' : 'Required'}</span><h2>Live Sigbash mainnet</h2><p>Create three immutable personal round keys, then prove a real policy-limited solo signature before funding.</p></article>
+        <article className={readiness?.participantProofRounds.length === 3 ? 'done' : ''}><span>{readiness?.participantProofRounds.length === 3 ? 'Done' : 'Required'}</span><h2>Live Sigbash mainnet</h2><p>Create three immutable personal round keys, then prove a real policy-limited solo signature for each before funding.</p></article>
       </section>
     </main>
   );
