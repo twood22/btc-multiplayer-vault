@@ -122,6 +122,7 @@ npm run web:typecheck
 npm run web:test
 npm run web:test:db # requires a disposable or dedicated empty PostgreSQL database
 npm run web:build
+npm run web:release-status # read-only; exits nonzero until every automated gate passes
 npm test
 npm audit
 ```
@@ -142,6 +143,15 @@ state, auditable retry after failure, proposal-digest foreign-key binding, and
 atomic concurrent rate-limit counting/reset without raw subject storage;
 that is not a substitute for the selected production database and a complete
 real-authenticator/backend run.
+
+`web:release-status` prints only non-secret gate summaries. It verifies the
+declared Node runtime, HTTPS WebAuthn/RP binding, independent chain source,
+explicit tiny-mainnet amount cap and recovery delay, current upstream Sigbash
+runtime hashes, a non-local TLS PostgreSQL endpoint and migrations, the exact
+three-member/two-passkey/nine-key/three-confirmation/nine-proof database state,
+absence of a pre-funding coin, and a mainnet Bitcoin backend. It always keeps
+deployment and funding disallowed until the listed real-device and operational
+review items are documented; funding remains a later separate decision.
 
 ## Hard gates before deployment or funding
 

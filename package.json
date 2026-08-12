@@ -13,6 +13,7 @@
     "web:migrate": "tsx web/scripts/migrate.ts",
     "web:create-invite": "tsx web/scripts/create-invite.ts",
     "web:watch-chain": "tsx web/scripts/watch-chain.ts",
+    "web:release-status": "tsx web/scripts/release-status.ts",
     "demo": "tsx src/cli.ts full-run",
     "test": "tsc --noEmit && tsx src/cli.ts acceptance",
     "setup": "tsx src/cli.ts setup",
