@@ -2,6 +2,21 @@ import assert from 'node:assert/strict';
 import { observeVaultCoin } from '../lib/client/chain-observation.js';
 import { MAINNET_GENESIS_HASH } from '../../src/network.js';
 import { vaultCoinSnapshotDigest, type VaultCoinSnapshot } from '../../src/vault-runtime.js';
+import {
+  consumeCooperativeSecnonce,
+  hasCooperativeSecnonce,
+  storeCooperativeSecnonce,
+} from '../lib/client/musig2-nonce-vault.js';
+
+class MemoryStorage implements Storage {
+  private readonly values = new Map<string, string>();
+  get length() { return this.values.size; }
+  clear() { this.values.clear(); }
+  getItem(key: string) { return this.values.get(key) ?? null; }
+  key(index: number) { return [...this.values.keys()][index] ?? null; }
+  removeItem(key: string) { this.values.delete(key); }
+  setItem(key: string, value: string) { this.values.set(key, value); }
+}
 
 const coin: VaultCoinSnapshot = {
   vaultId: '11111111-2222-4333-8444-555555555555',
@@ -16,6 +31,11 @@ const coin: VaultCoinSnapshot = {
 };
 const checks: Array<{ name: string; ok: boolean }> = [];
 const originalFetch = globalThis.fetch;
+const originalSessionStorage = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage');
+Object.defineProperty(globalThis, 'sessionStorage', {
+  value: new MemoryStorage(),
+  configurable: true,
+});
 
 try {
   await check('browser independently verifies mainnet, confirmation, outpoint, value, script, and unspent state', async () => {
@@ -45,8 +65,34 @@ try {
     globalThis.fetch = fakeEsplora({ confirmed: false });
     await assert.rejects(() => observeVaultCoin('https://chain.example', coin), /not confirmed on mainnet/);
   });
+
+  await check('browser secret nonces are encrypted, proposal-bound, and burned before use', async () => {
+    const binding = {
+      proposalId: '11111111-2222-4333-8444-555555555555',
+      proposalDigest: '55'.repeat(32),
+      participantId: 'alice',
+      round: 'alicebobcarol',
+      message: '66'.repeat(32),
+      pubnonce: `02${'77'.repeat(32)}03${'88'.repeat(32)}`,
+    };
+    const secnonce = '99'.repeat(97);
+    const secret = 'participant-secret-material-long-enough-for-the-test';
+    await storeCooperativeSecnonce(binding, secnonce, secret);
+    assert.equal(hasCooperativeSecnonce(binding.proposalId, binding.participantId), true);
+    await assert.rejects(() => storeCooperativeSecnonce(binding, secnonce, secret), /already exists/);
+    const consumed = await consumeCooperativeSecnonce(binding, secret);
+    assert.equal(Buffer.from(consumed).toString('hex'), secnonce);
+    consumed.fill(0);
+    assert.equal(hasCooperativeSecnonce(binding.proposalId, binding.participantId), false);
+    await assert.rejects(() => consumeCooperativeSecnonce(binding, secret), /absent/);
+  });
 } finally {
   globalThis.fetch = originalFetch;
+  if (originalSessionStorage) {
+    Object.defineProperty(globalThis, 'sessionStorage', originalSessionStorage);
+  } else {
+    delete (globalThis as { sessionStorage?: Storage }).sessionStorage;
+  }
 }
 
 console.log(JSON.stringify({ passed: checks.every((item) => item.ok), checks }, null, 2));

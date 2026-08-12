@@ -4,6 +4,14 @@ import type { AuthenticatorTransportFuture, Base64URLString } from '@simplewebau
 import type { TrustedVaultInput } from '../../../src/types';
 import { authorizeSoloSigningArtifacts } from '../../../src/psbt';
 import {
+  ceremonyAggregate,
+  ceremonyStart,
+  validateCooperativeNonceSet,
+  validateCooperativePartial,
+  validateCooperativePubnonce,
+} from '../../../src/ceremony';
+import { sha256Hex } from '../../../src/crypto';
+import {
   buildVaultProposal,
   validateVaultCoin,
   vaultCoinSnapshotDigest,
@@ -46,6 +54,7 @@ interface StoredProposalRow {
   proposal_digest: Buffer;
   unsigned_txid: Buffer;
   psbt_base64: string;
+  final_txid: Buffer | null;
   status: 'collecting' | 'finalized' | 'broadcast' | 'confirmed' | 'rejected' | 'stale';
   expires_at: Date;
 }
@@ -59,6 +68,7 @@ interface LockedProposalRow extends StoredProposalRow {
 export interface VaultRuntimeStatus {
   vaultId: string;
   participantId: string;
+  participantPersonalPublicKeyHex: string;
   chainObservationOrigins: string[];
   coin: (VaultCoinSnapshot & {
     id: string;
@@ -78,6 +88,10 @@ export interface VaultRuntimeStatus {
     requiredSignerIds: string[];
     status: StoredProposalRow['status'];
     expiresAt: string;
+    cooperativeContributions: {
+      pubnonces: Record<string, string>;
+      partialSigs: Record<string, string>;
+    } | null;
   } | null;
 }
 
@@ -117,10 +131,11 @@ export async function getVaultRuntimeStatus(userId: string): Promise<VaultRuntim
   ` : [];
   const proposals = coin ? await db()<StoredProposalRow[]>`
     SELECT id, kind, round_id, actor_participant_id, proposal_digest,
-           unsigned_txid, psbt_base64, status, expires_at
+           unsigned_txid, psbt_base64, final_txid, status, expires_at
     FROM vault_transaction_proposals
     WHERE input_coin_id = ${coin.id}::uuid
       AND status IN ('collecting', 'finalized', 'broadcast')
+      AND (status = 'broadcast' OR expires_at > now())
     ORDER BY created_at DESC
     LIMIT 1
   ` : [];
@@ -143,9 +158,27 @@ export async function getVaultRuntimeStatus(userId: string): Promise<VaultRuntim
   ) {
     throw new Error('stored transaction proposal does not reproduce from the confirmed vault state');
   }
+  const contributionRows = proposal?.kind === 'cooperative'
+    ? await db()<Array<{
+        participant_id: string;
+        kind: 'musig_pubnonce' | 'musig_partial';
+        payload_json: { publicKeyHex?: unknown; value?: unknown };
+      }>>`
+        SELECT participant_id, kind, payload_json
+        FROM vault_proposal_contributions
+        WHERE proposal_id = ${proposal.id}::uuid
+          AND kind IN ('musig_pubnonce', 'musig_partial')
+        ORDER BY participant_id, kind
+      `
+    : [];
+  const cooperativeContributions = proposal?.kind === 'cooperative'
+    ? contributionMaps(contributionRows)
+    : null;
   return {
     vaultId: membership.vault_id,
     participantId: membership.participant_id,
+    participantPersonalPublicKeyHex: confirmed.artifact.participants
+      .find((item) => item.id === membership.participant_id)!.personalPublicKeyHex,
     chainObservationOrigins: chainObservationOrigins(),
     coin: coin && coinRow ? {
       ...coin,
@@ -167,6 +200,7 @@ export async function getVaultRuntimeStatus(userId: string): Promise<VaultRuntim
       requiredSignerIds: rebuiltProposal!.requiredSignerIds,
       status: proposal.status,
       expiresAt: proposal.expires_at.toISOString(),
+      cooperativeContributions,
     } : null,
   };
 }
@@ -360,7 +394,7 @@ export async function finalizeStoredSoloProposal(input: {
     const proposals = await sql<LockedProposalRow[]>`
       SELECT id, vault_id, roster_digest, input_coin_id, kind, round_id,
              actor_participant_id, proposal_digest, unsigned_txid,
-             psbt_base64, status, expires_at
+             psbt_base64, final_txid, status, expires_at
       FROM vault_transaction_proposals
       WHERE id = ${input.proposalId}::uuid
         AND vault_id = ${membership.vault_id}::uuid
@@ -433,6 +467,218 @@ export async function finalizeStoredSoloProposal(input: {
     return {
       txid: authorization.finalTxid,
       consensusChecks: authorization.consensus.checks,
+    };
+  });
+}
+
+export async function recordCooperativeContribution(input: {
+  userId: string;
+  proposalId: string;
+  proposalDigest: string;
+  kind: 'musig_pubnonce' | 'musig_partial';
+  value: string;
+}): Promise<{
+  pubnonceCount: number;
+  partialCount: number;
+  requiredCount: number;
+  finalizedTxid: string | null;
+}> {
+  if (!/^[0-9a-f]{64}$/u.test(input.proposalDigest)) throw new Error('proposal digest is invalid');
+  const shape = input.kind === 'musig_pubnonce' ? /^[0-9a-f]{132}$/u : /^[0-9a-f]{64}$/u;
+  if (!shape.test(input.value)) throw new Error(`${input.kind} has an invalid shape`);
+  const membership = await membershipForUser(input.userId);
+  const confirmed = await getConfirmedVaultArtifactForVault(membership.vault_id);
+  return transaction(async (sql) => {
+    const proposals = await sql<LockedProposalRow[]>`
+      SELECT id, vault_id, roster_digest, input_coin_id, kind, round_id,
+             actor_participant_id, proposal_digest, unsigned_txid,
+             psbt_base64, final_txid, status, expires_at
+      FROM vault_transaction_proposals
+      WHERE id = ${input.proposalId}::uuid
+        AND vault_id = ${membership.vault_id}::uuid
+        AND status IN ('collecting', 'finalized') AND expires_at > now()
+      FOR UPDATE
+    `;
+    const proposal = proposals[0];
+    if (!proposal || proposal.kind !== 'cooperative') {
+      throw new Error('cooperative proposal is missing, expired, or no longer collecting');
+    }
+    if (
+      proposal.proposal_digest.toString('hex') !== input.proposalDigest ||
+      proposal.roster_digest.toString('hex') !== confirmed.digest
+    ) {
+      throw new Error('cooperative proposal differs from the confirmed vault commitment');
+    }
+    if (proposal.status === 'finalized') {
+      const existing = await sql<Array<{ payload_json: { publicKeyHex?: unknown; value?: unknown } }>>`
+        SELECT payload_json FROM vault_proposal_contributions
+        WHERE proposal_id = ${proposal.id}::uuid
+          AND participant_id = ${membership.participant_id}
+          AND kind = ${input.kind}
+      `;
+      const participantPublicKey = confirmed.artifact.participants
+        .find((item) => item.id === membership.participant_id)!.personalPublicKeyHex;
+      const prior = existing[0]?.payload_json;
+      if (prior?.publicKeyHex !== participantPublicKey || prior?.value !== input.value) {
+        throw new Error('cooperative proposal is already finalized with different contribution data');
+      }
+      const counts = await sql<Array<{ pubnonces: string; partials: string }>>`
+        SELECT
+          count(*) FILTER (WHERE kind = 'musig_pubnonce')::text AS pubnonces,
+          count(*) FILTER (WHERE kind = 'musig_partial')::text AS partials
+        FROM vault_proposal_contributions WHERE proposal_id = ${proposal.id}::uuid
+      `;
+      const requiredCount = validatedRequiredSignerCount(confirmed.artifact, proposal.round_id);
+      return {
+        pubnonceCount: Number(counts[0]?.pubnonces || 0),
+        partialCount: Number(counts[0]?.partials || 0),
+        requiredCount,
+        finalizedTxid: proposal.final_txid?.toString('hex') || null,
+      };
+    }
+    const coins = await sql<StoredCoinRow[]>`
+      SELECT id, vault_id, roster_digest, kind, round_id, owner_participant_id,
+             txid, vout::text, value_sats::text, script_pubkey, status,
+             confirmed_height::text
+      FROM vault_coins
+      WHERE id = ${proposal.input_coin_id}::uuid
+        AND vault_id = ${membership.vault_id}::uuid AND status = 'current'
+      FOR UPDATE
+    `;
+    if (coins.length !== 1) throw new Error('proposal input is no longer the current vault coin');
+    const coin = storedCoinSnapshot(coins[0]!);
+    const validated = validateVaultCoin(confirmed.artifact, coin);
+    if (!validated.currentParticipantIds.includes(membership.participant_id)) {
+      throw new Error('this participant is not a signer in the current cooperative round');
+    }
+    const snapshotDigest = vaultCoinSnapshotDigest(coin);
+    const observations = await sql<Array<{ participant_id: string }>>`
+      SELECT participant_id FROM vault_coin_observations
+      WHERE coin_id = ${coin.id}::uuid AND user_id = ${input.userId}::uuid
+        AND participant_id = ${membership.participant_id}
+        AND snapshot_digest = ${Buffer.from(snapshotDigest, 'hex')}
+        AND observed_unspent = true
+    `;
+    if (observations.length !== 1) {
+      throw new Error('verify the exact current coin before contributing to MuSig2');
+    }
+    const rebuilt = buildVaultProposal({
+      artifact: confirmed.artifact,
+      coin,
+      kind: 'cooperative',
+      expiresAt: proposal.expires_at.toISOString(),
+    });
+    if (
+      rebuilt.digest !== input.proposalDigest ||
+      rebuilt.psbtBase64 !== proposal.psbt_base64 ||
+      rebuilt.unsignedTxid !== proposal.unsigned_txid.toString('hex')
+    ) {
+      throw new Error('stored cooperative proposal does not reproduce from the current vault coin');
+    }
+    const participant = validated.state.participants.find((item) => item.id === membership.participant_id)!;
+    const payload = { publicKeyHex: participant.personal.publicKeyHex, value: input.value };
+    if (input.kind === 'musig_pubnonce') validateCooperativePubnonce(input.value);
+    if (input.kind === 'musig_partial') {
+      const nonceRows = await sql<Array<{
+        participant_id: string;
+        kind: 'musig_pubnonce';
+        payload_json: { publicKeyHex?: unknown; value?: unknown };
+      }>>`
+        SELECT participant_id, kind, payload_json FROM vault_proposal_contributions
+        WHERE proposal_id = ${proposal.id}::uuid AND kind = 'musig_pubnonce'
+      `;
+      if (nonceRows.length !== rebuilt.requiredSignerIds.length) {
+        throw new Error('all public nonces must be present before partial signatures');
+      }
+      const nonceMaps = contributionMaps(nonceRows);
+      validateCooperativePartial({
+        state: validated.state,
+        participantId: membership.participant_id,
+        context: ceremonyStart({
+          state: validated.state,
+          currentIds: validated.currentParticipantIds,
+          trustedInput: coin,
+        }),
+        pubnonces: nonceMaps.pubnonces,
+        partialSig: input.value,
+        trustedInput: coin,
+      });
+    }
+    const inserted = await sql<Array<{ participant_id: string }>>`
+      INSERT INTO vault_proposal_contributions (
+        proposal_id, vault_id, proposal_digest, user_id, participant_id,
+        kind, payload_json, payload_hash
+      ) VALUES (
+        ${proposal.id}::uuid, ${membership.vault_id}::uuid,
+        ${Buffer.from(input.proposalDigest, 'hex')}, ${input.userId}::uuid,
+        ${membership.participant_id}, ${input.kind}, ${sql.json(payload)},
+        ${Buffer.from(sha256Hex(JSON.stringify(payload)), 'hex')}
+      )
+      ON CONFLICT DO NOTHING
+      RETURNING participant_id
+    `;
+    if (inserted.length !== 1) {
+      const existing = await sql<Array<{ payload_json: { publicKeyHex?: unknown; value?: unknown } }>>`
+        SELECT payload_json FROM vault_proposal_contributions
+        WHERE proposal_id = ${proposal.id}::uuid
+          AND participant_id = ${membership.participant_id}
+          AND kind = ${input.kind}
+      `;
+      const prior = existing[0]?.payload_json;
+      if (prior?.publicKeyHex !== payload.publicKeyHex || prior?.value !== payload.value) {
+        throw new Error(`participant already submitted a different ${input.kind}`);
+      }
+    }
+    const rows = await sql<Array<{
+      participant_id: string;
+      kind: 'musig_pubnonce' | 'musig_partial';
+      payload_json: { publicKeyHex?: unknown; value?: unknown };
+    }>>`
+      SELECT participant_id, kind, payload_json
+      FROM vault_proposal_contributions
+      WHERE proposal_id = ${proposal.id}::uuid
+        AND kind IN ('musig_pubnonce', 'musig_partial')
+      ORDER BY participant_id, kind
+    `;
+    const maps = contributionMaps(rows);
+    const context = ceremonyStart({
+      state: validated.state,
+      currentIds: validated.currentParticipantIds,
+      trustedInput: coin,
+    });
+    const requiredCount = rebuilt.requiredSignerIds.length;
+    if (Object.keys(maps.pubnonces).length === requiredCount) {
+      validateCooperativeNonceSet({
+        state: validated.state,
+        context,
+        pubnonces: maps.pubnonces,
+        trustedInput: coin,
+      });
+    }
+    let finalizedTxid: string | null = null;
+    if (Object.keys(maps.partialSigs).length === requiredCount) {
+      const aggregated = ceremonyAggregate({
+        state: validated.state,
+        context,
+        pubnonces: maps.pubnonces,
+        partialSigs: maps.partialSigs,
+        trustedInput: coin,
+      });
+      const updated = await sql<Array<{ id: string }>>`
+        UPDATE vault_transaction_proposals
+        SET status = 'finalized', finalized_tx_hex = ${aggregated.transactionHex},
+            final_txid = ${Buffer.from(aggregated.txid, 'hex')}, updated_at = now()
+        WHERE id = ${proposal.id}::uuid AND status = 'collecting'
+        RETURNING id
+      `;
+      if (updated.length !== 1) throw new Error('cooperative proposal changed during aggregation');
+      finalizedTxid = aggregated.txid;
+    }
+    return {
+      pubnonceCount: Object.keys(maps.pubnonces).length,
+      partialCount: Object.keys(maps.partialSigs).length,
+      requiredCount,
+      finalizedTxid,
     };
   });
 }
@@ -641,4 +887,36 @@ function exactSafeInteger(raw: string, label: string): number {
   const value = Number(raw);
   if (!Number.isSafeInteger(value)) throw new Error(`${label} is outside JavaScript's safe integer range`);
   return value;
+}
+
+function contributionMaps(rows: Array<{
+  participant_id: string;
+  kind: 'musig_pubnonce' | 'musig_partial';
+  payload_json: { publicKeyHex?: unknown; value?: unknown };
+}>): { pubnonces: Record<string, string>; partialSigs: Record<string, string> } {
+  const pubnonces: Record<string, string> = {};
+  const partialSigs: Record<string, string> = {};
+  for (const row of rows) {
+    const publicKeyHex = String(row.payload_json?.publicKeyHex || '');
+    const value = String(row.payload_json?.value || '');
+    if (!/^(02|03)[0-9a-f]{64}$/u.test(publicKeyHex)) {
+      throw new Error(`stored MuSig2 public key for ${row.participant_id} is invalid`);
+    }
+    const target = row.kind === 'musig_pubnonce' ? pubnonces : partialSigs;
+    const shape = row.kind === 'musig_pubnonce' ? /^[0-9a-f]{132}$/u : /^[0-9a-f]{64}$/u;
+    if (!shape.test(value) || target[publicKeyHex]) {
+      throw new Error(`stored ${row.kind} for ${row.participant_id} is invalid or duplicated`);
+    }
+    target[publicKeyHex] = value;
+  }
+  return { pubnonces, partialSigs };
+}
+
+function validatedRequiredSignerCount(
+  artifact: { vaults: Array<{ round: string; participantIds: string[] }> },
+  round: string | null,
+): number {
+  const count = artifact.vaults.find((item) => item.round === round)?.participantIds.length;
+  if (count !== 2 && count !== 3) throw new Error('cooperative proposal has an invalid signer round');
+  return count;
 }

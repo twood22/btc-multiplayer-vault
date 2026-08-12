@@ -288,16 +288,24 @@ export function ceremonyNonce({
 } {
   const authorization = authorizeCooperativeContext({ state, context, trustedInput });
   const participant = requireLocalSigner(state, participantId, authorization);
-  const generated = nonceGen({
-    secretKey: Buffer.from(participant.personal.privateKeyHex, 'hex'),
-    publicKey: Buffer.from(participant.personal.publicKeyHex, 'hex'),
-    aggregateXonly: Buffer.from(context.aggregateXonly, 'hex'),
-    message: Buffer.from(context.message, 'hex'),
-  });
+  const secretKey = Buffer.from(participant.personal.privateKeyHex, 'hex');
+  let generated: ReturnType<typeof nonceGen>;
+  try {
+    generated = nonceGen({
+      secretKey,
+      publicKey: Buffer.from(participant.personal.publicKeyHex, 'hex'),
+      aggregateXonly: Buffer.from(context.aggregateXonly, 'hex'),
+      message: Buffer.from(context.message, 'hex'),
+    });
+  } finally {
+    secretKey.fill(0);
+  }
+  const secnonce = generated.secnonce.toString('hex');
+  generated.secnonce.fill(0);
   return {
     participantId,
     pubnonce: generated.pubnonce.toString('hex'),
-    secnonce: generated.secnonce.toString('hex'),
+    secnonce,
     authorization,
   };
 }
@@ -316,6 +324,53 @@ function sessionFor(context: CeremonyContext, pubnonces: Record<string, Hex>): S
     isXonly: [true],
     message: Buffer.from(context.message, 'hex'),
   };
+}
+
+/** Validate the complete public-nonce round before any signer consumes a secret nonce. */
+export function validateCooperativeNonceSet(input: {
+  state: VaultState;
+  context: CeremonyContext;
+  pubnonces: Record<string, Hex>;
+  trustedInput: TrustedVaultInput;
+}): CooperativeAuthorization {
+  const authorization = authorizeCooperativeContext(input);
+  assertNonceSet(input.context, input.pubnonces);
+  sessionFor(input.context, input.pubnonces);
+  return authorization;
+}
+
+export function validateCooperativePubnonce(pubnonce: Hex): void {
+  if (!/^[0-9a-f]{132}$/u.test(pubnonce)) throw new Error('MuSig2 public nonce is malformed');
+  nonceAgg([Buffer.from(pubnonce, 'hex')]);
+}
+
+export function validateCooperativePartial(input: {
+  state: VaultState;
+  participantId: string;
+  context: CeremonyContext;
+  pubnonces: Record<string, Hex>;
+  partialSig: Hex;
+  trustedInput: TrustedVaultInput;
+}): CooperativeAuthorization {
+  const authorization = validateCooperativeNonceSet(input);
+  if (!/^[0-9a-f]{64}$/u.test(input.partialSig)) throw new Error('MuSig2 partial signature is malformed');
+  const participant = participantById(input.state, input.participantId);
+  if (!authorization.signerIds.includes(input.participantId)) {
+    throw new Error(`${input.participantId} is not a signer in round ${authorization.round}`);
+  }
+  const signerIndex = input.context.sortedPubkeys.indexOf(participant.personal.publicKeyHex);
+  if (signerIndex < 0) throw new Error('participant is absent from the cooperative signer set');
+  const pubnonceList = input.context.sortedPubkeys.map((pubkey) =>
+    Buffer.from(pubnonceForKey(input.context, input.pubnonces, pubkey), 'hex'));
+  if (!partialSigVerify(
+    Buffer.from(input.partialSig, 'hex'),
+    pubnonceList,
+    sessionFor(input.context, input.pubnonces),
+    signerIndex,
+  )) {
+    throw new Error(`partial signature from ${input.participantId} failed verification`);
+  }
+  return authorization;
 }
 
 function pubnonceForKey(
@@ -341,18 +396,29 @@ export function ceremonyPartial({
   participantId: string;
   context: CeremonyContext;
   pubnonces: Record<string, Hex>;
-  secnonce: Hex;
+  secnonce: Hex | Uint8Array;
   trustedInput: TrustedVaultInput;
 }): { participantId: string; partialSig: Hex; authorization: CooperativeAuthorization } {
   const authorization = authorizeCooperativeContext({ state, context, trustedInput });
   const participant = requireLocalSigner(state, participantId, authorization);
   assertNonceSet(context, pubnonces);
   const session = sessionFor(context, pubnonces);
-  const partialSig = sign(
-    Buffer.from(secnonce, 'hex'),
-    Buffer.from(participant.personal.privateKeyHex, 'hex'),
-    session,
-  );
+  const secnonceBytes = typeof secnonce === 'string'
+    ? Buffer.from(secnonce, 'hex')
+    : Buffer.from(secnonce);
+  let partialSig: Buffer;
+  const secretKey = Buffer.from(participant.personal.privateKeyHex, 'hex');
+  try {
+    partialSig = sign(
+      secnonceBytes,
+      secretKey,
+      session,
+    );
+  } finally {
+    secretKey.fill(0);
+    secnonceBytes.fill(0);
+    if (secnonce instanceof Uint8Array) secnonce.fill(0);
+  }
   // Self-check against our own pubnonce and pubkey before broadcasting.
   const signerIndex = context.sortedPubkeys.indexOf(participant.personal.publicKeyHex);
   if (signerIndex === -1) throw new Error('participant is not in the key-path aggregate');

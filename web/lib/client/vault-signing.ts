@@ -91,7 +91,7 @@ export function createAuthorizedCooperativePartial(input: {
   context: CeremonyContext;
   trustedInput: TrustedVaultInput;
   pubnonces: Record<string, string>;
-  secnonce: string;
+  secnonce: string | Uint8Array;
 }) {
   return ceremonyPartial({
     state: input.unlocked.signer.state,
