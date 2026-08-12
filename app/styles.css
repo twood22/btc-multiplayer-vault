@@ -17,7 +17,7 @@
 
 body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 80% 5%, #282213 0, #0d0e0c 35rem); }
 
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 
 .shell { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 34px 0 80px; }
 .brand-row { display: flex; align-items: center; gap: 12px; }
@@ -64,6 +64,15 @@ h1 { max-width: 800px; margin: 18px 0; font-size: clamp(46px, 8vw, 92px); line-h
 .unlock-card.verified { border-color: #315c3d; }
 .unlock-card h2 { margin: 6px 0; }
 .unlock-card p:last-child { margin-bottom: 0; color: var(--muted); }
+.passkey-choice, .recovery-controls label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
+.passkey-choice select, .recovery-controls select, .recovery-controls input { border: 1px solid #46483d; border-radius: 10px; background: #0f100e; color: var(--ink); padding: 11px 12px; }
+.recovery-card { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 18px; border: 1px solid var(--line); border-radius: 20px; background: var(--panel); padding: 26px; }
+.recovery-card h2 { margin: 6px 0 10px; }
+.recovery-card p { color: var(--muted); line-height: 1.5; }
+.recovery-controls { display: grid; gap: 13px; }
+.recovery-controls button { border: 0; border-radius: 12px; padding: 13px 17px; background: var(--accent); color: #171109; font-weight: 850; cursor: pointer; }
+.recovery-controls button:disabled { cursor: wait; opacity: .6; }
+.recovery-controls .form-message { margin: 0; font-size: 13px; }
 .gate-list { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 18px; }
 .gate-list article { border: 1px solid var(--line); border-radius: 16px; padding: 20px; background: #121310; }
 .gate-list article.done { border-color: #315c3d; }
@@ -78,4 +87,5 @@ h1 { max-width: 800px; margin: 18px 0; font-size: clamp(46px, 8vw, 92px); line-h
   .join-grid { gap: 30px; padding-top: 60px; }
   .invite-callout { align-items: flex-start; flex-direction: column; }
   .unlock-card, .sign-in-box { align-items: flex-start; flex-direction: column; }
+  .recovery-card { grid-template-columns: 1fr; }
 }

@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { basename, resolve } from 'node:path';
 import { loadEnvFile } from 'node:process';
 import postgres from 'postgres';
 
@@ -14,16 +14,21 @@ try {
       applied_at timestamptz NOT NULL DEFAULT now()
     )
   `;
-  const applied = await sql`
-    SELECT 1 FROM schema_migrations WHERE version = '001_passkey_custody'
-  `;
-  if (applied.length) {
-    console.log('001_passkey_custody.sql already applied');
-    process.exitCode = 0;
-  } else {
-  const migration = readFileSync(resolve('db/migrations/001_passkey_custody.sql'), 'utf8');
-  await sql.unsafe(migration);
-  console.log('Applied 001_passkey_custody.sql');
+  const migrationFiles = readdirSync(resolve('db/migrations'))
+    .filter((file) => /^\d{3}_[a-z0-9_]+\.sql$/u.test(file))
+    .sort();
+  for (const file of migrationFiles) {
+    const version = basename(file, '.sql');
+    const applied = await sql`
+      SELECT 1 FROM schema_migrations WHERE version = ${version}
+    `;
+    if (applied.length) {
+      console.log(`${file} already applied`);
+      continue;
+    }
+    const migration = readFileSync(resolve('db/migrations', file), 'utf8');
+    await sql.unsafe(migration);
+    console.log(`Applied ${file}`);
   }
 } finally {
   await sql.end();

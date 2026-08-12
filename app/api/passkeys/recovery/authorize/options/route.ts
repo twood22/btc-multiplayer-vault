@@ -24,6 +24,7 @@ export async function POST(request: Request) {
       userId,
       credentialId: input.credentialId,
       challenge: baseOptions.challenge,
+      kind: 'recovery_authorize',
     });
     const participant = await getParticipantSummary(userId);
     const credentialId = challenge.credential.id;
@@ -41,11 +42,7 @@ export async function POST(request: Request) {
         ],
         extensions: {
           ...(baseOptions.extensions || {}),
-          prf: {
-            evalByCredential: {
-              [credentialId]: { first: toBase64url(challenge.prfSalt) },
-            },
-          },
+          prf: { evalByCredential: { [credentialId]: { first: toBase64url(challenge.prfSalt) } } },
         },
       },
     });

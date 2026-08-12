@@ -13,10 +13,27 @@ export async function createParticipantSecretEnvelope(
   prfOutput: Uint8Array,
   aadBase64url: string,
 ): Promise<{ envelope: KeyEnvelope; participantSecret: string }> {
-  if (prfOutput.length !== 32) throw new Error('passkey PRF output must be exactly 32 bytes');
-  const aad = fromBase64url(aadBase64url);
   const secretBytes = crypto.getRandomValues(new Uint8Array(32));
   const participantSecret = toBase64url(secretBytes);
+  const envelope = await encryptParticipantSecretEnvelope(
+    participantSecret,
+    prfOutput,
+    aadBase64url,
+  );
+  secretBytes.fill(0);
+  return { participantSecret, envelope };
+}
+
+export async function encryptParticipantSecretEnvelope(
+  participantSecret: string,
+  prfOutput: Uint8Array,
+  aadBase64url: string,
+): Promise<KeyEnvelope> {
+  if (prfOutput.length !== 32) throw new Error('passkey PRF output must be exactly 32 bytes');
+  if (!/^[A-Za-z0-9_-]{43}$/.test(participantSecret)) {
+    throw new Error('participant secret has an invalid shape');
+  }
+  const aad = fromBase64url(aadBase64url);
   const plaintext = new TextEncoder().encode(participantSecret);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await deriveKey(prfOutput, aad);
@@ -35,17 +52,13 @@ export async function createParticipantSecretEnvelope(
     ),
   );
   if (!constantTimeEqual(roundTrip, plaintext)) throw new Error('encrypted key envelope failed its local round-trip check');
-  secretBytes.fill(0);
   plaintext.fill(0);
   roundTrip.fill(0);
   return {
-    participantSecret,
-    envelope: {
-      version: 1,
-      iv: toBase64url(iv),
-      ciphertext: toBase64url(ciphertext),
-      aad: aadBase64url,
-    },
+    version: 1,
+    iv: toBase64url(iv),
+    ciphertext: toBase64url(ciphertext),
+    aad: aadBase64url,
   };
 }
 

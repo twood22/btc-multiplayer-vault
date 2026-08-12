@@ -5,15 +5,22 @@ import { decryptParticipantSecretEnvelope, type KeyEnvelope } from '../lib/clien
 import { deriveParticipantIdentity } from '../lib/client/participant-identity';
 import { assertPasskeyWithPrf } from '../lib/client/webauthn';
 
-export function PasskeyUnlock() {
+interface PasskeyChoice {
+  id: string;
+  name: string;
+}
+
+export function PasskeyUnlock({ passkeys }: { passkeys: PasskeyChoice[] }) {
   const [status, setStatus] = useState('Locked');
   const [verified, setVerified] = useState(false);
+  const [credentialId, setCredentialId] = useState(passkeys[0]?.id || '');
 
   async function unlock() {
     setStatus('Waiting for your passkey…');
     setVerified(false);
     try {
-      const options = await postJson('/api/passkeys/unlock/options', {});
+      if (!credentialId) throw new Error('No completed passkey is available');
+      const options = await postJson('/api/passkeys/unlock/options', { credentialId });
       const assertion = await assertPasskeyWithPrf(options.options);
       const finished = await postJson('/api/passkeys/unlock/finish', {
         challengeId: options.challengeId,
@@ -45,6 +52,14 @@ export function PasskeyUnlock() {
         <h2>{status}</h2>
         <p>The plaintext key exists only long enough to reproduce and verify your public identity.</p>
       </div>
+      {passkeys.length > 1 && (
+        <label className="passkey-choice">
+          Passkey
+          <select value={credentialId} onChange={(event) => setCredentialId(event.target.value)}>
+            {passkeys.map((passkey) => <option key={passkey.id} value={passkey.id}>{passkey.name}</option>)}
+          </select>
+        </label>
+      )}
       <button onClick={unlock} type="button">Verify my key</button>
     </section>
   );

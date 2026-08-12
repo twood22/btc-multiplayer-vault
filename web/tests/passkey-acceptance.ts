@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import {
   createParticipantSecretEnvelope,
   decryptParticipantSecretEnvelope,
+  encryptParticipantSecretEnvelope,
 } from '../lib/client/key-envelope';
 import { toBase64url } from '../lib/client/base64url';
 import { stripPrfSecrets } from '../lib/client/webauthn';
@@ -35,6 +36,31 @@ await check('a different passkey PRF output cannot decrypt the envelope', async 
     toBase64url(Buffer.from('identity-binding-v1')),
   );
   await expectReject(() => decryptParticipantSecretEnvelope(envelope, randomBytes(32)));
+});
+
+await check('two distinct passkeys protect the exact same participant identity', async () => {
+  const original = await createParticipantSecretEnvelope(
+    randomBytes(32),
+    toBase64url(Buffer.from('primary-credential-binding-v1')),
+  );
+  const recoveryPrf = randomBytes(32);
+  const recovery = await encryptParticipantSecretEnvelope(
+    original.participantSecret,
+    recoveryPrf,
+    toBase64url(Buffer.from('recovery-credential-binding-v1')),
+  );
+  const recoveredSecret = await decryptParticipantSecretEnvelope(recovery, recoveryPrf);
+  assert(recoveredSecret === original.participantSecret, 'recovery envelope changed the participant secret');
+  const originalIdentity = await deriveParticipantIdentity(original.participantSecret, 'bob');
+  const recoveredIdentity = await deriveParticipantIdentity(recoveredSecret, 'bob');
+  assert(
+    originalIdentity.personalPublicKeyHex === recoveredIdentity.personalPublicKeyHex,
+    'recovery envelope changed the personal public key',
+  );
+  assert(
+    originalIdentity.payoutXonlyPublicKeyHex === recoveredIdentity.payoutXonlyPublicKeyHex,
+    'recovery envelope changed the payout public key',
+  );
 });
 
 await check('changing the envelope identity binding invalidates AES-GCM', async () => {

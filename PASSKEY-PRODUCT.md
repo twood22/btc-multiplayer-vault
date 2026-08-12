@@ -22,6 +22,23 @@ participant-only MuSig2 path, or the timelocked recovery path.
   The browser re-derives the participant's Bitcoin public identity and compares
   it to setup-time public material before reporting the key usable.
 - Strict CSP with request nonces and no third-party scripts or network origins.
+- A recovery-passkey ceremony that first unlocks with an existing credential,
+  registers a distinct credential, and encrypts the exact same participant
+  secret under a credential-specific PRF salt and authenticated envelope. Either
+  completed passkey can subsequently sign in and unlock the same identity.
+
+Recovery enrollment is a ten-minute, one-time server capability. Its creation
+challenge is bound to the existing credential; registration is bound to the
+user and enrollment and excludes every existing credential; wrapping is bound
+to the exact newly registered credential. An
+interrupted enrollment never marks the new passkey recovery-ready; expired
+pending credentials are removed when the participant begins a fresh recovery
+authorization. The server validates that the submitted public identity matches
+the existing participant byte-for-byte, but—as with any browser-held secret—it
+cannot prove that arbitrary client-supplied ciphertext contains that secret.
+The honest client performs an AES-GCM round trip and identity check before
+upload. A malicious modified client can only make its own new recovery envelope
+unusable; it cannot replace the original envelope or participant identity.
 
 The browser key derivation is cross-checked against `src/vault.ts` in
 `npm run web:test`; this is the same participant identity used by the vault
@@ -55,13 +72,15 @@ npm audit
 ```
 
 `web:test` currently proves encryption/decryption, wrong-passkey rejection,
-authenticated-identity tamper rejection, PRF-output stripping, and exact public
-key compatibility with the existing vault core.
+authenticated-identity tamper rejection, two-credential rewrapping of the same
+participant identity, PRF-output stripping, and exact public key compatibility
+with the existing vault core.
 
 ## Hard gates before deployment or funding
 
-1. Add a second passkey or offline encrypted recovery kit for every participant.
-   A synced passkey is convenient but is not an adequate sole recovery plan.
+1. Complete the second-passkey ceremony for every participant and validate it
+   with real browsers/authenticators. A synced copy of the same credential is
+   convenient but does not satisfy the distinct-credential gate.
 2. Integrate live Sigbash key creation into each participant's passkey session,
    replacing offline leaf fixtures with service-created public leaf material.
 3. Prove an actual live Sigbash mainnet solo signature and hostile-PSBT rejection

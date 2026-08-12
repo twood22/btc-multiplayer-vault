@@ -1,14 +1,16 @@
+import { randomBytes } from 'node:crypto';
 import { generateAuthenticationOptions } from '@simplewebauthn/server';
 import { z } from 'zod';
+import { envelopeAad } from '@/web/lib/server/aad';
 import { webConfig } from '@/web/lib/server/config';
 import { toBase64url } from '@/web/lib/server/encoding';
 import { assertSameOrigin, jsonError } from '@/web/lib/server/http';
 import { requireSessionUser } from '@/web/lib/server/session';
-import { createUnlockChallenge, getParticipantSummary } from '@/web/lib/server/webauthn-store';
+import { createRecoveryEnvelopeChallenge } from '@/web/lib/server/webauthn-store';
 
 export const runtime = 'nodejs';
 
-const Input = z.object({ credentialId: z.string().min(1).max(2048) });
+const Input = z.object({ enrollmentId: z.string().uuid() });
 
 export async function POST(request: Request) {
   try {
@@ -20,20 +22,24 @@ export async function POST(request: Request) {
       userVerification: 'required',
       timeout: 120_000,
     });
-    const challenge = await createUnlockChallenge({
+    const prfSalt = randomBytes(32);
+    const challenge = await createRecoveryEnvelopeChallenge({
       userId,
-      credentialId: input.credentialId,
+      enrollmentId: input.enrollmentId,
       challenge: baseOptions.challenge,
+      prfSalt,
     });
-    const participant = await getParticipantSummary(userId);
     const credentialId = challenge.credential.id;
+    const aad = envelopeAad({
+      userId,
+      credentialId,
+      vaultId: challenge.credential.vaultId,
+      participantId: challenge.credential.participantId,
+    });
     return Response.json({
       challengeId: challenge.id,
       participantId: challenge.credential.participantId,
-      expectedIdentity: {
-        personalPublicKeyHex: participant.personalPublicKeyHex,
-        payoutXonlyPublicKeyHex: participant.payoutXonlyPublicKeyHex,
-      },
+      aad: toBase64url(aad),
       options: {
         ...baseOptions,
         allowCredentials: [
@@ -41,15 +47,11 @@ export async function POST(request: Request) {
         ],
         extensions: {
           ...(baseOptions.extensions || {}),
-          prf: {
-            evalByCredential: {
-              [credentialId]: { first: toBase64url(challenge.prfSalt) },
-            },
-          },
+          prf: { evalByCredential: { [credentialId]: { first: toBase64url(prfSalt) } } },
         },
       },
     });
   } catch (error) {
-    return jsonError(error, error instanceof Error && error.message.includes('authentication') ? 401 : 400);
+    return jsonError(error);
   }
 }
