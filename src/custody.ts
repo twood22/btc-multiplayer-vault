@@ -1,7 +1,8 @@
+import { Buffer } from 'buffer';
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { BITCOIN_NETWORK } from './network.js';
-import { AMOUNTS, PARTICIPANTS, RECOVERY_DELAY_BLOCKS } from './config.js';
+import { PARTICIPANTS } from './config.js';
 import { verifyVaultTransaction, type ConsensusVerification } from './consensus.js';
 import {
   deriveXpubChildPubkey,
@@ -32,6 +33,7 @@ import type {
   RecoveryTapLeaf,
   TrustedVaultInput,
   VaultRound,
+  VaultEconomics,
   VaultState,
 } from './types.js';
 
@@ -333,7 +335,11 @@ export function loadLocalSigner(rosterJson: string): LocalSigner {
   return localSignerFromSecret(parseRoster(rosterJson), secret);
 }
 
-export function localSignerFromSecret(roster: RosterEntry[], secret: string): LocalSigner {
+export function localSignerFromSecret(
+  roster: RosterEntry[],
+  secret: string,
+  economics?: VaultEconomics,
+): LocalSigner {
   if (typeof secret !== 'string' || secret.length < MIN_SECRET_LENGTH) {
     throw new Error(
       `${SECRET_ENV} must be at least ${MIN_SECRET_LENGTH} characters; generate one with: openssl rand -hex 32`,
@@ -350,7 +356,7 @@ export function localSignerFromSecret(roster: RosterEntry[], secret: string): Lo
     throw new Error(`${SECRET_ENV} reproduces more than one participant identity; the roster is not key-unique`);
   }
   const local = matches[0]!;
-  const state = createRosterState(roster, { participantId: local.id, secret });
+  const state = createRosterState(roster, { participantId: local.id, secret }, economics);
   return {
     participantId: local.id,
     roster,
@@ -656,7 +662,7 @@ export function authorizeRecoveryPsbt({
   assertUnsignedTransactionShape('recovery PSBT', psbt, {
     version: 2,
     locktime: 0,
-    sequence: RECOVERY_DELAY_BLOCKS,
+    sequence: state.economics.recoveryDelayBlocks,
     outputCount: canonicalIds.length,
   });
   const tx = unsignedTx(psbt);
@@ -685,7 +691,9 @@ export function authorizeRecoveryPsbt({
   }
 
   const recipients = canonicalIds.map((id) => participantById(state, id));
-  const recoverEach = Math.floor((trustedInput.valueSats - AMOUNTS.recoveryFee) / recipients.length);
+  const recoverEach = Math.floor(
+    (trustedInput.valueSats - state.economics.recoveryFeeSats) / recipients.length,
+  );
   assertOutputsMatch(
     'recovery PSBT',
     psbt,
@@ -695,9 +703,12 @@ export function authorizeRecoveryPsbt({
     })),
   );
   const feeSats = trustedInput.valueSats - outputTotalSats(psbt);
-  if (feeSats < AMOUNTS.recoveryFee || feeSats >= AMOUNTS.recoveryFee + recipients.length) {
+  if (
+    feeSats < state.economics.recoveryFeeSats ||
+    feeSats >= state.economics.recoveryFeeSats + recipients.length
+  ) {
     throw new Error(
-      `recovery PSBT fee ${feeSats} sats is not the configured ${AMOUNTS.recoveryFee} sats (plus rounding dust)`,
+      `recovery PSBT fee ${feeSats} sats is not the configured ${state.economics.recoveryFeeSats} sats (plus rounding dust)`,
     );
   }
 

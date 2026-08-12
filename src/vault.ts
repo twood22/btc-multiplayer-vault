@@ -1,10 +1,11 @@
+import { Buffer } from 'buffer';
 import {
-  AMOUNTS,
   DEMO_SEED,
   NETWORK,
   PARTICIPANTS,
-  POLICY_FLOORS,
-  RECOVERY_DELAY_BLOCKS,
+  VAULT_ECONOMICS,
+  validateVaultEconomics,
+  vaultPolicyFloors,
 } from './config.js';
 import {
   keyAgg,
@@ -27,6 +28,7 @@ import {
   type SigbashRoundKey,
   type SoloPolicy,
   type VaultRound,
+  type VaultEconomics,
   type VaultState,
 } from './types.js';
 
@@ -111,7 +113,12 @@ export function participantLeaveRounds(participantId: string, allIds: string[]):
 
 export function createDemoState({
   sigbashLeafOverrides = {},
-}: { sigbashLeafOverrides?: SigbashLeafOverrides } = {}): VaultState {
+  economics = VAULT_ECONOMICS,
+}: {
+  sigbashLeafOverrides?: SigbashLeafOverrides;
+  economics?: VaultEconomics;
+} = {}): VaultState {
+  const validatedEconomics = validateVaultEconomics(economics);
   const allIds = PARTICIPANTS.map((participant) => participant.id);
   const participants: Participant[] = PARTICIPANTS.map((participant) => {
     const personal = deterministicKeypair(DEMO_SEED, `${participant.id}:personal`);
@@ -145,9 +152,9 @@ export function createDemoState({
     };
   });
 
-  const vaults = buildVaultTree(participants);
-  const policies = buildPolicies(participants, vaults);
-  return { participants, vaults, policies };
+  const vaults = buildVaultTree(participants, validatedEconomics);
+  const policies = buildPolicies(participants, vaults, validatedEconomics);
+  return { participants, vaults, policies, economics: validatedEconomics };
 }
 
 // ── Per-participant key custody ────────────────────────────────────────────
@@ -241,7 +248,9 @@ export function rosterEntry(participantId: string, secret: string, allIds: strin
 export function createRosterState(
   roster: RosterEntry[],
   localSecret?: { participantId: string; secret: string },
+  economics: VaultEconomics = VAULT_ECONOMICS,
 ): VaultState {
+  const validatedEconomics = validateVaultEconomics(economics);
   const allIds = roster.map((entry) => entry.id);
   const participants: Participant[] = roster.map((entry) => {
     const isLocal = localSecret?.participantId === entry.id;
@@ -294,8 +303,8 @@ export function createRosterState(
       sigbashByRound,
     };
   });
-  const vaults = buildVaultTree(participants);
-  const policies = buildPolicies(participants, vaults);
+  const vaults = buildVaultTree(participants, validatedEconomics);
+  const policies = buildPolicies(participants, vaults, validatedEconomics);
   for (const entry of roster) {
     for (const [round, registration] of Object.entries(entry.sigbashRegistrationByRound || {})) {
       const expectedPolicy = policies.get(`${round}:${entry.id}`);
@@ -303,10 +312,14 @@ export function createRosterState(
       expectedPolicy.keyId = registration.keyId;
     }
   }
-  return { participants, vaults, policies };
+  return { participants, vaults, policies, economics: validatedEconomics };
 }
 
-export function buildVaultTree(participants: Participant[]): Map<string, VaultRound> {
+export function buildVaultTree(
+  participants: Participant[],
+  economics: VaultEconomics = VAULT_ECONOMICS,
+): Map<string, VaultRound> {
+  const validatedEconomics = validateVaultEconomics(economics);
   const byIds = new Map(participants.map((p) => [p.id, p]));
   const allIds = participants.map((p) => p.id);
   const rounds = new Map<string, VaultRound>();
@@ -331,7 +344,7 @@ export function buildVaultTree(participants: Participant[]): Map<string, VaultRo
         xonlyPubkey: sigbashRoundKey(p, round).xonlyPubKeyHex,
         identificationXonlyPubkey: sigbashRoundKey(p, round).identificationXonlyPubKeyHex,
       })),
-      recoveryDelayBlocks: RECOVERY_DELAY_BLOCKS,
+      recoveryDelayBlocks: validatedEconomics.recoveryDelayBlocks,
       recoveryXonlyPubkeys: current.map((p) => p.personal.xonlyPubKeyHex),
     });
     rounds.set(round, {
@@ -349,7 +362,7 @@ export function buildVaultTree(participants: Participant[]): Map<string, VaultRo
           `pk(${sigbashRoundKey(p, round).xonlyPubKeyHex})`,
           `pk(${sigbashRoundKey(p, round).identificationXonlyPubKeyHex})`,
         ])
-        .join(',')},and_v(v:older(${RECOVERY_DELAY_BLOCKS}),multi_a(${Math.max(1, current.length - 1)},${current
+        .join(',')},and_v(v:older(${validatedEconomics.recoveryDelayBlocks}),multi_a(${Math.max(1, current.length - 1)},${current
         .map((p) => p.personal.xonlyPubKeyHex)
         .join(',')}))})`,
       keyPath: {
@@ -377,7 +390,10 @@ export function sigbashRoundKey(participant: Participant, round: string): Sigbas
 export function buildPolicies(
   participants: Participant[],
   vaults: Map<string, VaultRound>,
+  economics: VaultEconomics = VAULT_ECONOMICS,
 ): Map<string, SoloPolicy> {
+  const validatedEconomics = validateVaultEconomics(economics);
+  const policyFloors = vaultPolicyFloors(validatedEconomics);
   const byId = new Map(participants.map((p) => [p.id, p]));
   const policies = new Map<string, SoloPolicy>();
   const requireParticipant = (id: string): Participant => {
@@ -395,9 +411,9 @@ export function buildPolicies(
     policies.set(policyId(roundOneIds, leaverId), soloPolicy({
       roundIds: roundOneIds,
       leaver,
-      payoutSats: AMOUNTS.firstWithdrawal,
+      payoutSats: validatedEconomics.firstWithdrawalSats,
       nextAddress: nextVault.address,
-      leftoverFloor: POLICY_FLOORS.roundOneLeftover,
+      leftoverFloor: policyFloors.roundOneLeftover,
     }));
   }
 
@@ -410,9 +426,9 @@ export function buildPolicies(
       policies.set(policyId(ids, leaverId), soloPolicy({
         roundIds: ids,
         leaver,
-        payoutSats: AMOUNTS.secondWithdrawal,
+        payoutSats: validatedEconomics.secondWithdrawalSats,
         nextAddress: remaining.payoutAddress,
-        leftoverFloor: POLICY_FLOORS.roundTwoLeftover,
+        leftoverFloor: policyFloors.roundTwoLeftover,
       }));
     }
   }
@@ -579,8 +595,9 @@ export function buildSoloWithdrawal({
   const payout = payoutCondition.value;
   const nextAddress = nextAddressCondition.addresses[0];
   if (!nextAddress) throw new Error(`policy ${policy.id} pins no next address`);
-  const fee =
-    currentIds.length === 3 ? AMOUNTS.feePerSoloWithdrawal : AMOUNTS.feePerSoloWithdrawal * 2;
+  const fee = currentIds.length === 3
+    ? state.economics.soloWithdrawalFeeSats
+    : state.economics.soloWithdrawalFeeSats * 2;
   const leaver = participantById(state, leaverId);
   return {
     kind: 'solo-withdrawal',
@@ -616,7 +633,7 @@ export function buildCooperativeExit({
 }): LedgerTx {
   const participants = currentIds.map((id) => participantById(state, id));
   const refund = asSats(
-    Math.floor((currentUtxo.value - AMOUNTS.cooperativeFee) / participants.length),
+    Math.floor((currentUtxo.value - state.economics.cooperativeFeeSats) / participants.length),
   );
   const vault = state.vaults.get(roundId(currentIds));
   if (!vault) throw new Error(`missing vault for ${roundId(currentIds)}`);
@@ -678,12 +695,12 @@ export function buildRecovery({
   vanishedId: string;
   blocksWaited: number;
 }): LedgerTx {
-  if (blocksWaited < RECOVERY_DELAY_BLOCKS) {
-    throw new Error(`recovery locked for ${RECOVERY_DELAY_BLOCKS - blocksWaited} more blocks`);
+  if (blocksWaited < state.economics.recoveryDelayBlocks) {
+    throw new Error(`recovery locked for ${state.economics.recoveryDelayBlocks - blocksWaited} more blocks`);
   }
   const recipients = currentIds.map((id) => participantById(state, id));
   const recoverEach = asSats(
-    Math.floor((currentUtxo.value - AMOUNTS.recoveryFee) / recipients.length),
+    Math.floor((currentUtxo.value - state.economics.recoveryFeeSats) / recipients.length),
   );
   const vault = state.vaults.get(roundId(currentIds));
   if (!vault) throw new Error(`missing vault for ${roundId(currentIds)}`);

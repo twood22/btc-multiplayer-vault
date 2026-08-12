@@ -37,7 +37,12 @@ export default async function VaultPage() {
           and three-person roster verification remain incomplete.
         </p>
       </section>
-      {participant.setupComplete ? <PasskeyUnlock passkeys={participant.passkeys} /> : <FinishKeySetup />}
+      {participant.setupComplete ? (
+        <PasskeyUnlock
+          passkeys={participant.passkeys}
+          confirmedRoster={Boolean(roster.review?.unanimous)}
+        />
+      ) : <FinishKeySetup />}
       {participant.setupComplete && !participant.recoveryComplete && (
         <PasskeyRecoverySetup passkeys={participant.passkeys} />
       )}

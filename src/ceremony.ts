@@ -1,7 +1,7 @@
+import { Buffer } from 'buffer';
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { BITCOIN_NETWORK } from './network.js';
-import { AMOUNTS } from './config.js';
 import { verifyVaultTransaction, type ConsensusVerification } from './consensus.js';
 import { keyAgg, keySort, taggedHash } from './crypto.js';
 import {
@@ -183,7 +183,9 @@ export function authorizeCooperativeContext({
   }
 
   const participants = currentIds.map((id) => participantById(state, id));
-  const refundSats = Math.floor((trustedInput.valueSats - AMOUNTS.cooperativeFee) / participants.length);
+  const refundSats = Math.floor(
+    (trustedInput.valueSats - state.economics.cooperativeFeeSats) / participants.length,
+  );
   assertOutputsMatch(
     'cooperative exit PSBT',
     psbt,
@@ -193,9 +195,12 @@ export function authorizeCooperativeContext({
     })),
   );
   const feeSats = trustedInput.valueSats - outputTotalSats(psbt);
-  if (feeSats < AMOUNTS.cooperativeFee || feeSats >= AMOUNTS.cooperativeFee + participants.length) {
+  if (
+    feeSats < state.economics.cooperativeFeeSats ||
+    feeSats >= state.economics.cooperativeFeeSats + participants.length
+  ) {
     throw new Error(
-      `cooperative exit fee ${feeSats} sats is not the configured ${AMOUNTS.cooperativeFee} sats (plus rounding dust)`,
+      `cooperative exit fee ${feeSats} sats is not the configured ${state.economics.cooperativeFeeSats} sats (plus rounding dust)`,
     );
   }
 

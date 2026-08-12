@@ -207,6 +207,20 @@ export interface VaultState {
   participants: Participant[];
   vaults: Map<string, VaultRound>;
   policies: Map<string, SoloPolicy>;
+  economics: VaultEconomics;
+}
+
+/** Every amount and delay that changes a committed vault or authorized spend. */
+export interface VaultEconomics {
+  depositSatsPerParticipant: Sats;
+  firstWithdrawalSats: Sats;
+  secondWithdrawalSats: Sats;
+  soloFeeBudgetSats: Sats;
+  soloWithdrawalFeeSats: Sats;
+  cooperativeFeeSats: Sats;
+  recoveryFeeSats: Sats;
+  finalSweepFeeSats: Sats;
+  recoveryDelayBlocks: number;
 }
 
 export interface LedgerUtxo {

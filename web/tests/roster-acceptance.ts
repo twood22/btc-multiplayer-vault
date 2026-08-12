@@ -6,12 +6,16 @@ import {
   sha256Hex,
   xpubRootXonly,
 } from '../../src/crypto.js';
+import { auditSpecState } from '../../src/audit.js';
+import { buildSoloWithdrawalPsbt, inspectPsbt } from '../../src/psbt.js';
 import {
   createPublishedRosterArtifact,
   publishedRosterDigest,
   rosterReview,
 } from '../../src/roster-ceremony.js';
 import { planSigbashProvisioning } from '../../src/sigbash-provisioning.js';
+import { asSats, type VaultEconomics } from '../../src/types.js';
+import { unlockPublishedVault } from '../lib/client/vault-signing.js';
 import {
   createRosterState,
   participantLeaveRounds,
@@ -135,6 +139,62 @@ check('round-one policy pins the vault built from the actual surviving pair keys
   assert(JSON.stringify(plan.next.policy).includes(survivingPairAddress));
 });
 
+check('tiny-mainnet economics are committed into every vault and transaction', () => {
+  const economics = tinyEconomics();
+  const tinyArtifact = createPublishedRosterArtifact(vaultId, roster, economics);
+  const state = createRosterState(roster, undefined, economics);
+  assert.equal(tinyArtifact.funding.valueSats, 30_000);
+  assert.equal(tinyArtifact.economics.soloWithdrawalFeeSats, 300);
+  assert.equal(tinyArtifact.economics.recoveryDelayBlocks, 12);
+  assert(auditSpecState(state).passed);
+  const built = buildSoloWithdrawalPsbt({
+    state,
+    currentIds: ids,
+    leaverId: 'alice',
+    txid: '11'.repeat(32),
+    vout: 0,
+    valueSats: 30_000,
+  });
+  const inspection = inspectPsbt(built.psbtBase64);
+  assert.equal(inspection.outputs[0]?.valueSats, 9_500);
+  assert.equal(inspection.outputs[1]?.valueSats, 20_200);
+});
+
+check('changing any committed economic rule changes the roster digest', () => {
+  const tiny = tinyEconomics();
+  const first = createPublishedRosterArtifact(vaultId, roster, tiny);
+  const changed = createPublishedRosterArtifact(vaultId, roster, {
+    ...tiny,
+    recoveryDelayBlocks: tiny.recoveryDelayBlocks + 1,
+  });
+  assert.notEqual(publishedRosterDigest(first), publishedRosterDigest(changed));
+  assert.notEqual(first.funding.address, changed.funding.address);
+});
+
+check('browser signing state accepts only the exact artifact digest and participant secret', () => {
+  const aliceSecret = 'participant-alice-secret-material-that-is-long-enough';
+  const signingRoster = rosterWithKnownAliceSecret(aliceSecret);
+  const signingArtifact = createPublishedRosterArtifact(vaultId, signingRoster, tinyEconomics());
+  const digest = publishedRosterDigest(signingArtifact);
+  const unlocked = unlockPublishedVault({
+    artifact: signingArtifact,
+    expectedDigest: digest,
+    participantSecret: aliceSecret,
+  });
+  assert.equal(unlocked.signer.participantId, 'alice');
+  assert.equal(unlocked.signer.state.economics.depositSatsPerParticipant, 10_000);
+  assert.throws(() => unlockPublishedVault({
+    artifact: signingArtifact,
+    expectedDigest: '00'.repeat(32),
+    participantSecret: aliceSecret,
+  }), /confirmed digest/);
+  assert.throws(() => unlockPublishedVault({
+    artifact: signingArtifact,
+    expectedDigest: digest,
+    participantSecret: 'wrong-participant-secret-material-that-is-long-enough',
+  }), /does not reproduce/);
+});
+
 console.log(JSON.stringify({ passed: checks.every((item) => item.ok), checks }, null, 2));
 
 function check(name: string, run: () => void): void {
@@ -173,6 +233,17 @@ function liveRoster(): RosterEntry[] {
   });
 }
 
+function rosterWithKnownAliceSecret(aliceSecret: string): RosterEntry[] {
+  const known = rosterEntry('alice', aliceSecret, ids);
+  const base = liveRoster();
+  return base.map((entry) => entry.id === 'alice' ? {
+    ...entry,
+    personalPublicKeyHex: known.personalPublicKeyHex,
+    payoutXonlyPubkeyHex: known.payoutXonlyPubkeyHex,
+    payoutAddress: known.payoutAddress,
+  } : entry);
+}
+
 function withoutRegistrations(
   source: RosterEntry[],
   keep: (participantId: string, round: string) => boolean,
@@ -184,6 +255,20 @@ function withoutRegistrations(
         .filter(([round]) => keep(entry.id, round)),
     ),
   }));
+}
+
+function tinyEconomics(): VaultEconomics {
+  return {
+    depositSatsPerParticipant: asSats(10_000),
+    firstWithdrawalSats: asSats(9_500),
+    secondWithdrawalSats: asSats(10_250),
+    soloFeeBudgetSats: asSats(2_000),
+    soloWithdrawalFeeSats: asSats(300),
+    cooperativeFeeSats: asSats(300),
+    recoveryFeeSats: asSats(500),
+    finalSweepFeeSats: asSats(300),
+    recoveryDelayBlocks: 12,
+  };
 }
 
 function syntheticMainnetXpub(label: string): string {

@@ -1,13 +1,14 @@
+import { Buffer } from 'buffer';
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { BITCOIN_NETWORK } from './network.js';
-import { AMOUNTS, RECOVERY_DELAY_BLOCKS } from './config.js';
 import { verifyVaultTransaction, type ConsensusVerification } from './consensus.js';
 import { keyAggSecret, taggedHashHex, tapLeafHash, xpubMasterFingerprint } from './crypto.js';
 import { participantById, policyId, roundId, sigbashRoundKey } from './vault.js';
 import type {
   Hex,
   Keypair,
+  PolicyTx,
   Prevout,
   PsbtInspection,
   SoloPolicy,
@@ -70,11 +71,11 @@ export function buildFundingPsbt({
   const normalizedInputs = participantIds.map((participantId, index) => {
     const input = byParticipant.get(participantId)!;
     const valueSats = Number(input.valueSats);
-    if (valueSats < AMOUNTS.deposit) {
-      throw new Error(`${participantId} input is below 1 BTC deposit`);
+    if (valueSats < state.economics.depositSatsPerParticipant) {
+      throw new Error(`${participantId} input is below the committed participant deposit`);
     }
     const participantFee = feeShare + (index === 0 ? feeRemainder : 0);
-    const changeSats = valueSats - AMOUNTS.deposit - participantFee;
+    const changeSats = valueSats - state.economics.depositSatsPerParticipant - participantFee;
     if (changeSats < 0) {
       throw new Error(`${participantId} input cannot cover deposit plus fee share`);
     }
@@ -100,7 +101,7 @@ export function buildFundingPsbt({
 
   psbt.addOutput({
     address: roundOneVault.address,
-    value: BigInt(AMOUNTS.deposit * participantIds.length),
+    value: BigInt(state.economics.depositSatsPerParticipant * participantIds.length),
   });
   for (const input of normalizedInputs) {
     if (input.changeSats > 0) {
@@ -120,7 +121,7 @@ export function buildFundingPsbt({
         {
           index: 0,
           address: roundOneVault.address,
-          valueSats: AMOUNTS.deposit * participantIds.length,
+          valueSats: state.economics.depositSatsPerParticipant * participantIds.length,
           scriptPubKeyHex: roundOneVault.outputScriptHex,
           label: 'round-one vault',
         },
@@ -322,7 +323,9 @@ function soloWithdrawalContext({ state, currentIds, leaverId, txid, vout, valueS
 
   const payout = outputValue(policy, 0, 'EQ');
   const nextAddress = outputAddress(policy, 1);
-  const fee = currentIds.length === 3 ? AMOUNTS.feePerSoloWithdrawal : AMOUNTS.feePerSoloWithdrawal * 2;
+  const fee = currentIds.length === 3
+    ? state.economics.soloWithdrawalFeeSats
+    : state.economics.soloWithdrawalFeeSats * 2;
   const leftover = valueSats - payout - fee;
   const floor = outputValue(policy, 1, 'GTE');
   if (leftover < floor) {
@@ -729,7 +732,7 @@ export function buildCooperativeExitPsbt({
   txid,
   vout,
   valueSats,
-  feeSats = AMOUNTS.cooperativeFee,
+  feeSats,
 }: {
   state: VaultState;
   currentIds: string[];
@@ -738,6 +741,7 @@ export function buildCooperativeExitPsbt({
   valueSats: number;
   feeSats?: number;
 }) {
+  const configuredFeeSats = feeSats ?? state.economics.cooperativeFeeSats;
   const round = roundId(currentIds);
   const vault = requireVault(state, currentIds);
   const current = currentIds.map((id) => participantById(state, id));
@@ -745,7 +749,7 @@ export function buildCooperativeExitPsbt({
   // is consensus-valid but will not relay). For the round-one vault this is
   // each participant's full 1 BTC deposit minus ~300 sats; for a pair round it
   // also returns the departed player's haircut instead of burning it to fees.
-  const refundSats = Math.floor((valueSats - feeSats) / current.length);
+  const refundSats = Math.floor((valueSats - configuredFeeSats) / current.length);
   if (refundSats <= 0) throw new Error('cooperative refund is not positive after fee');
 
   const psbt = new bitcoin.Psbt({ network: BITCOIN_NETWORK });
@@ -856,7 +860,7 @@ export function buildRecoveryPsbt({
     );
   }
   const recipients = currentIds.map((id) => participantById(state, id));
-  const recoverEach = Math.floor((valueSats - AMOUNTS.recoveryFee) / recipients.length);
+  const recoverEach = Math.floor((valueSats - state.economics.recoveryFeeSats) / recipients.length);
   const outputTotal = recoverEach * recipients.length;
   if (outputTotal > valueSats) {
     throw new Error(`recovery outputs ${outputTotal} sats exceed input ${valueSats} sats`);
@@ -867,7 +871,7 @@ export function buildRecoveryPsbt({
   psbt.addInput({
     hash: txid,
     index: vout,
-    sequence: RECOVERY_DELAY_BLOCKS,
+    sequence: state.economics.recoveryDelayBlocks,
     witnessUtxo: {
       script: Buffer.from(vault.outputScriptHex, 'hex'),
       value: BigInt(valueSats),
@@ -896,7 +900,7 @@ export function buildRecoveryPsbt({
         txid,
         vout,
         valueSats,
-        sequence: RECOVERY_DELAY_BLOCKS,
+        sequence: state.economics.recoveryDelayBlocks,
         scriptPubKeyHex: vault.outputScriptHex,
       },
       tapLeafScript: {
@@ -923,7 +927,7 @@ export function buildFinalSweepPsbt({
   txid,
   vout,
   valueSats,
-  feeSats = AMOUNTS.finalSweepFee,
+  feeSats,
   destinationAddress,
 }: {
   state: VaultState;
@@ -934,9 +938,10 @@ export function buildFinalSweepPsbt({
   feeSats?: number;
   destinationAddress?: string;
 }) {
+  const configuredFeeSats = feeSats ?? state.economics.finalSweepFeeSats;
   const participant = participantById(state, participantId);
   const payoutAddress = destinationAddress || participant.payoutAddress;
-  const sweepValue = valueSats - feeSats;
+  const sweepValue = valueSats - configuredFeeSats;
   if (sweepValue <= 0) {
     throw new Error(`final sweep value ${sweepValue} sats is not positive after fee`);
   }
@@ -979,7 +984,7 @@ export function buildFinalSweepPsbt({
           valueSats: sweepValue,
         },
       ],
-      feeSats,
+      feeSats: configuredFeeSats,
     },
   };
 }
@@ -1048,8 +1053,8 @@ export function signRecoveryPsbt({
   if (!psbtLeaf) throw new Error(`PSBT does not contain recovery leaf for ${round}`);
   const rawTx = unsignedTx(psbt);
   const inputSequence = rawTx.ins[0]!.sequence;
-  if (inputSequence < RECOVERY_DELAY_BLOCKS) {
-    throw new Error(`recovery PSBT sequence is below ${RECOVERY_DELAY_BLOCKS}`);
+  if (inputSequence < state.economics.recoveryDelayBlocks) {
+    throw new Error(`recovery PSBT sequence is below ${state.economics.recoveryDelayBlocks}`);
   }
   if (inputSequence >= 0x80000000) {
     throw new Error('recovery PSBT sequence disables BIP68 CSV');
@@ -1160,6 +1165,35 @@ export function inspectPsbt(psbtBase64: string): PsbtInspection {
       valueSats: Number(output.value),
       scriptPubKeyHex: Buffer.from(output.script).toString('hex'),
       address: bitcoin.address.fromOutputScript(output.script, BITCOIN_NETWORK),
+    })),
+  };
+}
+
+/** Convert a parsed PSBT into the exact local Sigbash policy view. */
+export function psbtInspectionToPolicyTx({
+  state,
+  inspection,
+}: {
+  state: VaultState;
+  inspection: PsbtInspection;
+}): PolicyTx {
+  let sigbashLeafKey: string | undefined;
+  for (const item of inspection.inputs[0]?.tapLeafScript ?? []) {
+    for (const vault of state.vaults.values()) {
+      const leaf = vault.tapscriptLeaves.find((candidate) => candidate.scriptHex === item.scriptHex);
+      if (leaf?.type === 'solo-withdrawal') {
+        sigbashLeafKey = leaf.sigbashXonlyPubkey;
+        break;
+      }
+    }
+    if (sigbashLeafKey) break;
+  }
+  return {
+    sigbashLeafKey,
+    inputCount: inspection.inputCount,
+    outputs: inspection.outputs.map((output) => ({
+      address: output.address,
+      value: output.valueSats,
     })),
   };
 }

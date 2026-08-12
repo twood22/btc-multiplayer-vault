@@ -1,4 +1,4 @@
-import { AMOUNTS, NETWORK, PARTICIPANTS, POLICY_FLOORS, RECOVERY_DELAY_BLOCKS, SOLO_FEE_BUDGET_SATS } from './config.js';
+import { NETWORK, PARTICIPANTS, vaultPolicyFloors } from './config.js';
 import { policyId, roundId, verifyNoSigbashInKeyPath } from './vault.js';
 import type { SoloPolicy, VaultState } from './types.js';
 
@@ -23,10 +23,13 @@ export function auditSpecState(state: VaultState): AuditReport {
         PARTICIPANTS.map((participant) => participant.id),
       ),
     ),
-    check('deposit amount is 1 BTC', AMOUNTS.deposit === 100_000_000),
-    check('first withdrawal amount is 0.95 BTC', AMOUNTS.firstWithdrawal === 95_000_000),
-    check('second withdrawal amount is 1.025 BTC', AMOUNTS.secondWithdrawal === 102_500_000),
-    check('configured payout schedule sums to 3 BTC', payoutScheduleTotal() === 300_000_000),
+    check('participant deposit is above the tiny-mainnet floor', state.economics.depositSatsPerParticipant >= 10_000),
+    check('first withdrawal is the committed haircut amount', state.economics.firstWithdrawalSats < state.economics.depositSatsPerParticipant),
+    check('second withdrawal is the committed bonus amount', state.economics.secondWithdrawalSats > state.economics.depositSatsPerParticipant),
+    check(
+      'configured payout schedule conserves exactly three deposits',
+      payoutScheduleTotal(state) === state.economics.depositSatsPerParticipant * 3,
+    ),
     check('precomputed vault tree has 1 round-one and 3 round-two vaults', state.vaults.size === 4),
     check('all payout and vault addresses are mainnet taproot addresses', allAddressesAreMainnetTaproot(state)),
     check('all solo policies and destination conditions declare mainnet', allPoliciesAreMainnet(state)),
@@ -51,7 +54,7 @@ export function auditSpecState(state: VaultState): AuditReport {
     check('all solo policies pin the round leaf key via REQKEY', allBranchesRequireLeafKey(state)),
     check('round-one policies pin leftover to round-two vaults', roundOneLeftoversAreRevaulted(state)),
     check('round-two policies pin leftover to final participant payout address', roundTwoLeftoversGoToLastParticipant(state)),
-    check('leftover floors bound the fee burn to the configured budget', leftoverFloorsBoundFeeBurn()),
+    check('leftover floors bound the fee burn to the configured budget', leftoverFloorsBoundFeeBurn(state)),
   ];
   return {
     passed: checks.every((item) => item.ok),
@@ -63,8 +66,8 @@ function check(name: string, ok: boolean, details?: unknown): AuditCheck {
   return { name, ok, ...(details === undefined ? {} : { details }) };
 }
 
-function payoutScheduleTotal(): number {
-  return AMOUNTS.firstWithdrawal + AMOUNTS.secondWithdrawal + AMOUNTS.secondWithdrawal;
+function payoutScheduleTotal(state: VaultState): number {
+  return state.economics.firstWithdrawalSats + state.economics.secondWithdrawalSats * 2;
 }
 
 function allAddressesAreMainnetTaproot(state: VaultState): boolean {
@@ -109,7 +112,8 @@ function allVaultsHaveRecoveryLeaf(state: VaultState): boolean {
   return [...state.vaults.values()].every((vault) =>
     vault.tapscriptLeaves.some(
       (leaf) =>
-        leaf.type === 'timelocked-recovery' && leaf.relativeBlocks === RECOVERY_DELAY_BLOCKS,
+        leaf.type === 'timelocked-recovery' &&
+        leaf.relativeBlocks === state.economics.recoveryDelayBlocks,
     ),
   );
 }
@@ -280,13 +284,15 @@ function pinsOutputOneAddress(policy: SoloPolicy | undefined, address: string): 
   );
 }
 
-function leftoverFloorsBoundFeeBurn(): boolean {
-  const potAfterFirst = 300_000_000 - AMOUNTS.firstWithdrawal;
-  const worstRoundTwoPot = POLICY_FLOORS.roundOneLeftover;
+function leftoverFloorsBoundFeeBurn(state: VaultState): boolean {
+  const policyFloors = vaultPolicyFloors(state.economics);
+  const potAfterFirst = state.economics.depositSatsPerParticipant * 3 -
+    state.economics.firstWithdrawalSats;
+  const worstRoundTwoPot = policyFloors.roundOneLeftover;
   return (
-    potAfterFirst - POLICY_FLOORS.roundOneLeftover === SOLO_FEE_BUDGET_SATS &&
-    worstRoundTwoPot - AMOUNTS.secondWithdrawal - POLICY_FLOORS.roundTwoLeftover ===
-      SOLO_FEE_BUDGET_SATS
+    potAfterFirst - policyFloors.roundOneLeftover === state.economics.soloFeeBudgetSats &&
+    worstRoundTwoPot - state.economics.secondWithdrawalSats - policyFloors.roundTwoLeftover ===
+      state.economics.soloFeeBudgetSats
   );
 }
 

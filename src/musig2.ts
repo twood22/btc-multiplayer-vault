@@ -1,4 +1,5 @@
-import { randomBytes } from 'node:crypto';
+import { Buffer } from 'buffer';
+import { randomBytes } from '@noble/hashes/utils.js';
 import * as ecc from 'tiny-secp256k1';
 import { SECP_ORDER as N, keyAgg, scalarToBuffer, taggedHash } from './crypto.js';
 import type { Hex } from './types.js';
@@ -158,7 +159,7 @@ export function nonceGen({
   rand?: Buffer | undefined;
 }): GeneratedNonce {
   if (publicKey.length !== 33) throw new Error('publicKey must be 33 bytes');
-  const randPrime = rand ?? randomBytes(32);
+  const randPrime = rand ?? Buffer.from(randomBytes(32));
   if (randPrime.length !== 32) throw new Error('rand must be 32 bytes');
   let seed: Buffer;
   if (secretKey) {

@@ -1,4 +1,9 @@
-import { createECDH, createHash, createHmac } from 'node:crypto';
+import { Buffer } from 'buffer';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
+import { hmac } from '@noble/hashes/hmac.js';
+import { ripemd160 } from '@noble/hashes/legacy.js';
+import { sha256, sha512 } from '@noble/hashes/sha2.js';
+import { utf8ToBytes } from '@noble/hashes/utils.js';
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { BITCOIN_NETWORK } from './network.js';
@@ -11,12 +16,12 @@ export const SECP_ORDER = BigInt(
 );
 
 export function sha256Hex(value: string | Buffer): Hex {
-  return createHash('sha256').update(value).digest('hex');
+  return Buffer.from(sha256(bytes(value))).toString('hex');
 }
 
 export function taggedHash(tag: string, value: Buffer): Buffer {
-  const tagHash = createHash('sha256').update(tag).digest();
-  return createHash('sha256').update(tagHash).update(tagHash).update(value).digest();
+  const tagHash = Buffer.from(sha256(utf8ToBytes(tag)));
+  return Buffer.from(sha256(Buffer.concat([tagHash, tagHash, value])));
 }
 
 export function taggedHashHex(tag: string, value: Buffer): Hex {
@@ -24,22 +29,17 @@ export function taggedHashHex(tag: string, value: Buffer): Hex {
 }
 
 export function hmacHex(key: string | Buffer, value: string | Buffer): Hex {
-  return createHmac('sha256', key).update(value).digest('hex');
+  return Buffer.from(hmac(sha256, bytes(key), bytes(value))).toString('hex');
 }
 
 export function deterministicKeypair(seed: string, label: string): Keypair {
   let counter = 0;
   while (true) {
-    const priv = createHash('sha256')
-      .update(`${seed}:${label}:${counter}`)
-      .digest();
+    const priv = Buffer.from(sha256(utf8ToBytes(`${seed}:${label}:${counter}`)));
     const scalar = BigInt(`0x${priv.toString('hex')}`);
     if (scalar > 0n && scalar < SECP_ORDER) {
       try {
-        const ecdh = createECDH('secp256k1');
-        ecdh.setPrivateKey(priv);
-        const compressed = ecdh.getPublicKey(null, 'compressed');
-        if (!compressed) throw new Error('no public key');
+        const compressed = Buffer.from(secp256k1.getPublicKey(priv, true));
         return {
           privateKeyHex: priv.toString('hex'),
           publicKeyHex: compressed.toString('hex'),
@@ -173,19 +173,13 @@ function base58CheckDecode(value: string): Buffer {
   payload = Buffer.concat([Buffer.alloc(leadingZeros), payload]);
   const checksum = payload.subarray(-4);
   const data = payload.subarray(0, -4);
-  const expected = createHash('sha256')
-    .update(createHash('sha256').update(data).digest())
-    .digest()
-    .subarray(0, 4);
+  const expected = Buffer.from(sha256(sha256(data))).subarray(0, 4);
   if (!checksum.equals(expected)) throw new Error('base58 checksum mismatch');
   return data;
 }
 
 export function base58CheckEncode(data: Buffer): string {
-  const checksum = createHash('sha256')
-    .update(createHash('sha256').update(data).digest())
-    .digest()
-    .subarray(0, 4);
+  const checksum = Buffer.from(sha256(sha256(data))).subarray(0, 4);
   const payload = Buffer.concat([data, checksum]);
   let acc = BigInt(`0x${payload.toString('hex')}`);
   let encoded = '';
@@ -228,8 +222,8 @@ export function xpubMasterFingerprint(xpubBase58: string): Buffer {
     throw new Error('xpub has no key origin prefix and is not a master key; cannot derive fingerprint');
   }
   const pubkey = data.subarray(45, 78);
-  const sha = createHash('sha256').update(pubkey).digest();
-  return createHash('ripemd160').update(sha).digest().subarray(0, 4);
+  const hashed = sha256(pubkey);
+  return Buffer.from(ripemd160(hashed)).subarray(0, 4);
 }
 
 // Non-hardened BIP32 public derivation, used to derive the Sigbash tapscript
@@ -249,9 +243,11 @@ export function deriveXpubChildPubkey(
     if (index >= 0x80000000) throw new Error('cannot derive hardened child from xpub');
     const indexBuffer = Buffer.alloc(4);
     indexBuffer.writeUInt32BE(index, 0);
-    const i = createHmac('sha512', chainCode)
-      .update(Buffer.concat([publicKey, indexBuffer]))
-      .digest();
+    const i = Buffer.from(hmac(
+      sha512,
+      chainCode,
+      Buffer.concat([publicKey, indexBuffer]),
+    ));
     const tweak = i.subarray(0, 32);
     const child = ecc.pointAddScalar(publicKey, tweak, true);
     if (!child) throw new Error('invalid BIP32 child derivation');
@@ -262,6 +258,10 @@ export function deriveXpubChildPubkey(
     publicKeyHex: publicKey.toString('hex'),
     xonlyPubKeyHex: publicKey.subarray(1).toString('hex'),
   };
+}
+
+function bytes(value: string | Buffer): Uint8Array {
+  return typeof value === 'string' ? utf8ToBytes(value) : value;
 }
 
 export interface VaultTaproot {

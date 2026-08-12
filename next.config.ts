@@ -15,6 +15,18 @@ const nextConfig: NextConfig = {
       '.cjs': ['.cts', '.cjs'],
     };
     if (!isServer) {
+      config.experiments = {
+        ...(config.experiments || {}),
+        asyncWebAssembly: true,
+      };
+      config.output.environment = {
+        ...(config.output.environment || {}),
+        asyncFunction: true,
+      };
+      config.module.rules.push({
+        test: /secp256k1\.wasm$/u,
+        type: 'webassembly/async',
+      });
       const unavailableNodeModule = path.resolve(
         process.cwd(),
         'web/lib/client/sigbash-node-crypto-shim.ts',

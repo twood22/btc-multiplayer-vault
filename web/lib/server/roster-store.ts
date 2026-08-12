@@ -22,6 +22,11 @@ export interface RosterCeremonyStatus {
   participantConfirmed: boolean;
 }
 
+export interface ConfirmedVaultArtifact {
+  digest: string;
+  artifact: PublishedRosterArtifact;
+}
+
 export interface RosterConfirmationChallenge {
   id: string;
   challenge: string;
@@ -69,6 +74,20 @@ export async function getRosterCeremonyStatus(userId: string): Promise<RosterCer
     review: rosterReview(built.artifact, confirmedIds),
     participantConfirmed: confirmedIds.includes(membership.participant_id),
   };
+}
+
+/** Full public artifact for local signing, available only after unanimity. */
+export async function getConfirmedVaultArtifact(userId: string): Promise<ConfirmedVaultArtifact> {
+  const membership = await membershipForUser(userId);
+  const rows = await db()<StoredRosterRow[]>`
+    SELECT vault_id, artifact_json, digest, funding_address, status
+    FROM vault_rosters
+    WHERE vault_id = ${membership.vault_id}::uuid AND status = 'confirmed'
+  `;
+  if (rows.length !== 1) throw new Error('the immutable vault roster is not unanimously confirmed');
+  const artifact = await readStoredRoster(membership.vault_id);
+  if (!artifact) throw new Error('confirmed vault artifact is missing');
+  return { digest: publishedRosterDigest(artifact), artifact };
 }
 
 /**
@@ -419,7 +438,8 @@ async function readStoredRoster(vaultId: string): Promise<PublishedRosterArtifac
   const row = rows[0];
   if (!row) return null;
   const raw = row.artifact_json as Partial<PublishedRosterArtifact>;
-  const rebuilt = createPublishedRosterArtifact(row.vault_id, raw.participants);
+  if (!raw.economics) throw new Error('stored roster artifact is missing committed economics');
+  const rebuilt = createPublishedRosterArtifact(row.vault_id, raw.participants, raw.economics);
   const digest = publishedRosterDigest(rebuilt);
   if (digest !== row.digest.toString('hex') || rebuilt.funding.address !== row.funding_address) {
     throw new Error('stored roster artifact does not reproduce its committed digest and funding address');

@@ -1,22 +1,16 @@
 import { sha256Hex } from './crypto.js';
-import { AMOUNTS, NETWORK, PARTICIPANTS, RECOVERY_DELAY_BLOCKS, SOLO_FEE_BUDGET_SATS } from './config.js';
+import { NETWORK, PARTICIPANTS, VAULT_ECONOMICS, validateVaultEconomics } from './config.js';
 import { auditSpecState } from './audit.js';
 import { validateRoster } from './custody.js';
 import { createRosterState, roundId, type RosterEntry } from './vault.js';
-import type { PolicyCondition, TapLeaf, VaultKeyPath } from './types.js';
+import type { PolicyCondition, TapLeaf, VaultEconomics, VaultKeyPath } from './types.js';
 
 export interface PublishedRosterArtifact {
   version: 1;
   network: 'mainnet';
   vaultId: string;
   participants: RosterEntry[];
-  economics: {
-    depositSatsPerParticipant: number;
-    firstWithdrawalSats: number;
-    secondWithdrawalSats: number;
-    soloFeeBudgetSats: number;
-    recoveryDelayBlocks: number;
-  };
+  economics: VaultEconomics;
   vaults: Array<{
     round: string;
     participantIds: string[];
@@ -83,7 +77,9 @@ export interface RosterReview {
 export function createPublishedRosterArtifact(
   vaultId: string,
   candidate: unknown,
+  economics: VaultEconomics = VAULT_ECONOMICS,
 ): PublishedRosterArtifact {
+  const validatedEconomics = validateVaultEconomics(economics);
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(vaultId)) {
     throw new Error('vaultId must be a UUID string');
   }
@@ -95,7 +91,7 @@ export function createPublishedRosterArtifact(
       throw new Error(`publishable roster is missing live Sigbash registrations for ${entry.id}`);
     }
   }
-  const state = createRosterState(roster);
+  const state = createRosterState(roster, undefined, validatedEconomics);
   const audit = auditSpecState(state);
   if (!audit.passed) {
     throw new Error(`publishable roster failed vault audit: ${audit.checks.filter((item) => !item.ok).map((item) => item.name).join(', ')}`);
@@ -141,20 +137,14 @@ export function createPublishedRosterArtifact(
     network: NETWORK,
     vaultId: vaultId.toLowerCase(),
     participants: roster,
-    economics: {
-      depositSatsPerParticipant: AMOUNTS.deposit,
-      firstWithdrawalSats: AMOUNTS.firstWithdrawal,
-      secondWithdrawalSats: AMOUNTS.secondWithdrawal,
-      soloFeeBudgetSats: SOLO_FEE_BUDGET_SATS,
-      recoveryDelayBlocks: RECOVERY_DELAY_BLOCKS,
-    },
+    economics: state.economics,
     vaults,
     policies,
     funding: {
       round: fundingRound,
       address: fundingVault.address,
       outputScriptHex: fundingVault.outputScriptHex,
-      valueSats: AMOUNTS.deposit * PARTICIPANTS.length,
+      valueSats: state.economics.depositSatsPerParticipant * PARTICIPANTS.length,
     },
   };
 }
