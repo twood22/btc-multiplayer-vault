@@ -9,6 +9,7 @@
     "web:start": "next start",
     "web:typecheck": "tsc --noEmit -p tsconfig.web.json",
     "web:test": "tsx web/tests/passkey-acceptance.ts && tsx web/tests/sigbash-custody-acceptance.ts && tsx web/tests/roster-acceptance.ts && tsx web/tests/vault-runtime-acceptance.ts && tsx web/tests/broadcast-lifecycle-acceptance.ts",
+    "web:test:db": "tsx web/tests/broadcast-db-acceptance.ts",
     "web:migrate": "tsx web/scripts/migrate.ts",
     "web:create-invite": "tsx web/scripts/create-invite.ts",
     "web:watch-chain": "tsx web/scripts/watch-chain.ts",

@@ -35,6 +35,7 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Immutable three-passkey roster gate | ✅ implemented; PostgreSQL 16 migrations verified, real authenticator run still required |
 | User-facing solo/cooperative/recovery/final signing | ✅ implemented and server re-authorized |
 | Explicit passkey-approved broadcast + confirmation watcher | ✅ implemented; real backend execution still required |
+| PostgreSQL broadcast approval replay/concurrency checks | ✅ verified on disposable PostgreSQL 16 |
 | Runs without local Bitcoin Core | ✅ `BITCOIN_BACKEND=esplora` |
 
 ## Requirements

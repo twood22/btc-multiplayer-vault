@@ -115,6 +115,7 @@ secrets; send each one only to its intended friend and let it expire quickly.
 ```bash
 npm run web:typecheck
 npm run web:test
+npm run web:test:db # requires a disposable or dedicated empty PostgreSQL database
 npm run web:build
 npm test
 npm audit
@@ -127,10 +128,14 @@ hashes, corrupt-revision rollback, recovery-kit/key binding, PRF-output
 stripping, exact public key and BYO Sigbash-share compatibility,
 offline-roster rejection, xpub/leaf binding, deterministic roster digests,
 proposal replay resistance, exact confirmed-state advancement, fresh recovery
-observations, and no funding address or output-script disclosure before
-unanimity. The complete migrations have also been applied and re-applied
-idempotently on an isolated PostgreSQL 16 instance; that is not a substitute
-for a production database and real-authenticator run.
+observations, no funding address or output-script disclosure before unanimity,
+and database-enforced one-time broadcast approvals. The complete migrations
+through 007 have also been applied and re-applied idempotently on an isolated
+PostgreSQL 16 instance. The database acceptance test proves one-winner
+concurrent approval creation and submission claims, required passkey-consumed
+state, auditable retry after failure, and proposal-digest foreign-key binding;
+that is not a substitute for the selected production database and a complete
+real-authenticator/backend run.
 
 ## Hard gates before deployment or funding
 
@@ -154,8 +159,9 @@ for a production database and real-authenticator run.
    with real authenticators. The migrations pass PostgreSQL 16 locally, but no
    real Sigbash registrations are present and the database-backed ceremony has
    not yet been run end to end.
-6. Add database integration tests with seeded protocol state,
-   automated WebAuthn browser tests with virtual authenticators and PRF support,
+6. Expand the seeded database integration test from broadcast approval to the
+   full roster/signing lifecycle; add automated WebAuthn browser tests with
+   virtual authenticators and PRF support,
    rate limiting, audit events that never contain secrets, backup/restore
    drills, and operational monitoring.
 7. Exercise the implemented passkey-approved broadcast and private chain
