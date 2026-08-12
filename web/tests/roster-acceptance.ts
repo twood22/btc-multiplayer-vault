@@ -16,6 +16,7 @@ import {
 import { planSigbashProvisioning } from '../../src/sigbash-provisioning.js';
 import { asSats, type VaultEconomics } from '../../src/types.js';
 import {
+  assertFreshMatureRecoveryObservation,
   assertProposalStatusTransition,
   buildVaultProposal,
   deriveNextVaultCoin,
@@ -352,6 +353,34 @@ check('proposal lifecycle rejects replay from terminal and backwards states', ()
   assert.throws(() => assertProposalStatusTransition('confirmed', 'broadcast'), /invalid proposal/);
   assert.throws(() => assertProposalStatusTransition('rejected', 'collecting'), /invalid proposal/);
   assert.throws(() => assertProposalStatusTransition('broadcast', 'finalized'), /invalid proposal/);
+});
+
+check('recovery readiness requires both CSV maturity and a fresh chain observation', () => {
+  const nowMs = 2_000_000;
+  assert.doesNotThrow(() => assertFreshMatureRecoveryObservation({
+    confirmations: 13,
+    recoveryDelayBlocks: 12,
+    observedAtMs: nowMs - 1_000,
+    nowMs,
+  }));
+  assert.throws(() => assertFreshMatureRecoveryObservation({
+    confirmations: 12,
+    recoveryDelayBlocks: 12,
+    observedAtMs: nowMs - 1_000,
+    nowMs,
+  }), /not mature/);
+  assert.throws(() => assertFreshMatureRecoveryObservation({
+    confirmations: 13,
+    recoveryDelayBlocks: 12,
+    observedAtMs: nowMs - 2 * 60 * 1000,
+    nowMs,
+  }), /stale/);
+  assert.throws(() => assertFreshMatureRecoveryObservation({
+    confirmations: 13,
+    recoveryDelayBlocks: 12,
+    observedAtMs: nowMs + 1,
+    nowMs,
+  }), /timing/);
 });
 
 console.log(JSON.stringify({ passed: checks.every((item) => item.ok), checks }, null, 2));

@@ -22,6 +22,7 @@ import { sha256Hex } from '../../../src/crypto';
 import {
   buildVaultProposal,
   deriveNextVaultCoin,
+  assertFreshMatureRecoveryObservation,
   validateVaultCoin,
   vaultCoinSnapshotDigest,
   type BuiltVaultProposal,
@@ -275,14 +276,13 @@ export async function createStoredVaultProposal(
     if (observation.length !== 1) {
       throw new Error('verify the exact current coin against an independent chain source before proposing a spend');
     }
-    if (
-      input.kind === 'recovery' &&
-      (
-        observation[0]!.confirmations <= confirmed.artifact.economics.recoveryDelayBlocks ||
-        observation[0]!.observed_at.getTime() < Date.now() - 2 * 60 * 1000
-      )
-    ) {
-      throw new Error('timelocked recovery needs a fresh, mature independent chain observation');
+    if (input.kind === 'recovery') {
+      assertFreshMatureRecoveryObservation({
+        confirmations: observation[0]!.confirmations,
+        recoveryDelayBlocks: confirmed.artifact.economics.recoveryDelayBlocks,
+        observedAtMs: observation[0]!.observed_at.getTime(),
+        nowMs: Date.now(),
+      });
     }
     await sql`
       UPDATE vault_transaction_proposals
@@ -864,18 +864,22 @@ export async function recordRecoveryContribution(input: {
     if (!rebuilt.requiredSignerIds.includes(membership.participant_id)) {
       throw new Error('vanished or unrelated participant cannot contribute a recovery share');
     }
-    const observation = await sql<Array<{ confirmations: number }>>`
-      SELECT confirmations FROM vault_coin_observations
+    const observation = await sql<Array<{ confirmations: number; observed_at: Date }>>`
+      SELECT confirmations, observed_at FROM vault_coin_observations
       WHERE coin_id = ${coin.id}::uuid AND user_id = ${input.userId}::uuid
         AND participant_id = ${membership.participant_id}
         AND snapshot_digest = ${Buffer.from(vaultCoinSnapshotDigest(coin), 'hex')}
         AND observed_unspent = true
-        AND observed_at > now() - interval '2 minutes'
     `;
-    if (
-      observation.length !== 1 ||
-      observation[0]!.confirmations <= confirmed.artifact.economics.recoveryDelayBlocks
-    ) throw new Error('recovery is not mature in this participant’s independently observed chain view');
+    if (observation.length !== 1) {
+      throw new Error('recovery signer has no independent observation of the exact current coin');
+    }
+    assertFreshMatureRecoveryObservation({
+      confirmations: observation[0]!.confirmations,
+      recoveryDelayBlocks: confirmed.artifact.economics.recoveryDelayBlocks,
+      observedAtMs: observation[0]!.observed_at.getTime(),
+      nowMs: Date.now(),
+    });
     if (input.share.participantId !== membership.participant_id) {
       throw new Error('recovery share claims a different participant');
     }

@@ -327,6 +327,30 @@ export function assertProposalStatusTransition(
   }
 }
 
+export function assertFreshMatureRecoveryObservation(input: {
+  confirmations: number;
+  recoveryDelayBlocks: number;
+  observedAtMs: number;
+  nowMs: number;
+  maxAgeMs?: number;
+}): void {
+  const maxAgeMs = input.maxAgeMs ?? 2 * 60 * 1000;
+  if (!Number.isSafeInteger(input.confirmations) || input.confirmations < 0 ||
+      !Number.isSafeInteger(input.recoveryDelayBlocks) || input.recoveryDelayBlocks < 1) {
+    throw new Error('recovery chain observation has invalid confirmation data');
+  }
+  if (!Number.isFinite(input.observedAtMs) || !Number.isFinite(input.nowMs) ||
+      !Number.isSafeInteger(maxAgeMs) || maxAgeMs < 1 || input.observedAtMs > input.nowMs) {
+    throw new Error('recovery chain observation has invalid timing data');
+  }
+  if (input.confirmations <= input.recoveryDelayBlocks) {
+    throw new Error('timelocked recovery is not mature in the independent chain view');
+  }
+  if (input.observedAtMs <= input.nowMs - maxAgeMs) {
+    throw new Error('timelocked recovery chain observation is stale');
+  }
+}
+
 function assertVaultRound(validated: ValidatedVaultCoin): void {
   if (validated.coin.kind !== 'vault' || !validated.coin.roundId) {
     throw new Error('proposal requires a current vault-round coin');
