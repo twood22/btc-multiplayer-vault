@@ -1,7 +1,9 @@
 import { getRawTransaction, getTxOut } from '../../src/bitcoin-rpc';
+import { assertReviewedNodeRuntime } from '../../src/runtime-version';
 import { chainConfirmationsRequired } from '../lib/server/config';
 import { recordConfirmedFundingCoin } from '../lib/server/vault-runtime-store';
 
+assertReviewedNodeRuntime();
 const args = parseArgs(process.argv.slice(2));
 const vaultId = required(args, 'vault-id');
 const txid = required(args, 'txid').toLowerCase();

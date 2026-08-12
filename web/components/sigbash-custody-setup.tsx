@@ -116,7 +116,7 @@ export function SigbashCustodySetup({
         envelope,
       });
       setApikeyHash(credentials.apikeyHash);
-      setStatus('Protected Sigbash identity created; mainnet access must be enabled before keys can be registered');
+      setStatus('Protected Sigbash identity created; Sigbash must enable this organization for mainnet before keys can be registered');
       window.setTimeout(() => window.location.reload(), 900);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Sigbash custody setup failed');
@@ -309,6 +309,7 @@ export function SigbashCustodySetup({
         <p>
           Your browser creates a separate Sigbash organization identity. The service stores only an
           encrypted bundle recoverable by either of your passkeys—not the API key, user secret, or recovery kits.
+          Sigbash mainnet entitlement is external: the app creates your credentials, but cannot grant mainnet access.
         </p>
       </div>
       <div className="sigbash-controls">
@@ -335,7 +336,10 @@ export function SigbashCustodySetup({
             <button disabled={working || runtimeReady} onClick={verifyRuntime} type="button">
               {runtimeReady ? 'Signing runtime ready' : 'Verify signing runtime'}
             </button>
-            <p>Sigbash must enable mainnet for this identifier before the app can create real round keys.</p>
+            <p>
+              Send this non-secret identifier to Sigbash for mainnet activation. Each of the three
+              friends has a different identifier; all three must be enabled before the nine keys can exist.
+            </p>
           </div>
         )}
       </div>

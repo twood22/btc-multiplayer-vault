@@ -12,8 +12,10 @@ Use the reviewed `Dockerfile` as one immutable image with three execution
 roles:
 
 1. **Migration job** — run once per release: `npm run web:migrate`.
-2. **Web service** — run `node server.js` as the image's unprivileged `node`
-   user. Start with one replica for the three-person beta.
+2. **Web service** — use the image's default
+   `node scripts/start-production.mjs` command as its unprivileged `node` user.
+   The launcher rejects any runtime other than `.node-version` before Next.js
+   starts. Start with one replica for the three-person beta.
 3. **Private chain watcher** — run `npm run web:watch-chain` on a private
    scheduler. Never expose this command as an HTTP endpoint.
 
@@ -55,6 +57,14 @@ and stores only passkey-derived ciphertext in PostgreSQL. The legacy unsuffixed
 Sigbash variables remain for command-line audit tooling and must not be used as
 shared production custody.
 
+Credential generation and mainnet entitlement are separate. The application
+can generate and protect the credentials, but it cannot grant Sigbash mainnet
+access. Each participant deliberately has a separate Sigbash organization, so
+the three displayed non-secret `apikeyHash` identifiers must all be enabled by
+Sigbash before the browsers can create the nine product keys. Do not collapse
+the friends into one administrator-controlled organization merely to reduce
+that activation step.
+
 For any non-local database, the process refuses to start, migrate, or create
 invites unless `sslmode=verify-full` is present. `sslmode=require` is rejected
 because it encrypts traffic without authenticating the database certificate and
@@ -63,12 +73,14 @@ rejected by the release report.
 
 ## Release sequence
 
-1. Before deployment, provision a reviewed live Sigbash key and run the
+1. Before deployment, obtain SDK mainnet enablement for a reviewed proof
+   organization, provision a live Sigbash key, and run the
    explicit one-nullifier proof. It first requires the live service to reject
    every hostile PSBT, then requires a real signature and independently checks
    the exact consensus transaction:
 
    ```bash
+   npm run sigbash-org-id -- --participant alice
    SIGBASH_MODE=live npm run live-predeployment-proof -- \
      --round alice,bob,carol --leaver alice
    ```
@@ -91,6 +103,8 @@ rejected by the release report.
    a green funding report.
 7. Complete the physical two-passkey, three-person roster, nine-key Sigbash,
    and all nine live mainnet readiness ceremonies on the exact HTTPS origin.
+   This includes sending each participant's non-secret organization hash to
+   Sigbash and confirming all three organizations are mainnet-enabled.
 8. Exercise backup/restore and mainnet-backend rejection, retry, mempool,
    confirmation, and reorganization behavior without a funded vault.
 9. Run `npm run web:release-status`. Only after its automated funding checks and

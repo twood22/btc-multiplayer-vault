@@ -239,6 +239,17 @@ input scriptPubKey, so you only pass `--participant`.
    (`SIGBASH_API_KEY_ALICE=...` etc.); the unsuffixed triplet is the fallback
    for single-operator runs — in that case one machine holds every browser
    share, which is fine for a demo and unacceptable for real funds.
+   Locally generated credentials are signet-only until Sigbash enables their
+   organization hash for mainnet. The user-facing passkey flow generates these
+   triplets automatically, but it cannot grant that external entitlement; all
+   three independent participant organization hashes must be enabled.
+
+   For command-line credentials, print only the non-secret activation value
+   without exposing the triplet:
+
+   ```bash
+   npm run sigbash-org-id -- --participant alice
+   ```
 
 3. **Create the nine keys:**
 

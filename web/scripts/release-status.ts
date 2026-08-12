@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { loadEnvFile } from 'node:process';
 import postgres from 'postgres';
 import { getBlockchainInfo } from '../../src/bitcoin-rpc';
+import { reviewedNodeRuntimeCheck } from '../../src/runtime-version';
 import { databaseEndpointCheck } from '../lib/database-config';
 import { EXPECTED_MIGRATION_VERSIONS } from '../lib/migrations';
 
@@ -12,17 +13,18 @@ interface Check { name: string; ok: boolean; detail?: string }
 const checks: Check[] = [];
 const manualGates = [
   'The predeployment live-predeployment-proof output must show a real consensus-authorized Sigbash mainnet signature.',
+  'Sigbash must explicitly enable mainnet for all three independent participant organization hashes.',
   'Each friend must complete setup and recovery with two real, distinct PRF-capable passkeys.',
   'Each friend must independently review the unanimous roster and tiny-mainnet economics.',
   'The selected production database backup and restore procedure must be exercised.',
   'Funding remains a separate explicit decision after this report passes.',
 ];
 
-const reviewedNodeVersion = '22.23.2';
+const runtime = reviewedNodeRuntimeCheck();
 checks.push(check(
   'reviewed Node runtime is active',
-  process.versions.node === reviewedNodeVersion,
-  `Node ${process.versions.node}; expected ${reviewedNodeVersion}`,
+  runtime.ok,
+  `Node ${runtime.actual}; expected ${runtime.expected}`,
 ));
 
 const rpId = process.env.WEBAUTHN_RP_ID;

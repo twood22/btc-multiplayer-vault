@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { assertReviewedNodeRuntime } from './runtime-version.js';
 import {
   AMOUNTS,
   DEFAULT_DEMO_SEED,
@@ -113,6 +114,7 @@ import {
 import type { RpcTransaction, RpcTxInput, RpcTxOut, RpcTxOutput } from './bitcoin-rpc.js';
 import type { SigbashLiveClient, SigbashSignResult, SigbashVerifyResult } from './sigbash.js';
 
+assertReviewedNodeRuntime();
 loadDotenv();
 
 const command = process.argv[2] || 'acceptance';
@@ -177,6 +179,7 @@ const commands: Record<string, () => Promise<void>> = {
   audit,
   'sdk-policy-check': sdkPolicyCheck,
   'sigbash-sdk-contract': sigbashSdkContract,
+  'sigbash-org-id': sigbashOrgId,
   'sigbash-live-setup': sigbashLiveSetup,
   acceptance,
 };
@@ -3471,6 +3474,26 @@ async function sigbashLiveSetup() {
       tapscriptLeaves: vault.tapscriptLeaves,
     })),
     policies: [...finalState.policies.values()],
+  });
+}
+
+/** Print only the non-secret organization identifier needed for mainnet enablement. */
+async function sigbashOrgId() {
+  const args = parseArgs(process.argv.slice(3));
+  const participantId = stringArg(args, 'participant');
+  if (participantId !== undefined) {
+    assert(PARTICIPANTS.some((participant) => participant.id === participantId),
+      '--participant must be alice, bob, or carol');
+  }
+  const credentials = resolveSigbashCredentials(process.env, participantId);
+  const { getAuthHash } = await import('@sigbash/sdk');
+  const { apikeyHash } = await getAuthHash(credentials.apiKey, credentials.userKey);
+  printResult('Sigbash mainnet activation identifier', {
+    participantId: participantId ?? null,
+    credentialSource: credentials.source,
+    apikeyHash,
+    secretValuesPrinted: false,
+    note: 'Share only apikeyHash with Sigbash; never share the raw credential triplet.',
   });
 }
 

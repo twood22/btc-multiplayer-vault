@@ -100,8 +100,9 @@ core, not a second wallet model.
 
 ## Local engineering run
 
-Requires Node 22 and Postgres. These commands create infrastructure and test
-data only; they do not contact Sigbash or Bitcoin and do not fund anything.
+Requires the exact Node version in `.node-version` and Postgres. These commands
+create infrastructure and test data only; they do not contact Sigbash or
+Bitcoin and do not fund anything.
 
 ```bash
 cp .env.example .env.local
@@ -184,7 +185,11 @@ the following gates remain mandatory before funding:
    convenient but does not satisfy the distinct-credential gate.
 2. Run the implemented browser Sigbash key-creation/resume flow against three
    mainnet-enabled participant organizations, replacing offline leaf fixtures
-   with nine service-created public registrations.
+   with nine service-created public registrations. The app locally creates and
+   passkey-encrypts each participant's credential triplet, but Sigbash—not this
+   service—must enable mainnet for each participant's displayed non-secret
+   `apikeyHash`. There are three independent hashes by design; this avoids one
+   friend becoming the Sigbash administrator for everybody else.
 3. Execute all nine implemented browser readiness proofs against mainnet-enabled
    Sigbash organizations. A successful allowed signature is independently
    verifiable by the server; hostile rejection remains browser-observed because

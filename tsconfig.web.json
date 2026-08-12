@@ -36,6 +36,7 @@
     "web/**/*.ts",
     "web/**/*.tsx",
     "proxy.ts",
+    "instrumentation.ts",
     "next.config.ts",
     ".next/dev/types/**/*.ts"
   ],

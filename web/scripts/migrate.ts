@@ -2,9 +2,11 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { loadEnvFile } from 'node:process';
 import postgres from 'postgres';
+import { assertReviewedNodeRuntime } from '../../src/runtime-version';
 import { assertDatabaseUrl } from '../lib/database-config';
 import { EXPECTED_MIGRATION_FILES } from '../lib/migrations';
 
+assertReviewedNodeRuntime();
 if (existsSync('.env.local')) loadEnvFile('.env.local');
 const url = assertDatabaseUrl(process.env.DATABASE_URL, {
   production: process.env.NODE_ENV === 'production',

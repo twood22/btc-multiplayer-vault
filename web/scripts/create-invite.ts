@@ -2,9 +2,11 @@ import { randomBytes, createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { loadEnvFile } from 'node:process';
 import postgres from 'postgres';
+import { assertReviewedNodeRuntime } from '../../src/runtime-version';
 import { assertDatabaseUrl } from '../lib/database-config';
 import { webConfig } from '../lib/server/config';
 
+assertReviewedNodeRuntime();
 if (existsSync('.env.local')) loadEnvFile('.env.local');
 const args = parseArgs(process.argv.slice(2));
 const participantId = required(args, 'participant');
