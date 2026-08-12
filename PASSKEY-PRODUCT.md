@@ -80,6 +80,10 @@ participant-only MuSig2 path, or the timelocked recovery path.
 - Confirmed broadcast transactions can atomically spend the old coordinator
   coin, derive the exact surviving pair or final-owner coin after a solo exit,
   or close the vault after a terminal cooperative, recovery, or final sweep.
+- Initial activation accepts only a confirmed transaction with three unique
+  P2WPKH or P2TR inputs, each covering one committed participant deposit, and
+  exactly one committed round-one output. It also bounds change/output count
+  and fees before changing the vault from `ready` to `active`.
 
 Recovery enrollment is a ten-minute, one-time server capability. Its creation
 challenge is bound to the existing credential; registration is bound to the
@@ -143,7 +147,8 @@ stripping, exact public key and BYO Sigbash-share compatibility,
 offline-roster rejection, xpub/leaf binding, deterministic roster digests,
 proposal replay resistance, exact confirmed-state advancement, fresh recovery
 observations, no funding address or output-script disclosure before unanimity,
-and database-enforced one-time broadcast approvals. The complete migrations
+database-enforced one-time broadcast approvals, and adversarial rejection of
+malformed or single-funder activation transactions. The complete migrations
 through 008 have also been applied and re-applied idempotently on an isolated
 PostgreSQL 16 instance. The database acceptance test proves one-winner
 concurrent approval creation and submission claims, required passkey-consumed

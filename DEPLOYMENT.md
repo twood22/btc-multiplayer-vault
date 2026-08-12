@@ -154,5 +154,8 @@ npm run web:record-funding -- --vault-id <uuid> --txid <txid> --vout <index>
 ```
 
 Do not run that command merely because the service is deployed or healthy. It
-rechecks the exact mainnet P2TR output and the database's nine-proof ready state,
-but the human funding approval remains mandatory.
+rechecks the exact mainnet P2TR output, exactly three unique qualifying funding
+inputs, fee/change sanity, and the database's nine-proof ready state. On-chain
+structure cannot prove which friend owns an input, so each friend must verify
+their own wallet contribution and the complete transaction before signing; the
+human funding approval remains mandatory.

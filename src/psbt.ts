@@ -4,6 +4,11 @@ import * as ecc from 'tiny-secp256k1';
 import { BITCOIN_NETWORK } from './network.js';
 import { verifyVaultTransaction, type ConsensusVerification } from './consensus.js';
 import { keyAggSecret, taggedHashHex, tapLeafHash, xpubMasterFingerprint } from './crypto.js';
+import {
+  isSupportedFundingInputScript,
+  MIN_FUNDING_RELAY_FEE_SATS,
+  MIN_SAFE_CHANGE_SATS,
+} from './funding.js';
 import { participantById, policyId, roundId, sigbashRoundKey } from './vault.js';
 import type {
   Hex,
@@ -60,6 +65,24 @@ export function buildFundingPsbt({
 }) {
   const participantIds = state.participants.map((participant) => participant.id);
   const roundOneVault = requireVault(state, participantIds);
+  if (!Number.isSafeInteger(feeSats) || feeSats < MIN_FUNDING_RELAY_FEE_SATS) {
+    throw new Error(`funding fee must be an integer of at least ${MIN_FUNDING_RELAY_FEE_SATS} sats`);
+  }
+  if (feeSats >= state.economics.depositSatsPerParticipant) {
+    throw new Error('funding fee cannot consume an entire participant deposit');
+  }
+  if (inputs.length !== participantIds.length) {
+    throw new Error(`funding PSBT requires exactly ${participantIds.length} participant inputs`);
+  }
+  const suppliedIds = inputs.map((input) => input.participantId);
+  if (new Set(suppliedIds).size !== participantIds.length ||
+      suppliedIds.some((participantId) => !participantIds.includes(participantId))) {
+    throw new Error('funding PSBT requires exactly one input for each of alice, bob, and carol');
+  }
+  const suppliedOutpoints = inputs.map((input) => `${input.txid.toLowerCase()}:${Number(input.vout)}`);
+  if (new Set(suppliedOutpoints).size !== suppliedOutpoints.length) {
+    throw new Error('funding PSBT inputs must use distinct outpoints');
+  }
   const byParticipant = new Map(inputs.map((input) => [input.participantId, input]));
   const missing = participantIds.filter((participantId) => !byParticipant.has(participantId));
   if (missing.length > 0) {
@@ -71,6 +94,17 @@ export function buildFundingPsbt({
   const normalizedInputs = participantIds.map((participantId, index) => {
     const input = byParticipant.get(participantId)!;
     const valueSats = Number(input.valueSats);
+    if (!/^[0-9a-f]{64}$/u.test(input.txid.toLowerCase()) ||
+        !Number.isSafeInteger(Number(input.vout)) || Number(input.vout) < 0 ||
+        Number(input.vout) > 0xffffffff) {
+      throw new Error(`${participantId} funding input has an invalid outpoint`);
+    }
+    if (!Number.isSafeInteger(valueSats) || valueSats <= 0) {
+      throw new Error(`${participantId} funding input has an invalid satoshi value`);
+    }
+    if (!isSupportedFundingInputScript(input.scriptPubKeyHex)) {
+      throw new Error(`${participantId} funding input must be native P2WPKH or P2TR`);
+    }
     if (valueSats < state.economics.depositSatsPerParticipant) {
       throw new Error(`${participantId} input is below the committed participant deposit`);
     }
@@ -78,6 +112,9 @@ export function buildFundingPsbt({
     const changeSats = valueSats - state.economics.depositSatsPerParticipant - participantFee;
     if (changeSats < 0) {
       throw new Error(`${participantId} input cannot cover deposit plus fee share`);
+    }
+    if (changeSats > 0 && changeSats < MIN_SAFE_CHANGE_SATS) {
+      throw new Error(`${participantId} change ${changeSats} sats is below the safe dust floor`);
     }
     psbt.addInput({
       hash: input.txid,

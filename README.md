@@ -301,8 +301,9 @@ input scriptPubKey, so you only pass `--participant`.
 
 4. **Only after all nine browser readiness proofs pass and a separate funding
    approval is given, fund round one** with the exact configured output. The
-   commands below describe the historical 1-BTC-per-person profile; the private
-   beta uses its separately committed tiny-mainnet economics:
+   funding builder requires exactly one distinct P2WPKH or P2TR input from each
+   participant, a relayable fee, and no dust change; it derives the output from
+   the private beta's committed tiny-mainnet economics:
 
    ```bash
    npm run funding-psbt -- --inputs-json '[{"participantId":"alice",...},...]' --fee-sats 3000
@@ -319,11 +320,14 @@ input scriptPubKey, so you only pass `--participant`.
    npm run web:record-funding -- --vault-id <uuid> --txid <round1_txid> --vout <n>
    ```
 
-   The recorder checks mainnet identity, unspent status, transaction/output
-   agreement, exact roster-derived script and value, vault readiness, and the
-   configured confirmation depth before the database can become active. It is
-   not an HTTP route and must not be run until funding has been separately
-   approved.
+   The recorder checks mainnet identity, unspent status, three unique P2WPKH or
+   P2TR inputs each worth at least one participant deposit, exactly one
+   roster-derived vault output, bounded outputs, non-dust change, fee sanity,
+   vault readiness, and the configured confirmation depth before the database
+   can become active. The chain structure cannot identify the human owner of
+   each input, so the three friends must still review their own wallet's input
+   and the final transaction before signing. The recorder is not an HTTP route
+   and must not be run until funding has been separately approved.
 
 5. **Solo withdrawal** (Alice leaves first):
 

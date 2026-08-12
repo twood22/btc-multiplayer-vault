@@ -18,7 +18,7 @@ if (!Number.isSafeInteger(vout) || vout < 0 || vout > 0xffffffff) {
 
 const [output, transaction] = await Promise.all([
   getTxOut(txid, vout),
-  getRawTransaction(txid, true),
+  getRawTransaction(txid, 2),
 ]);
 if (!output) throw new Error('funding output does not exist or is already spent');
 if (transaction.txid !== txid) throw new Error('Bitcoin backend returned a different funding transaction');
@@ -51,6 +51,7 @@ const recorded = await recordConfirmedFundingCoin({
     valueSats: btcToSats(output.value),
     scriptPubKeyHex,
   },
+  fundingTransaction: transaction,
   confirmedHeight,
   confirmations,
 });
@@ -62,6 +63,9 @@ console.log(JSON.stringify({
   confirmations,
   confirmedHeight,
   snapshotDigest: recorded.snapshotDigest,
+  participantInputCount: recorded.fundingAuthorization.participantInputCount,
+  inputValuesSats: recorded.fundingAuthorization.inputValuesSats,
+  feeSats: recorded.fundingAuthorization.feeSats,
 }, null, 2));
 
 function btcToSats(value: number | string | null | undefined): number {

@@ -3,7 +3,11 @@ import { Buffer } from 'buffer';
 import * as bitcoin from 'bitcoinjs-lib';
 import type { AuthenticatorTransportFuture, Base64URLString } from '@simplewebauthn/server';
 import type { TrustedVaultInput } from '../../../src/types';
-import { getRawTransaction, sendRawTransaction } from '../../../src/bitcoin-rpc';
+import { getRawTransaction, sendRawTransaction, type RpcTransaction } from '../../../src/bitcoin-rpc';
+import {
+  authorizeConfirmedFundingTransaction,
+  type ConfirmedFundingAuthorization,
+} from '../../../src/funding';
 import {
   assertAuthorizedBroadcaster,
   assertExactBroadcastTransaction,
@@ -1489,9 +1493,14 @@ export async function completeCoinObservation(
 export async function recordConfirmedFundingCoin(input: {
   vaultId: string;
   trustedInput: TrustedVaultInput;
+  fundingTransaction: RpcTransaction;
   confirmedHeight: number;
   confirmations: number;
-}): Promise<{ id: string; snapshotDigest: string }> {
+}): Promise<{
+  id: string;
+  snapshotDigest: string;
+  fundingAuthorization: ConfirmedFundingAuthorization;
+}> {
   if (!Number.isSafeInteger(input.confirmedHeight) || input.confirmedHeight <= 0) {
     throw new Error('confirmed funding height must be a positive integer');
   }
@@ -1500,6 +1509,14 @@ export async function recordConfirmedFundingCoin(input: {
     throw new Error(`funding requires at least ${chainConfirmationsRequired()} confirmations`);
   }
   const confirmed = await getConfirmedVaultArtifactForVault(input.vaultId);
+  const fundingAuthorization = authorizeConfirmedFundingTransaction({
+    transaction: input.fundingTransaction,
+    expectedTxid: input.trustedInput.txid,
+    expectedVout: input.trustedInput.vout,
+    depositSatsPerParticipant: confirmed.artifact.economics.depositSatsPerParticipant,
+    fundingValueSats: confirmed.artifact.funding.valueSats,
+    fundingScriptPubKeyHex: confirmed.artifact.funding.outputScriptHex,
+  });
   const coin: VaultCoinSnapshot = {
     vaultId: input.vaultId,
     rosterDigest: confirmed.digest,
@@ -1541,7 +1558,7 @@ export async function recordConfirmedFundingCoin(input: {
     if (activated.length !== 1) {
       throw new Error('vault has not passed the live Sigbash mainnet readiness gate');
     }
-    return { id: inserted[0]!.id, snapshotDigest };
+    return { id: inserted[0]!.id, snapshotDigest, fundingAuthorization };
   });
 }
 
