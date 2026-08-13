@@ -3,6 +3,9 @@ import path from 'node:path';
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // Keep repository instructions deliberate. `next dev` otherwise writes
+  // generated AGENTS.md and CLAUDE.md files into the worktree.
+  agentRules: false,
   poweredByHeader: false,
   typescript: { tsconfigPath: './tsconfig.web.json' },
   async headers() {

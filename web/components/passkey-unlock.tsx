@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { decryptParticipantSecretEnvelope, type KeyEnvelope } from '../lib/client/key-envelope';
 import { deriveParticipantIdentity } from '../lib/client/participant-identity';
 import { assertPasskeyWithPrf } from '../lib/client/webauthn';
@@ -21,6 +21,9 @@ export function PasskeyUnlock({
   const [status, setStatus] = useState('Locked');
   const [verified, setVerified] = useState(false);
   const [credentialId, setCredentialId] = useState(passkeys[0]?.id || '');
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => setHydrated(true), []);
 
   async function unlock() {
     setStatus('Waiting for your passkey…');
@@ -90,12 +93,16 @@ export function PasskeyUnlock({
       {passkeys.length > 1 && (
         <label className="passkey-choice">
           Passkey
-          <select value={credentialId} onChange={(event) => setCredentialId(event.target.value)}>
+          <select
+            value={credentialId}
+            disabled={!hydrated}
+            onChange={(event) => setCredentialId(event.target.value)}
+          >
             {passkeys.map((passkey) => <option key={passkey.id} value={passkey.id}>{passkey.name}</option>)}
           </select>
         </label>
       )}
-      <button onClick={unlock} type="button">Verify my key</button>
+      <button disabled={!hydrated} onClick={unlock} type="button">Verify my key</button>
     </section>
   );
 }
