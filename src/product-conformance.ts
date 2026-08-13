@@ -178,6 +178,10 @@ record('the release surface provides a fail-closed exact-container acceptance co
   );
   const dockerfile = readFileSync(resolve(root, 'Dockerfile'), 'utf8');
   const dockerignore = readFileSync(resolve(root, '.dockerignore'), 'utf8');
+  const workflow = readFileSync(
+    resolve(root, '.github/workflows/exact-container-acceptance.yml'),
+    'utf8',
+  );
   assert.match(packageJson, /web:test:browser:container/u);
   assert.match(runner, /CONTAINER_ACCEPTANCE/u);
   assert.match(runner, /build --pull --tag/u);
@@ -193,6 +197,16 @@ record('the release surface provides a fail-closed exact-container acceptance co
   assert.match(dockerfile, /\/api\/health\/ready/u);
   assert.match(dockerignore, /^\.env\.\*$/mu);
   assert.match(dockerignore, /^live-run$/mu);
+  assert.match(workflow, /^\s*workflow_dispatch:\s*$/mu);
+  assert.doesNotMatch(workflow, /^\s*(?:push|pull_request):\s*$/mu);
+  assert.match(workflow, /^\s*contents: read\s*$/mu);
+  assert.match(workflow, /actions\/checkout@[0-9a-f]{40}/u);
+  assert.match(workflow, /actions\/setup-node@[0-9a-f]{40}/u);
+  assert.match(workflow, /persist-credentials: false/u);
+  assert.doesNotMatch(workflow, /uses: [^\n]+@v\d/u);
+  assert.match(workflow, /runs-on: ubuntu-24\.04/u);
+  assert.match(workflow, /npm run web:test:browser:container/u);
+  assert.doesNotMatch(workflow, /docker\s+(?:login|push)|kubectl|terraform/u);
 });
 
 record('the production Sigbash solo-signing and persistence boundaries have isolated acceptance coverage', () => {

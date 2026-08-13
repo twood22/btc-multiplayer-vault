@@ -1,0 +1,57 @@
+name: Exact container acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exact-container-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CONTAINER_IMAGE_TAG: btc-multiplayer-vault:acceptance-${{ github.sha }}
+    steps:
+      - name: Check out the selected commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Select the reviewed Node runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Install the Chromium acceptance runtime
+        run: npx playwright install --with-deps chromium
+
+      - name: Build and exercise the exact image
+        env:
+          POSTGRES_BIN: /usr/lib/postgresql/16/bin
+        run: npm run web:test:browser:container
+
+      - name: Record non-publishable local image evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_id=$(docker image inspect --format '{{.Id}}' "$CONTAINER_IMAGE_TAG")
+          if [[ ! "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo 'Docker returned an invalid local image ID' >&2
+            exit 1
+          fi
+          {
+            echo '### Exact container acceptance passed'
+            echo
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Local image ID: \`$image_id\`"
+            echo '- This is not a registry manifest digest, deployment, or funding authorization.'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -259,6 +259,11 @@ It requires a Linux container engine and has not passed merely because the
 standalone command passed; a registry manifest digest is still separate
 deployment evidence.
 
+The manual-only `Exact container acceptance` workflow provides the same gate
+on an engine-enabled Ubuntu runner without publishing or deploying the image.
+It is prepared release infrastructure, not evidence until it passes for the
+exact reviewed commit.
+
 `web:release-status` is the post-deployment funding audit and prints only
 non-secret gate summaries plus a non-authorizing `statusDigest`. It verifies the
 declared Node runtime, an explicit independently reviewed registry manifest

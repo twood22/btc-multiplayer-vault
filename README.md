@@ -37,6 +37,7 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Browser PRF setup/recovery/sign-in/unlock | ✅ Chromium + two virtual authenticators; physical devices still required |
 | Optimized standalone user-facing bundle | ✅ passkey + cooperative/recovery/final-sweep/three-wallet-funding Chromium gate; exact container image still requires digest review |
 | Packaged private operator runtime | ✅ non-mutating fail-closed probe; exact image execution requires a container engine |
+| Engine-enabled exact-image CI gate | ✅ manual-only pinned workflow prepared; not yet executed for this commit |
 | Immediate session revocation and vault-tab cleanup | ✅ browser + PostgreSQL verified |
 | Immutable three-passkey roster gate | ✅ implemented; PostgreSQL 16 migrations verified, real authenticator run still required |
 | User-facing solo/cooperative/recovery/final signing | ✅ implemented and server re-authorized |

@@ -62,6 +62,14 @@ the local content-addressed image ID. That ID proves the tested local image
 only; the separately reviewed registry manifest digest remains the deployment
 artifact after CI publishes the image.
 
+If the operator workstation has no container engine, manually dispatch the
+`Exact container acceptance` GitHub Actions workflow for the exact reviewed
+commit. It uses pinned checkout/setup actions, Node 22.23.2, PostgreSQL 16, and
+the same command above on an engine-enabled Ubuntu runner. It has read-only
+repository permission and contains no registry login, image push, deployment,
+Sigbash credential, or mainnet operation. Its reported local image ID remains
+acceptance evidence only, never a registry manifest digest or release approval.
+
 Both commands create disposable PostgreSQL state and run the full Chromium
 passkey, three-participant cooperative MuSig2,
 distributed recovery, owner-only final-sweep, and three-wallet funding suite.
