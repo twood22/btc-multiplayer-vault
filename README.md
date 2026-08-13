@@ -37,9 +37,9 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Browser PRF setup/recovery/sign-in/unlock | ✅ Chromium + two virtual authenticators; physical devices still required |
 | Immutable three-passkey roster gate | ✅ implemented; PostgreSQL 16 migrations verified, real authenticator run still required |
 | User-facing solo/cooperative/recovery/final signing | ✅ implemented and server re-authorized |
-| Passkey-bound three-wallet funding PSBT preparation | ✅ implemented; external wallet signature exchange remains gated |
-| Explicit passkey-approved broadcast + confirmation watcher | ✅ implemented; real backend execution still required |
-| PostgreSQL broadcast approval replay/concurrency checks | ✅ verified on disposable PostgreSQL 16 |
+| Passkey-bound three-wallet funding, external signatures, final approval, and unanimous restart | ✅ implemented; real wallets/authenticators still required |
+| Operator-gated initial funding broadcast + private confirmation watcher | ✅ implemented; real Bitcoin Core execution still required |
+| PostgreSQL funding/broadcast replay, concurrency, and restart checks | ✅ verified on disposable PostgreSQL 16 |
 | Database-atomic sensitive-operation rate limits | ✅ implemented and concurrency-verified |
 | Predeployment live Sigbash signing proof | ✅ command implemented; external mainnet execution still unproven |
 | Read-only post-deployment funding report | ✅ implemented; currently fails closed on missing external gates |
@@ -50,9 +50,9 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 - Node.js 22+ (the code is strict TypeScript, run via `tsx` with no build
   step; `npm test` typechecks with `tsc --noEmit` before running the suite)
 - Nothing else for local mode. Live mode needs participant-specific Sigbash
-  mainnet access and a Bitcoin Core mainnet node (or configured mainnet
-  Esplora backend) for broadcast/audit commands. Those external gates are not
-  currently proven.
+  mainnet access and a mainnet backend. Chain reads can use configured Esplora,
+  but the private initial-funding release deliberately requires Bitcoin Core's
+  `testmempoolaccept`. Those external gates are not currently proven.
 
 ## Run
 
@@ -214,14 +214,15 @@ Live Sigbash: `sigbash-live-setup`, `sigbash-sign-psbt`, `live-readiness`,
 `live-cooperative-audit`, `live-recovery-audit`, `live-final-sweep-audit`,
 `live-run-audit`, `live-acceptance-evidence`.
 
-The user-facing server never broadcasts during signing or finalization. After
+Runtime spends never broadcast during signing or finalization. After
 reviewing the exact finalized transaction, an eligible signer must check the
 mainnet warning and complete a separate passkey assertion. The server submits
 only those stored bytes. Set `VAULT_CONFIRMATIONS_REQUIRED` deliberately for
 the private beta. Run `npm run web:watch-chain` from a private scheduler to
-resume an interrupted approved submission and advance a broadcast proposal
-only after the backend returns the exact transaction with that confirmation
-depth.
+resume an interrupted approved runtime submission, activate the exact
+operator-submitted initial funding transaction, and advance later broadcast
+proposals only after the backend returns the exact bytes with that confirmation
+depth. Initial funding itself has no HTTP broadcast route.
 
 `policy-check-psbt` and `sigbash-sign-psbt` infer the round from the PSBT's
 input scriptPubKey, so you only pass `--participant`.
@@ -310,30 +311,48 @@ input scriptPubKey, so you only pass `--participant`.
    one wallet outpoint and change address, independently observes the coin on
    mainnet, and approves that exact commitment with a passkey. Once all three
    approvals exist, every browser rebuilds the same canonical unsigned PSBT.
-   Set `VAULT_FUNDING_FEE_SATS` explicitly before opening this ceremony. Wallet
-   signatures and broadcast remain separate; copying the PSBT does not fund the
-   vault.
+   Set `VAULT_FUNDING_FEE_SATS` explicitly before opening this ceremony. Each
+   external wallet then signs only its own P2WPKH or P2TR input. Browser and
+   server independently verify and normalize that signature while discarding
+   wallet metadata. The service applies all three signatures to the pristine
+   PSBT, and every friend uses a passkey again to approve the exact finalized
+   witness transaction. A stale input, fee, or signature can be invalidated
+   only by three passkeys approving the same exact state and reason; the reset
+   leaves an immutable public-fingerprint audit event.
 
    ```bash
    npm run funding-psbt -- --inputs-json '[{"participantId":"alice",...},...]' --fee-sats 3000
-   # sign with the participants' wallets, broadcast, then:
-   npm run rpc-find-output -- --txid <round1_txid> --round alice,bob,carol
-   npm run verify-vault-utxo -- --txid <round1_txid> --vout <n> --round alice,bob,carol
-   SIGBASH_MODE=live npm run live-readiness -- --txid <round1_txid> --vout <n>
    ```
 
-   For the user-facing service, wait for `VAULT_CONFIRMATIONS_REQUIRED`, then
-   activate only that exact P2TR output through the private operator command:
+   After independently reviewing the successful live Sigbash proof and a fresh
+   `web:release-status` report, record their non-secret fingerprints in the
+   protected operator environment. A separate explicit operator decision can
+   then submit only the unanimously approved bytes through private Bitcoin
+   Core preflight:
+
+   ```bash
+   npm run web:broadcast-funding -- \
+     --vault-id <uuid> \
+     --finalization-digest <browser-shown-finalization-digest> \
+     --live-sigbash-proof-digest "$LIVE_SIGBASH_MAINNET_PROOF_DIGEST" \
+     --release-report-digest "$FUNDING_RELEASE_REPORT_DIGEST" \
+     --confirm-mainnet-broadcast BROADCAST_EXACT_APPROVED_FUNDING_TRANSACTION
+   ```
+
+   The private watcher activates that exact output only after
+   `VAULT_CONFIRMATIONS_REQUIRED`. `web:record-funding` remains a manual
+   recovery boundary for the same exact-byte checks:
 
    ```bash
    npm run web:record-funding -- --vault-id <uuid> --txid <round1_txid> --vout <n>
    ```
 
-   The recorder checks mainnet identity, unspent status, three unique P2WPKH or
-   P2TR inputs each worth at least one participant deposit, the exact input
-   order and outputs from the three passkey-approved PSBT, exactly one
-   roster-derived vault output, non-dust change, fee sanity, vault readiness,
-   and the configured confirmation depth before the database can become active.
+   Submission first requires Bitcoin Core `testmempoolaccept` to return the
+   exact txid, vsize, and fee. Activation checks exact unanimously approved
+   witness bytes, mainnet identity, unspent status, three unique P2WPKH or P2TR
+   inputs, the canonical input/output order, exactly one roster-derived vault
+   output, non-dust change, fee sanity, vault readiness, and the configured
+   confirmation depth before the database can become active.
    The chain structure cannot identify the human owner of each input, so the
    three friends must still review their own wallet's input and the final
    transaction before signing. The recorder is not an HTTP route and must not

@@ -7,6 +7,18 @@ import {
   type FundingInputCommitment,
   type FundingProposal,
 } from '../../src/funding-ceremony.js';
+import {
+  authorizeFundingSignedPsbt,
+  canonicalFundingRestartReason,
+  finalizeFundingSignatures,
+  fundingRestartApprovalDigest,
+  fundingRestartStateDigest,
+  fundingSignatureContributionDigest,
+  validateFundingSignatureContribution,
+  type FinalizedFundingTransaction,
+  type FundingRestartSnapshot,
+  type FundingSignatureContribution,
+} from '../../src/funding-signing.js';
 import type { PublishedRosterArtifact } from '../../src/roster-ceremony.js';
 import { observeFundingInput } from '../lib/client/chain-observation';
 import { assertPasskey } from '../lib/client/webauthn';
@@ -25,6 +37,22 @@ interface FundingStatus {
   inputs: Array<FundingInputCommitment & { commitmentDigest: string }>;
   participantApproved: boolean;
   proposal: FundingProposal | null;
+  signatureContributions: Array<FundingSignatureContribution & { contributionDigest: string }>;
+  participantSigned: boolean;
+  finalization: (FinalizedFundingTransaction & {
+    status: 'awaiting_approvals' | 'approved' | 'submitting' | 'broadcast' | 'confirmed';
+    approvedParticipantIds: string[];
+    participantApproved: boolean;
+    readyForOperatorBroadcast: boolean;
+  }) | null;
+  restartStateDigest: string | null;
+  restartRequests: Array<{
+    stateDigest: string;
+    restartDigest: string;
+    reason: string;
+    approvedParticipantIds: string[];
+    participantApproved: boolean;
+  }>;
 }
 
 export function FundingCeremony({ passkeys }: { passkeys: PasskeyChoice[] }) {
@@ -33,15 +61,27 @@ export function FundingCeremony({ passkeys }: { passkeys: PasskeyChoice[] }) {
   const [txid, setTxid] = useState('');
   const [vout, setVout] = useState('0');
   const [changeAddress, setChangeAddress] = useState('');
+  const [signedPsbtBase64, setSignedPsbtBase64] = useState('');
+  const [restartReason, setRestartReason] = useState('');
   const [message, setMessage] = useState('Loading the three-wallet funding ceremony…');
   const [working, setWorking] = useState(false);
 
   async function refresh(): Promise<FundingStatus> {
     const next = await postJson('/api/vault/funding', {}) as unknown as FundingStatus;
-    if (next.proposal) await verifyProposalInBrowser(next);
+    await verifyFundingStateInBrowser(next);
     setStatus(next);
-    setMessage(next.proposal
-      ? 'All three inputs are approved and the exact unsigned Bitcoin transaction reproduces in this browser.'
+    setMessage(next.finalization?.status === 'confirmed'
+      ? 'The exact unanimously approved funding transaction is confirmed and the multiplayer vault is active.'
+      : next.finalization?.status === 'broadcast'
+        ? 'The exact unanimously approved funding transaction is on mainnet and awaiting the required confirmations.'
+        : next.finalization?.status === 'submitting'
+          ? 'The private operator is submitting the exact unanimously approved funding transaction.'
+      : next.finalization?.readyForOperatorBroadcast
+      ? 'All three wallets signed and all three passkeys approved the exact final transaction. Operator release gates still remain closed.'
+      : next.finalization
+        ? `The exact wallet-signed transaction is finalized; passkey approvals ${next.finalization.approvedParticipantIds.length}/3.`
+        : next.proposal
+          ? `The exact unsigned transaction reproduces here; wallet signatures ${next.signatureContributions.length}/3.`
       : next.participantApproved
         ? `Your funding coin is locked in; waiting for friends (${next.inputs.length}/3).`
         : 'Choose one confirmed coin from your own wallet. Nothing will be signed or broadcast.');
@@ -102,7 +142,7 @@ export function FundingCeremony({ passkeys }: { passkeys: PasskeyChoice[] }) {
         commitmentDigest: expectedDigest,
         response,
       }) as unknown as FundingStatus;
-      if (completed.proposal) await verifyProposalInBrowser(completed);
+      await verifyFundingStateInBrowser(completed);
       setStatus(completed);
       setMessage(completed.proposal
         ? 'All three real wallet inputs are approved; the exact unsigned PSBT is ready for wallet signing.'
@@ -117,7 +157,116 @@ export function FundingCeremony({ passkeys }: { passkeys: PasskeyChoice[] }) {
   async function copyPsbt() {
     if (!status?.proposal) return;
     await navigator.clipboard.writeText(status.proposal.psbtBase64);
-    setMessage('Exact unsigned PSBT copied. It still needs one real wallet signature from each friend.');
+    setMessage('Exact unsigned PSBT copied. Sign only your own input in your external Bitcoin wallet, then paste its returned PSBT below.');
+  }
+
+  async function approveWalletSignature() {
+    if (!status?.proposal || !credentialId || !signedPsbtBase64.trim()) return;
+    setWorking(true);
+    try {
+      const local = authorizeFundingSignedPsbt({
+        proposal: status.proposal,
+        commitments: status.inputs,
+        participantId: status.participantId,
+        signedPsbtBase64: signedPsbtBase64.trim(),
+      });
+      setMessage('Wallet signature is valid for only your exact input. Confirm it with your passkey…');
+      const approval = await postJson('/api/vault/funding/signature/options', {
+        credentialId,
+        signedPsbtBase64: signedPsbtBase64.trim(),
+      });
+      const returned = approval.contribution as FundingSignatureContribution;
+      if (approval.contributionDigest !== local.contributionDigest ||
+          fundingSignatureContributionDigest(returned) !== local.contributionDigest) {
+        throw new Error('coordinator normalized a different wallet signature before passkey approval');
+      }
+      const response = await assertPasskey(approval.options as Record<string, unknown>);
+      const completed = await postJson('/api/vault/funding/signature/finish', {
+        challengeId: approval.challengeId,
+        contributionDigest: local.contributionDigest,
+        response,
+      }) as unknown as FundingStatus;
+      await verifyFundingStateInBrowser(completed);
+      setStatus(completed);
+      setSignedPsbtBase64('');
+      setMessage(completed.finalization
+        ? 'All three wallet signatures verify and the exact final transaction reproduces here. Review it before final passkey approval.'
+        : `Your wallet signature is verified; waiting for friends (${completed.signatureContributions.length}/3).`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Wallet signature approval failed');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function approveFinalTransaction() {
+    if (!status?.finalization || !credentialId) return;
+    setWorking(true);
+    try {
+      await verifyFundingStateInBrowser(status);
+      const options = await postJson('/api/vault/funding/final-approval/options', { credentialId });
+      if (options.finalizationDigest !== status.finalization.finalizationDigest) {
+        throw new Error('coordinator requested approval for a different finalized transaction');
+      }
+      setMessage('Approve the exact wallet-signed funding transaction with your passkey…');
+      const response = await assertPasskey(options.options as Record<string, unknown>);
+      const completed = await postJson('/api/vault/funding/final-approval/finish', {
+        challengeId: options.challengeId,
+        finalizationDigest: status.finalization.finalizationDigest,
+        response,
+      }) as unknown as FundingStatus;
+      await verifyFundingStateInBrowser(completed);
+      setStatus(completed);
+      setMessage(completed.finalization?.readyForOperatorBroadcast
+        ? 'Unanimous final approval recorded. Funding is still not broadcast; the separate operator release gate remains closed.'
+        : `Your final approval is recorded (${completed.finalization?.approvedParticipantIds.length || 0}/3).`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Final transaction approval failed');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function approveRestart(reasonInput: string) {
+    if (!status || !credentialId) return;
+    setWorking(true);
+    try {
+      await verifyFundingStateInBrowser(status);
+      const snapshot = fundingRestartSnapshotFromStatus(status);
+      if (!snapshot || snapshot.inputs.length === 0) throw new Error('there is no funding state to restart');
+      const reason = canonicalFundingRestartReason(reasonInput);
+      const stateDigest = fundingRestartStateDigest(snapshot);
+      const restartDigest = fundingRestartApprovalDigest({ snapshot, reason });
+      if (stateDigest !== status.restartStateDigest) {
+        throw new Error('coordinator reported a different restart state fingerprint');
+      }
+      const options = await postJson('/api/vault/funding/restart/options', {
+        credentialId,
+        reason,
+      });
+      if (options.stateDigest !== stateDigest || options.restartDigest !== restartDigest ||
+          options.reason !== reason) {
+        throw new Error('coordinator requested approval for a different funding restart');
+      }
+      setMessage('Approve invalidating the current funding inputs and wallet signatures with your passkey…');
+      const response = await assertPasskey(options.options as Record<string, unknown>);
+      const completed = await postJson('/api/vault/funding/restart/finish', {
+        challengeId: options.challengeId,
+        stateDigest,
+        restartDigest,
+        response,
+      }) as unknown as FundingStatus;
+      await verifyFundingStateInBrowser(completed);
+      setStatus(completed);
+      setRestartReason('');
+      setMessage(completed.inputs.length === 0
+        ? 'All three friends approved. The old funding ceremony was archived and a fresh one can begin.'
+        : `Funding restart approval recorded; waiting for unanimous approval.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Funding restart approval failed');
+    } finally {
+      setWorking(false);
+    }
   }
 
   if (!status) {
@@ -200,10 +349,87 @@ export function FundingCeremony({ passkeys }: { passkeys: PasskeyChoice[] }) {
             ))}
           </div>
           <button onClick={copyPsbt} type="button">Copy exact unsigned PSBT</button>
+          {!status.participantSigned && (
+            <>
+              <label>
+                PSBT returned by your external wallet
+                <textarea autoCapitalize="none" autoCorrect="off" value={signedPsbtBase64}
+                  onChange={(event) => setSignedPsbtBase64(event.target.value)}
+                  placeholder="Paste the base64 PSBT after your wallet signs only your input" />
+              </label>
+              <button disabled={working || !signedPsbtBase64.trim()}
+                onClick={approveWalletSignature} type="button">
+                {working ? 'Verifying wallet signature…' : 'Verify and approve my wallet signature'}
+              </button>
+            </>
+          )}
+          <p>Verified wallet signatures: {status.signatureContributions.length}/3</p>
           <p className="muted">
-            This does not fund or broadcast anything. The next release gate is collecting and
-            independently validating all three external-wallet signatures.
+            No wallet private key enters this service. Imported wallet metadata is discarded;
+            only your independently verified signature is retained.
           </p>
+        </div>
+      )}
+      {status.finalization && (
+        <div className="funding-contributions">
+          <h3>Exact finalized transaction</h3>
+          <article className="activation-code">
+            <span>Transaction ID</span>
+            <code>{status.finalization.finalTxid}</code>
+            <span>Finalization fingerprint</span>
+            <code>{status.finalization.finalizationDigest}</code>
+            <span>{status.finalization.feeSats.toLocaleString()} sat fee · {status.finalization.vsize} vbytes</span>
+            <span>Final passkey approvals: {status.finalization.approvedParticipantIds.length}/3</span>
+          </article>
+          {!status.finalization.participantApproved && status.finalization.status === 'awaiting_approvals' && (
+            <button disabled={working} onClick={approveFinalTransaction} type="button">
+              {working ? 'Confirming final transaction…' : 'Approve exact final transaction'}
+            </button>
+          )}
+          {['awaiting_approvals', 'approved'].includes(status.finalization.status) ? (
+            <p className="muted">
+              Even unanimous approval does not broadcast. The private operator must still verify the
+              external release report and deliberately submit these exact bytes.
+            </p>
+          ) : (
+            <p className="muted">
+              Funding state: {status.finalization.status}. Activation still waits for the configured
+              mainnet confirmation depth and an exact-byte chain-watcher verification.
+            </p>
+          )}
+        </div>
+      )}
+      {status.inputs.length > 0 &&
+        (!status.finalization || ['awaiting_approvals', 'approved'].includes(status.finalization.status)) && (
+        <div className="sigbash-controls">
+          <h3>Restart this funding ceremony</h3>
+          <p className="muted">
+            Use this only if an input was spent, the fee is stale, or a wallet signature must be
+            replaced. Restarting invalidates every current input approval and wallet signature;
+            all three friends must approve the exact same reason and state with their passkeys.
+          </p>
+          {status.restartRequests.map((request) => (
+            <article className="activation-code" key={request.restartDigest}>
+              <strong>{request.reason}</strong>
+              <span>Restart approvals: {request.approvedParticipantIds.length}/3</span>
+              <code>{request.restartDigest}</code>
+              {!request.participantApproved && (
+                <button disabled={working} onClick={() => approveRestart(request.reason)} type="button">
+                  {working ? 'Confirming restart…' : 'Approve this restart'}
+                </button>
+              )}
+            </article>
+          ))}
+          <label>
+            Exact restart reason
+            <textarea value={restartReason} onChange={(event) => setRestartReason(event.target.value)}
+              placeholder="For example: Alice's selected input was spent before broadcast." />
+          </label>
+          <button disabled={working || restartReason.trim().length < 10}
+            onClick={() => approveRestart(restartReason)} type="button">
+            {working ? 'Confirming restart…' : 'Propose and approve restart'}
+          </button>
+          <p>Current restart-state fingerprint: <code>{status.restartStateDigest}</code></p>
         </div>
       )}
       <p className="form-message" role="status">{message}</p>
@@ -211,7 +437,11 @@ export function FundingCeremony({ passkeys }: { passkeys: PasskeyChoice[] }) {
   );
 }
 
-async function verifyProposalInBrowser(status: FundingStatus): Promise<void> {
+async function verifyFundingStateInBrowser(status: FundingStatus): Promise<void> {
+  const restartSnapshot = fundingRestartSnapshotFromStatus(status);
+  if (restartSnapshot && fundingRestartStateDigest(restartSnapshot) !== status.restartStateDigest) {
+    throw new Error('funding restart state does not reproduce in this browser');
+  }
   if (!status.proposal) return;
   const published = await postJson('/api/vault/artifact', {});
   if (published.digest !== status.rosterDigest) throw new Error('funding proposal uses a different roster digest');
@@ -225,6 +455,52 @@ async function verifyProposalInBrowser(status: FundingStatus): Promise<void> {
       JSON.stringify(rebuilt.txTemplate) !== JSON.stringify(status.proposal.txTemplate)) {
     throw new Error('funding proposal does not reproduce from the three passkey-approved inputs');
   }
+  for (const contribution of status.signatureContributions) {
+    validateFundingSignatureContribution({
+      proposal: rebuilt,
+      commitments: status.inputs,
+      contribution,
+    });
+    if (fundingSignatureContributionDigest(contribution) !== contribution.contributionDigest) {
+      throw new Error(`wallet signature for ${contribution.participantId} changed after approval`);
+    }
+  }
+  if (status.finalization) {
+    const finalized = finalizeFundingSignatures({
+      proposal: rebuilt,
+      commitments: status.inputs,
+      contributions: status.signatureContributions,
+    });
+    if (finalized.finalizationDigest !== status.finalization.finalizationDigest ||
+        finalized.finalTxid !== status.finalization.finalTxid ||
+        finalized.transactionHex !== status.finalization.transactionHex ||
+        finalized.feeSats !== status.finalization.feeSats || finalized.vsize !== status.finalization.vsize) {
+      throw new Error('finalized funding transaction does not reproduce from the three wallet signatures');
+    }
+  }
+}
+
+function fundingRestartSnapshotFromStatus(status: FundingStatus): FundingRestartSnapshot | null {
+  if (status.finalization && !['awaiting_approvals', 'approved'].includes(status.finalization.status)) return null;
+  if (status.inputs.length === 0) return null;
+  return {
+    version: 1,
+    network: 'mainnet',
+    vaultId: status.vaultId,
+    rosterDigest: status.rosterDigest,
+    inputs: status.inputs.map((item) => ({
+      participantId: item.participantId,
+      commitmentDigest: item.commitmentDigest,
+    })),
+    signatures: status.signatureContributions.map((item) => ({
+      participantId: item.participantId,
+      contributionDigest: item.contributionDigest,
+    })),
+    finalization: status.finalization ? {
+      finalizationDigest: status.finalization.finalizationDigest,
+      status: status.finalization.status as 'awaiting_approvals' | 'approved',
+    } : null,
+  };
 }
 
 function shortTxid(txid: string): string {

@@ -3,12 +3,13 @@ import { Buffer } from 'buffer';
 import * as bitcoin from 'bitcoinjs-lib';
 import type { AuthenticatorTransportFuture, Base64URLString } from '@simplewebauthn/server';
 import type { TrustedVaultInput } from '../../../src/types';
-import { getRawTransaction, sendRawTransaction, type RpcTransaction } from '../../../src/bitcoin-rpc';
+import { getRawTransaction, getTxOut, sendRawTransaction, type RpcTransaction } from '../../../src/bitcoin-rpc';
 import {
   authorizeConfirmedFundingTransaction,
   type ConfirmedFundingAuthorization,
 } from '../../../src/funding';
 import { authorizeConfirmedFundingProposal } from '../../../src/funding-ceremony';
+import { authorizeObservedFinalizedFundingTransaction } from '../../../src/funding-signing';
 import {
   assertAuthorizedBroadcaster,
   assertExactBroadcastTransaction,
@@ -46,6 +47,7 @@ import { chainConfirmationsRequired, chainObservationOrigins } from './config';
 import { getConfirmedVaultArtifactForVault } from './roster-store';
 import type { StoredCredential } from './webauthn-store';
 import { getApprovedFundingProposalForVault } from './funding-ceremony-store';
+import { getPasskeyApprovedFinalizedFundingForVault } from './funding-signature-store';
 
 const PROPOSAL_LIFETIME_MS = 15 * 60 * 1000;
 
@@ -580,6 +582,7 @@ export async function submitApprovedBroadcast(input: {
 
 export async function pollVaultChain(): Promise<{
   resumedBroadcasts: string[];
+  confirmedFundingTransactions: string[];
   confirmedTransactions: string[];
 }> {
   const interrupted = await db()<Array<{ id: string }>>`
@@ -591,6 +594,51 @@ export async function pollVaultChain(): Promise<{
   for (const approval of interrupted) {
     const submitted = await submitApprovedBroadcast({ approvalId: approval.id });
     resumedBroadcasts.push(submitted.txid);
+  }
+  const fundingBroadcasts = await db()<Array<{
+    vault_id: string;
+    final_txid: Buffer;
+    transaction_hex: string;
+  }>>`
+    SELECT vault_id, final_txid, transaction_hex
+    FROM funding_finalizations
+    WHERE status = 'broadcast' ORDER BY broadcast_at
+  `;
+  const confirmedFundingTransactions: string[] = [];
+  for (const funding of fundingBroadcasts) {
+    const expectedTxid = funding.final_txid.toString('hex');
+    const observed = await getRawTransaction(expectedTxid, 2);
+    assertExactBroadcastTransaction({
+      finalizedTxHex: funding.transaction_hex,
+      finalTxid: expectedTxid,
+      observedTxid: observed.txid,
+      observedTxHex: observed.hex,
+    });
+    const height = confirmedBlockHeight(observed);
+    if (height === null || (observed.confirmations || 0) < chainConfirmationsRequired()) continue;
+    const confirmed = await getConfirmedVaultArtifactForVault(funding.vault_id);
+    const output = observed.vout.find((item) =>
+      item.scriptPubKey?.hex?.toLowerCase() === confirmed.artifact.funding.outputScriptHex);
+    if (!output) throw new Error('confirmed funding transaction lost its committed vault output');
+    const unspent = await getTxOut(expectedTxid, output.n);
+    if (!unspent?.scriptPubKey?.hex ||
+        unspent.scriptPubKey.hex.toLowerCase() !== confirmed.artifact.funding.outputScriptHex ||
+        rpcBtcToSats(unspent.value, 'funding output') !== rpcBtcToSats(output.value, 'funding output')) {
+      throw new Error('confirmed funding vault output is missing, spent, or inconsistent');
+    }
+    await recordConfirmedFundingCoin({
+      vaultId: funding.vault_id,
+      trustedInput: {
+        txid: expectedTxid,
+        vout: output.n,
+        valueSats: rpcBtcToSats(output.value, 'funding output'),
+        scriptPubKeyHex: confirmed.artifact.funding.outputScriptHex,
+      },
+      fundingTransaction: observed,
+      confirmedHeight: height,
+      confirmations: observed.confirmations!,
+    });
+    confirmedFundingTransactions.push(expectedTxid);
   }
   const broadcasts = await db()<Array<{
     vault_id: string;
@@ -623,7 +671,7 @@ export async function pollVaultChain(): Promise<{
     });
     confirmedTransactions.push(expectedTxid);
   }
-  return { resumedBroadcasts, confirmedTransactions };
+  return { resumedBroadcasts, confirmedFundingTransactions, confirmedTransactions };
 }
 
 function boundedFailure(error: unknown): string {
@@ -1502,6 +1550,7 @@ export async function recordConfirmedFundingCoin(input: {
   id: string;
   snapshotDigest: string;
   fundingProposalDigest: string;
+  fundingFinalizationDigest: string;
   fundingAuthorization: ConfirmedFundingAuthorization;
 }> {
   if (!Number.isSafeInteger(input.confirmedHeight) || input.confirmedHeight <= 0) {
@@ -1513,7 +1562,15 @@ export async function recordConfirmedFundingCoin(input: {
   }
   const confirmed = await getConfirmedVaultArtifactForVault(input.vaultId);
   const approvedProposal = await getApprovedFundingProposalForVault(input.vaultId);
+  const approvedFinalization = await getPasskeyApprovedFinalizedFundingForVault(input.vaultId);
+  if (approvedFinalization.status !== 'broadcast') {
+    throw new Error('funding transaction was not submitted through the operator broadcast gate');
+  }
   authorizeConfirmedFundingProposal(input.fundingTransaction, approvedProposal);
+  authorizeObservedFinalizedFundingTransaction({
+    transaction: input.fundingTransaction,
+    finalization: approvedFinalization,
+  });
   const fundingAuthorization = authorizeConfirmedFundingTransaction({
     transaction: input.fundingTransaction,
     expectedTxid: input.trustedInput.txid,
@@ -1533,6 +1590,36 @@ export async function recordConfirmedFundingCoin(input: {
   validateVaultCoin(confirmed.artifact, coin);
   const snapshotDigest = vaultCoinSnapshotDigest(coin);
   return transaction(async (sql) => {
+    const vaults = await sql<Array<{ status: string }>>`
+      SELECT status FROM vaults WHERE id = ${input.vaultId}::uuid FOR UPDATE
+    `;
+    if (vaults[0]?.status !== 'ready') {
+      throw new Error('vault has not passed the live Sigbash mainnet readiness gate');
+    }
+    const finalRows = await sql<Array<{
+      status: string;
+      finalization_digest: Buffer;
+      transaction_hex: string;
+    }>>`
+      SELECT status, finalization_digest, transaction_hex
+      FROM funding_finalizations
+      WHERE vault_id = ${input.vaultId}::uuid
+      FOR UPDATE
+    `;
+    const lockedFinalization = finalRows[0];
+    if (!lockedFinalization || lockedFinalization.status !== 'broadcast' ||
+        lockedFinalization.finalization_digest.toString('hex') !== approvedFinalization.finalizationDigest ||
+        lockedFinalization.transaction_hex !== approvedFinalization.transactionHex) {
+      throw new Error('funding finalization changed before confirmed activation');
+    }
+    const approvals = await sql<Array<{ count: string }>>`
+      SELECT count(*)::text AS count FROM funding_final_approvals
+      WHERE vault_id = ${input.vaultId}::uuid
+        AND finalization_digest = ${Buffer.from(approvedFinalization.finalizationDigest, 'hex')}
+    `;
+    if (Number(approvals[0]?.count || 0) !== 3) {
+      throw new Error('funding activation requires all three final passkey approvals');
+    }
     const existing = await sql<Array<{ id: string }>>`
       SELECT id FROM vault_coins WHERE vault_id = ${input.vaultId}::uuid FOR UPDATE
     `;
@@ -1555,6 +1642,17 @@ export async function recordConfirmedFundingCoin(input: {
       )
       RETURNING id
     `;
+    const confirmedFinalization = await sql<Array<{ vault_id: string }>>`
+      UPDATE funding_finalizations
+      SET status = 'confirmed', confirmed_at = now()
+      WHERE vault_id = ${input.vaultId}::uuid
+        AND finalization_digest = ${Buffer.from(approvedFinalization.finalizationDigest, 'hex')}
+        AND status = 'broadcast'
+      RETURNING vault_id
+    `;
+    if (confirmedFinalization.length !== 1) {
+      throw new Error('funding finalization could not enter confirmed state');
+    }
     const activated = await sql<Array<{ id: string }>>`
       UPDATE vaults SET status = 'active'
       WHERE id = ${input.vaultId}::uuid AND status = 'ready'
@@ -1567,6 +1665,7 @@ export async function recordConfirmedFundingCoin(input: {
       id: inserted[0]!.id,
       snapshotDigest,
       fundingProposalDigest: approvedProposal.digest,
+      fundingFinalizationDigest: approvedFinalization.finalizationDigest,
       fundingAuthorization,
     };
   });
@@ -1716,6 +1815,16 @@ function exactSafeInteger(raw: string, label: string): number {
   const value = Number(raw);
   if (!Number.isSafeInteger(value)) throw new Error(`${label} is outside JavaScript's safe integer range`);
   return value;
+}
+
+function rpcBtcToSats(raw: number | string, label: string): number {
+  const numeric = Number(raw);
+  const sats = Math.round(numeric * 100_000_000);
+  if (!Number.isFinite(numeric) || !Number.isSafeInteger(sats) || sats < 0 ||
+      Math.abs(numeric - sats / 100_000_000) > 1e-12) {
+    throw new Error(`Bitcoin backend returned an invalid ${label} amount`);
+  }
+  return sats;
 }
 
 function contributionMaps(rows: Array<{

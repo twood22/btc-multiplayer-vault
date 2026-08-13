@@ -69,15 +69,27 @@ participant-only MuSig2 path, or the timelocked recovery path.
   and the participant's passkey approves the exact evidence and fee. Three
   distinct approvals deterministically produce one unsigned funding PSBT that
   every browser rebuilds before any external wallet signature exists.
+- Each friend returns an external-wallet PSBT containing only their own P2WPKH
+  or P2TR input signature. Browser and server verify the exact unsigned
+  transaction, prevout, sighash, public-key binding, and signature; the server
+  retains only normalized signature material. Three signatures finalize the
+  pristine PSBT, and three fresh passkey approvals bind its exact witness bytes.
+- Before operator submission, any stale input, fee, or signature can be
+  invalidated only by three passkeys approving the same exact ceremony-state
+  fingerprint and reason. The reset archives an immutable audit event of public
+  digests, then clears all old approvals and signatures atomically.
 - A separate passkey broadcast ceremony binds the credential assertion to the
   exact finalized proposal digest and transaction ID. Only the solo/final
   payout owner, or a cooperative/recovery signer whose verified contribution
   is already stored, may approve it. The server submits only the stored
   consensus-verified bytes and records interrupted/failed attempts without
   silently changing the transaction.
-- A private scheduler entry point resumes only previously passkey-approved
-  submissions and advances protocol state only when the configured mainnet
-  backend returns the exact stored bytes with a confirmed block height.
+- Initial funding has no HTTP broadcast endpoint. A private operator command
+  requires the exact finalization fingerprint, reviewed live-Sigbash-proof and
+  release-report fingerprints, an explicit mainnet confirmation phrase, and
+  Bitcoin Core `testmempoolaccept`; it submits only the unanimously approved
+  bytes. A private scheduler activates that exact transaction and advances
+  later protocol state only after the required confirmations.
 - Database-atomic fixed-window rate limits cover unauthenticated credential
   ceremonies and authenticated unlock, Sigbash provisioning/readiness,
   proposal/signature, observation, and broadcast boundaries. Subjects are
@@ -155,14 +167,17 @@ proposal replay resistance, exact confirmed-state advancement, fresh recovery
 observations, no funding address or output-script disclosure before unanimity,
 database-enforced one-time broadcast approvals, passkey-bound registration of
 one independently observed and server-verified wallet coin per participant,
-deterministic three-input funding PSBT reproduction, and adversarial rejection
-of malformed or single-funder activation transactions. The complete migrations
-through 009 have also been applied and re-applied idempotently on an isolated
-PostgreSQL 16 instance. The database acceptance test proves one-winner
-concurrent approval creation and submission claims, required passkey-consumed
-state, globally unique funding outpoints, one immutable funding approval per
-seat, auditable retry after failure, proposal-digest foreign-key binding, and
-atomic concurrent rate-limit counting/reset without raw subject storage;
+deterministic three-input funding PSBT reproduction, external P2WPKH/P2TR
+signature normalization, exact finalization, unanimous restart binding, and
+adversarial rejection of malformed or single-funder activation transactions.
+The complete migrations through 011 have also been applied and re-applied
+idempotently on an isolated PostgreSQL 16 instance. The database acceptance
+test proves one-winner concurrent approval creation and submission claims,
+required passkey-consumed state, globally unique funding outpoints, one
+immutable funding approval and signature per seat, finalization/submission
+state consistency, unanimous restart audit preservation, auditable retry after
+failure, proposal-digest foreign-key binding, and atomic concurrent rate-limit
+counting/reset without raw subjects;
 that is not a substitute for the selected production database and a complete
 real-authenticator/backend run.
 
@@ -243,12 +258,16 @@ unspent output, and a passkey approves the exact outpoint, value, script, total
 fee, evidence source, and change destination. Only three distinct immutable
 approvals can produce the canonical unsigned PSBT, which every browser rebuilds
 from the confirmed roster and all three approvals. Bitcoin private keys remain
-in the friends' external wallets. The current checkpoint intentionally stops
-before collecting those wallet signatures or broadcasting.
+in the friends' external wallets. Each wallet signs only its own input; three
+independently verified signatures finalize the pristine PSBT; and all three
+friends passkey-approve its exact witness bytes. No browser action broadcasts.
+The private operator release and confirmation watcher remain closed until the
+external gates are genuinely met.
 
 Do not deploy until the explicit `live-predeployment-proof` command returns a
 real, locally authorized Sigbash mainnet signature. After private deployment,
-do not fund until every remaining gate passes. The broadcast server path
-remains unreachable without an active vault coin, which itself can only be
-recorded after all nine live Sigbash readiness proofs. No local, dry-run, or
-visual readiness result overrides either rule.
+do not fund until every remaining gate passes. Initial broadcast exists only as
+a private Bitcoin-Core operator command guarded by the exact finalization and
+review fingerprints; later user-approved broadcasts remain unavailable until
+an active vault coin exists. No local, dry-run, or visual readiness result
+overrides either rule.

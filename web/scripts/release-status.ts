@@ -129,6 +129,11 @@ if (process.env.DATABASE_URL) {
         roster_confirmations: number;
         readiness_proofs: number;
         current_coins: number;
+        funding_inputs: number;
+        funding_signatures: number;
+        funding_final_approvals: number;
+        funding_finalization_status: string | null;
+        funding_finalization_digest: string | null;
       }>>`
         SELECT
           (SELECT count(*)::integer FROM vaults) AS vaults,
@@ -143,7 +148,13 @@ if (process.env.DATABASE_URL) {
           (SELECT count(*)::integer FROM participant_sigbash_keys) AS live_sigbash_keys,
           (SELECT count(*)::integer FROM roster_confirmations) AS roster_confirmations,
           (SELECT count(*)::integer FROM participant_sigbash_readiness_proofs) AS readiness_proofs,
-          (SELECT count(*)::integer FROM vault_coins WHERE status = 'current') AS current_coins
+          (SELECT count(*)::integer FROM vault_coins WHERE status = 'current') AS current_coins,
+          (SELECT count(*)::integer FROM participant_funding_inputs) AS funding_inputs,
+          (SELECT count(*)::integer FROM participant_funding_signatures) AS funding_signatures,
+          (SELECT count(*)::integer FROM funding_final_approvals) AS funding_final_approvals,
+          (SELECT status FROM funding_finalizations LIMIT 1) AS funding_finalization_status,
+          (SELECT encode(finalization_digest, 'hex') FROM funding_finalizations LIMIT 1)
+            AS funding_finalization_digest
       `;
       const state = states[0]!;
       checks.push(check('exactly one three-person private-beta vault exists',
@@ -158,6 +169,19 @@ if (process.env.DATABASE_URL) {
         `${state.readiness_proofs}/9 proofs; ${state.ready_vaults} ready vault(s)`));
       checks.push(check('the pre-funding database contains no current Bitcoin coin',
         state.current_coins === 0, `${state.current_coins} current coin(s)`));
+      const untouchedFunding = state.funding_inputs === 0 && state.funding_signatures === 0 &&
+        state.funding_final_approvals === 0 && state.funding_finalization_status === null;
+      const unanimouslyApprovedFunding = state.funding_inputs === 3 && state.funding_signatures === 3 &&
+        state.funding_final_approvals === 3 && state.funding_finalization_status === 'approved' &&
+        /^[0-9a-f]{64}$/u.test(state.funding_finalization_digest || '');
+      checks.push(check(
+        'funding ceremony is either untouched or unanimously approved and still unbroadcast',
+        untouchedFunding || unanimouslyApprovedFunding,
+        `${state.funding_inputs}/3 inputs; ${state.funding_signatures}/3 signatures; ` +
+          `${state.funding_final_approvals}/3 final approvals; ` +
+          `status ${state.funding_finalization_status || 'not started'}; ` +
+          `digest ${state.funding_finalization_digest || 'none'}`,
+      ));
     } catch (error) {
       checks.push(check('production database readiness query succeeds', false, safeError(error)));
     } finally {
@@ -181,7 +205,8 @@ if (process.env.BITCOIN_BACKEND || process.env.BITCOIN_RPC_URL) {
 }
 
 const automatedPreflightPassed = checks.every((item) => item.ok);
-console.log(JSON.stringify({
+const reportBody = {
+  version: 1,
   phase: 'funding',
   automatedPreflightPassed,
   fundingAllowed: false,
@@ -196,7 +221,9 @@ console.log(JSON.stringify({
     : 'One or more mandatory automated funding gates are incomplete. Do not fund. This report does not evaluate the separate predeployment gate.',
   checks,
   manualGates,
-}, null, 2));
+};
+const reportDigest = createHash('sha256').update(JSON.stringify(reportBody)).digest('hex');
+console.log(JSON.stringify({ ...reportBody, reportDigest }, null, 2));
 if (!automatedPreflightPassed) process.exitCode = 1;
 
 function check(name: string, ok: boolean, detail?: string): Check {

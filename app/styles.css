@@ -46,8 +46,9 @@ h1 { max-width: 800px; margin: 18px 0; font-size: clamp(46px, 8vw, 92px); line-h
 .setup-card { padding: 34px; box-shadow: 0 30px 80px #0007; }
 .setup-card h2 { margin: 8px 0 12px; font-size: 32px; letter-spacing: -.03em; }
 .setup-card label { display: grid; gap: 8px; margin: 28px 0 18px; font-weight: 700; }
-.setup-card input { width: 100%; border: 1px solid #46483d; border-radius: 12px; background: #0f100e; color: var(--ink); padding: 14px 15px; outline: none; }
-.setup-card input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px #f5a62325; }
+.setup-card input, .setup-card textarea { width: 100%; border: 1px solid #46483d; border-radius: 12px; background: #0f100e; color: var(--ink); padding: 14px 15px; outline: none; }
+.setup-card textarea { min-height: 130px; resize: vertical; font: 12px/1.5 ui-monospace, monospace; }
+.setup-card input:focus, .setup-card textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px #f5a62325; }
 .setup-card button { width: 100%; border: 0; border-radius: 12px; padding: 15px 18px; background: var(--accent); color: #171109; font-weight: 850; cursor: pointer; }
 .setup-card button:disabled { cursor: wait; opacity: .6; }
 .form-message { color: var(--success); line-height: 1.45; }

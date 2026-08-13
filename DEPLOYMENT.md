@@ -116,14 +116,25 @@ rejected by the release report.
    Sigbash and confirming all three organizations are mainnet-enabled.
 8. Exercise backup/restore and mainnet-backend rejection, retry, mempool,
    confirmation, and reorganization behavior without a funded vault.
-9. Run `npm run web:release-status`. Only after its automated funding checks and
-   manual review are complete may funding be considered. Funding still requires
-   a new, explicit approval.
+9. Run `npm run web:release-status`. Save and review its `reportDigest`. Only
+   after its automated funding checks and every manual gate are complete may
+   funding be considered. Funding still requires a new, explicit approval.
 10. After that separate approval, each participant uses the web funding ceremony
     to passkey-approve one independently observed wallet coin and its change
     destination. Confirm that all three browsers reproduce the same PSBT
-    fingerprint before any external wallet signs it. The web service does not
-    possess the three wallet private keys and this step does not broadcast.
+    fingerprint before any external wallet signs it. Each wallet signs only its
+    own input; the service normalizes and independently verifies each signature,
+    finalizes the pristine PSBT, and requires all three friends to passkey-approve
+    the exact witness bytes. The service does not possess the wallet private
+    keys, and none of these browser steps broadcasts.
+11. Hash the owner-only successful `live-predeployment-proof` output and place
+    that SHA-256 value in `LIVE_SIGBASH_MAINNET_PROOF_DIGEST`. Place the reviewed
+    release report's `reportDigest` in `FUNDING_RELEASE_REPORT_DIGEST`. These are
+    non-secret review fingerprints, not substitutes for reviewing the proof.
+12. Only after a separate explicit funding decision, run the private
+    `web:broadcast-funding` command below against Bitcoin Core. Then keep
+    `web:watch-chain` scheduled; it activates only the exact stored transaction
+    after the configured confirmation depth.
 
 ## Backup and monitoring minimums
 
@@ -151,17 +162,31 @@ npm run web:release-status
 npm run web:watch-chain
 ```
 
-After a separately approved funding transaction reaches the configured
-confirmation depth, the only initial activation command is:
+The initial broadcast command has no HTTP equivalent and requires every
+reviewed fingerprint plus a literal mainnet confirmation phrase:
+
+```bash
+npm run web:broadcast-funding -- \
+  --vault-id <uuid> \
+  --finalization-digest <finalization-digest> \
+  --live-sigbash-proof-digest "$LIVE_SIGBASH_MAINNET_PROOF_DIGEST" \
+  --release-report-digest "$FUNDING_RELEASE_REPORT_DIGEST" \
+  --confirm-mainnet-broadcast BROADCAST_EXACT_APPROVED_FUNDING_TRANSACTION
+```
+
+The private watcher normally performs confirmed activation. The manual
+recovery command for the same boundary is:
 
 ```bash
 npm run web:record-funding -- --vault-id <uuid> --txid <txid> --vout <index>
 ```
 
-Do not run that command merely because the service is deployed or healthy. It
-rechecks the exact mainnet P2TR output, exactly three unique qualifying funding
-inputs, the complete transaction against the three passkey-approved PSBT,
-fee/change sanity, and the database's nine-proof ready state. On-chain
+Do not run either command merely because the service is deployed or healthy.
+Submission first runs Bitcoin Core `testmempoolaccept` and verifies the exact
+txid, vsize, and fee. Activation rechecks the exact approved witness bytes,
+three final passkey approvals, mainnet P2TR output, exactly three unique
+qualifying funding inputs, fee/change sanity, and the database's nine-proof
+ready state. On-chain
 structure cannot prove which friend owns an input, so each friend must verify
 their own wallet contribution and the complete transaction before signing; the
 human funding approval remains mandatory.

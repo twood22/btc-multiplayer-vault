@@ -104,6 +104,13 @@ export async function getFundingCeremonyStatus(userId: string): Promise<FundingC
 
 /** Exact proposal the activation boundary must match; unavailable before three approvals. */
 export async function getApprovedFundingProposalForVault(vaultId: string): Promise<FundingProposal> {
+  return (await getApprovedFundingPackageForVault(vaultId)).proposal;
+}
+
+export async function getApprovedFundingPackageForVault(vaultId: string): Promise<{
+  proposal: FundingProposal;
+  commitments: FundingInputCommitment[];
+}> {
   const confirmed = await getConfirmedVaultArtifactForVault(vaultId);
   const inputs = await loadApprovedFundingInputs(vaultId, confirmed);
   if (inputs.length !== 3) {
@@ -113,7 +120,14 @@ export async function getApprovedFundingProposalForVault(vaultId: string): Promi
   if (inputs.some((item) => item.fundingFeeSats !== feeSats)) {
     throw new Error('stored funding inputs approve inconsistent fees');
   }
-  return buildFundingProposal({ artifact: confirmed.artifact, commitments: inputs, fundingFeeSats: feeSats });
+  return {
+    commitments: inputs,
+    proposal: buildFundingProposal({
+      artifact: confirmed.artifact,
+      commitments: inputs,
+      fundingFeeSats: feeSats,
+    }),
+  };
 }
 
 export async function createFundingInputChallenge(input: {

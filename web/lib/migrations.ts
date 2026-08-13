@@ -8,6 +8,8 @@ export const EXPECTED_MIGRATION_VERSIONS = [
   '007_broadcast_approval',
   '008_security_rate_limits',
   '009_funding_ceremony',
+  '010_funding_signatures',
+  '011_funding_restart',
 ] as const;
 
 export const EXPECTED_MIGRATION_FILES = EXPECTED_MIGRATION_VERSIONS
