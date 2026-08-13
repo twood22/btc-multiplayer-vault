@@ -7,7 +7,7 @@ export default async function HomePage() {
     <main className="shell">
       <header className="brand-row">
         <div className="brand-mark" aria-hidden="true">₿</div>
-        <div>
+        <div className="brand-copy">
           <strong>Bitcoin Multiplayer Vault</strong>
           <span>Private beta</span>
         </div>

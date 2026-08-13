@@ -21,6 +21,10 @@ participant-only MuSig2 path, or the timelocked recovery path.
 - A fresh passkey assertion is required to retrieve and decrypt an envelope.
   The browser re-derives the participant's Bitcoin public identity and compares
   it to setup-time public material before reporting the key usable.
+- An explicit dashboard sign-out deletes the exact hashed server session,
+  expires its hardened cookie, and removes only vault-scoped ephemeral signing
+  state from the browser tab. The endpoint rejects cross-origin requests and is
+  safe to repeat after the session is already gone.
 - Strict CSP with request nonces. The only external connection origin is the
   configured HTTPS/WSS Sigbash service; its Go runtime is fetched through a
   same-origin route and checked against an operator-pinned SHA-384 digest, and

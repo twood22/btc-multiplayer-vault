@@ -8,6 +8,7 @@ import { SigbashReadinessProof } from '@/web/components/sigbash-readiness-proof'
 import { FinishKeySetup } from '@/web/components/finish-key-setup';
 import { VaultRuntimePanel } from '@/web/components/vault-runtime-panel';
 import { FundingCeremony } from '@/web/components/funding-ceremony';
+import { SignOutButton } from '@/web/components/sign-out-button';
 import { getRosterCeremonyStatus } from '@/web/lib/server/roster-store';
 import { getSigbashReadinessStatus } from '@/web/lib/server/sigbash-readiness-store';
 import { requireSessionUser } from '@/web/lib/server/session';
@@ -30,10 +31,11 @@ export default async function VaultPage() {
     <main className="shell dashboard-shell">
       <header className="brand-row">
         <div className="brand-mark" aria-hidden="true">₿</div>
-        <div>
+        <div className="brand-copy">
           <strong>{participant.vaultName}</strong>
           <span>Bitcoin Multiplayer Vault</span>
         </div>
+        <SignOutButton />
       </header>
       <section className="dashboard-heading">
         <p className="eyebrow">{participant.participantId} · {participant.displayName}</p>

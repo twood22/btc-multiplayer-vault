@@ -47,8 +47,9 @@ record('the fixed product roster is exactly three independent participant seats'
   assert.deepEqual(PARTICIPANTS.map((participant) => participant.id), ['alice', 'bob', 'carol']);
 });
 
-record('the user-facing signing, custody, funding, observation, and broadcast routes exist', () => {
+record('the user-facing session, signing, custody, funding, observation, and broadcast routes exist', () => {
   for (const path of [
+    'app/api/session/logout/route.ts',
     'app/api/passkeys/register/options/route.ts',
     'app/api/passkeys/recovery/register/options/route.ts',
     'app/api/sigbash/provision/register/route.ts',

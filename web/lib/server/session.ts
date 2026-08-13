@@ -38,3 +38,18 @@ export async function requireSessionUser(): Promise<string> {
   if (!userId) throw new Error('session expired');
   return userId;
 }
+
+export async function destroyCurrentSession(): Promise<void> {
+  const jar = await cookies();
+  const token = jar.get(cookieName())?.value;
+  if (token) {
+    await db()`DELETE FROM sessions WHERE token_hash = ${tokenHash(token)}`;
+  }
+  jar.set(cookieName(), '', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    path: '/',
+    maxAge: 0,
+  });
+}

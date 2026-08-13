@@ -21,7 +21,7 @@ test('keeps the server-rendered action surface inert when hydration cannot run',
   }
 });
 
-test('registers and independently PRF-unlocks the same participant key with two passkeys', async ({
+test('registers, recovers, independently PRF-unlocks, and signs out one identity with two passkeys', async ({
   page,
   context,
   baseURL,
@@ -194,6 +194,52 @@ test('registers and independently PRF-unlocks the same participant key with two 
       name: 'Participant key unlocked and identity verified',
     })).toBeVisible();
     for (const body of serverBoundBodies) expect(body).not.toContain('"results"');
+
+    // Sign out must revoke this exact server session and remove only vault-scoped
+    // ephemeral signing state from the browser tab.
+    await page.evaluate(() => {
+      sessionStorage.setItem('btc-vault:musig2-nonce:acceptance', 'encrypted nonce fixture');
+      sessionStorage.setItem('unrelated-session-key', 'preserve me');
+    });
+    const currentCookie = (await context.cookies()).find((cookie) =>
+      cookie.name === 'vault_session_dev' || cookie.name === '__Host-vault_session');
+    if (!currentCookie) throw new Error('authenticated session cookie is missing before sign-out');
+    const currentTokenHash = createHash('sha256').update(currentCookie.value).digest();
+    const currentSessionBefore = await sql<Array<{ count: number }>>`
+      SELECT count(*)::integer AS count FROM sessions WHERE token_hash = ${currentTokenHash}
+    `;
+    expect(currentSessionBefore[0]?.count).toBe(1);
+
+    const crossOriginAttempt = await context.request.post('/api/session/logout', {
+      data: {},
+      headers: { origin: 'https://not-the-vault.example' },
+    });
+    expect(crossOriginAttempt.status()).toBe(400);
+    const currentSessionAfterHostileRequest = await sql<Array<{ count: number }>>`
+      SELECT count(*)::integer AS count FROM sessions WHERE token_hash = ${currentTokenHash}
+    `;
+    expect(currentSessionAfterHostileRequest[0]?.count).toBe(1);
+
+    await page.getByRole('button', { name: 'Sign out' }).click();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByRole('heading', { name: 'Save together. Leave on your own terms.' })).toBeVisible();
+    expect(await page.evaluate(() => sessionStorage.getItem('btc-vault:musig2-nonce:acceptance'))).toBeNull();
+    expect(await page.evaluate(() => sessionStorage.getItem('unrelated-session-key'))).toBe('preserve me');
+    expect((await context.cookies()).some((cookie) =>
+      cookie.name === 'vault_session_dev' || cookie.name === '__Host-vault_session')).toBe(false);
+    const currentSessionAfter = await sql<Array<{ count: number }>>`
+      SELECT count(*)::integer AS count FROM sessions WHERE token_hash = ${currentTokenHash}
+    `;
+    expect(currentSessionAfter[0]?.count).toBe(0);
+    const repeatedSignOut = await page.evaluate(async () => {
+      const response = await fetch('/api/session/logout', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      return { status: response.status, body: await response.json() };
+    });
+    expect(repeatedSignOut).toEqual({ status: 200, body: { signedOut: true } });
   } finally {
     for (const authenticatorId of [recoveryAuthenticatorId, primaryAuthenticatorId]) {
       if (authenticatorId) {

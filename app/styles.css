@@ -21,9 +21,13 @@ button, input, select { font: inherit; }
 
 .shell { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 34px 0 80px; }
 .brand-row { display: flex; align-items: center; gap: 12px; }
-.brand-row div:last-child { display: flex; flex-direction: column; gap: 2px; }
+.brand-row .brand-copy { display: flex; flex-direction: column; gap: 2px; }
 .brand-row span { color: var(--muted); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
 .brand-mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; color: #111; background: var(--accent); font-size: 24px; font-weight: 800; }
+.sign-out-control { display: flex; align-items: center; gap: 12px; margin-left: auto; color: inherit; font-size: inherit; letter-spacing: 0; text-transform: none; }
+.sign-out-control button { border: 1px solid #46483d; border-radius: 10px; background: #121310; color: var(--ink); padding: 9px 12px; cursor: pointer; }
+.sign-out-control button:disabled { cursor: wait; opacity: .6; }
+.sign-out-control > span { max-width: 220px; color: var(--error); font-size: 11px; letter-spacing: 0; text-transform: none; }
 .hero { padding: 110px 0 0; }
 .eyebrow { color: var(--accent); font-size: 12px; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; }
 h1 { max-width: 800px; margin: 18px 0; font-size: clamp(46px, 8vw, 92px); line-height: .96; letter-spacing: -.055em; }

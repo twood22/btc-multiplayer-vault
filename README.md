@@ -35,6 +35,7 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Per-participant key custody | ✅ browser-distributed and passkey protected |
 | Recoverable passkey custody + encrypted Sigbash credentials/kits | ✅ implemented; real authenticator run still required |
 | Browser PRF setup/recovery/sign-in/unlock | ✅ Chromium + two virtual authenticators; physical devices still required |
+| Immediate session revocation and vault-tab cleanup | ✅ browser + PostgreSQL verified |
 | Immutable three-passkey roster gate | ✅ implemented; PostgreSQL 16 migrations verified, real authenticator run still required |
 | User-facing solo/cooperative/recovery/final signing | ✅ implemented and server re-authorized |
 | Passkey-bound three-wallet funding, external signatures, final approval, and unanimous restart | ✅ implemented; real wallets/authenticators still required |
