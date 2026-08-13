@@ -143,8 +143,12 @@ restart is immutable audit evidence and cannot occur after submission begins.
 
 Initial funding is released only by a private operator command. It requires the
 exact finalization fingerprint, the reviewed live-Sigbash proof fingerprint,
-the reviewed release-report fingerprint, an explicit mainnet phrase, and a
-private Bitcoin Core `testmempoolaccept` result for the exact bytes. A private
+the reviewed fingerprint of a fresh owner-only release artifact, an explicit
+mainnet phrase, and a private Bitcoin Core `testmempoolaccept` result for the
+exact bytes. The release artifact can be created only after unanimous final
+passkey approval and commits the same vault, finalization digest, transaction
+ID, live-proof digest, and passing automated/manual gate list; the broadcast
+command authenticates the file and rejects stale or mismatched evidence. A private
 watcher activates only that exact transaction after the configured confirmation
 depth.
 

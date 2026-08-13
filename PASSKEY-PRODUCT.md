@@ -89,10 +89,11 @@ participant-only MuSig2 path, or the timelocked recovery path.
   consensus-verified bytes and records interrupted/failed attempts without
   silently changing the transaction.
 - Initial funding has no HTTP broadcast endpoint. A private operator command
-  requires the exact finalization fingerprint, reviewed live-Sigbash-proof and
-  release-report fingerprints, an explicit mainnet confirmation phrase, and
-  Bitcoin Core `testmempoolaccept`; it submits only the unanimously approved
-  bytes. A private scheduler activates that exact transaction and advances
+  requires the exact finalization fingerprint, authenticated owner-only
+  live-Sigbash-proof and fresh release artifacts, their independently reviewed
+  fingerprints, an explicit mainnet confirmation phrase, and Bitcoin Core
+  `testmempoolaccept`; it submits only the unanimously approved bytes bound by
+  both artifacts. A private scheduler activates that exact transaction and advances
   later protocol state only after the required confirmations.
 - Database-atomic fixed-window rate limits cover unauthenticated credential
   ceremonies and authenticated unlock, Sigbash provisioning/readiness,
@@ -194,16 +195,21 @@ two ciphertext envelopes in PostgreSQL, and inspects server-bound assertions
 to ensure PRF results never leave the browser. This is meaningful browser-level
 coverage, but virtual authenticators do not satisfy the physical-passkey gate.
 
-`web:release-status` is the post-deployment funding report and prints only
-non-secret gate summaries. It verifies the
+`web:release-status` is the post-deployment funding audit and prints only
+non-secret gate summaries plus a non-authorizing `statusDigest`. It verifies the
 declared Node runtime, HTTPS WebAuthn/RP binding, independent chain source,
 explicit tiny-mainnet amount cap, funding fee, and recovery delay, current upstream Sigbash
 runtime hashes, a non-local TLS PostgreSQL endpoint and migrations, the exact
 three-member/two-passkey/nine-key/three-confirmation/nine-proof database state,
 the protected live-Sigbash proof receipt and its reviewed digest, absence of a
-pre-funding coin, and a mainnet Bitcoin backend. It always keeps
-funding gate closed until the listed real-device and operational review items
-are documented; funding remains a later separate decision. The earlier
+pre-funding coin, and a mainnet Bitcoin backend. After unanimous final
+transaction approval, an explicit manual-gate acknowledgement can write a
+fresh owner-only release artifact. That canonical artifact binds the exact
+vault, finalization digest and txid, live-proof digest, and passing checks; the
+private broadcast command authenticates it and rejects tampering, unsafe paths,
+mismatched bindings, future timestamps, or reports older than 30 minutes. It
+still records `fundingAllowed: false`, because funding remains a later separate
+human decision. The earlier
 deployment gate creates that receipt through the explicit
 `live-predeployment-proof` command described in `DEPLOYMENT.md`.
 

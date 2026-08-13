@@ -194,6 +194,7 @@ export async function getPasskeyApprovedFinalizedFundingForVault(
 export async function submitPasskeyApprovedFunding(input: {
   vaultId: string;
   expectedFinalizationDigest: string;
+  expectedFinalTxid: string;
 }): Promise<FundingBroadcastResult> {
   if (process.env.BITCOIN_BACKEND === 'esplora') {
     throw new Error('initial funding broadcast requires private Bitcoin Core testmempoolaccept');
@@ -201,9 +202,15 @@ export async function submitPasskeyApprovedFunding(input: {
   if (!/^[0-9a-f]{64}$/u.test(input.expectedFinalizationDigest)) {
     throw new Error('expected funding finalization digest is invalid');
   }
+  if (!/^[0-9a-f]{64}$/u.test(input.expectedFinalTxid)) {
+    throw new Error('expected funding transaction id is invalid');
+  }
   const finalization = await getPasskeyApprovedFinalizedFundingForVault(input.vaultId);
   if (finalization.finalizationDigest !== input.expectedFinalizationDigest) {
     throw new Error('operator approved a different funding finalization digest');
+  }
+  if (finalization.finalTxid !== input.expectedFinalTxid) {
+    throw new Error('protected release report approved a different funding transaction id');
   }
   if (finalization.status === 'broadcast' || finalization.status === 'confirmed') {
     await assertFundingObservedOnBackend(finalization);

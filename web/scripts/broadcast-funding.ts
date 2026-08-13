@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { loadEnvFile } from 'node:process';
 import { assertReviewedNodeRuntime } from '../../src/runtime-version';
+import { readProtectedFundingReleaseReport } from '../../src/funding-release-report';
 import { readProtectedLiveSigbashProofReceipt } from '../../src/live-proof-receipt';
 import { submitPasskeyApprovedFunding } from '../lib/server/funding-signature-store';
 
@@ -25,6 +26,15 @@ readProtectedLiveSigbashProofReceipt(
 if (releaseReportDigest !== process.env.FUNDING_RELEASE_REPORT_DIGEST) {
   throw new Error('funding release report digest does not match the protected operator environment');
 }
+const releaseReport = readProtectedFundingReleaseReport(
+  process.env.FUNDING_RELEASE_REPORT_PATH || 'live-run/funding-release-report.json',
+  {
+    reportDigest: releaseReportDigest,
+    vaultId,
+    finalizationDigest,
+    liveSigbashProofDigest: liveProofDigest,
+  },
+);
 if (args['confirm-mainnet-broadcast'] !== 'BROADCAST_EXACT_APPROVED_FUNDING_TRANSACTION') {
   throw new Error(
     '--confirm-mainnet-broadcast must equal BROADCAST_EXACT_APPROVED_FUNDING_TRANSACTION',
@@ -34,6 +44,7 @@ if (args['confirm-mainnet-broadcast'] !== 'BROADCAST_EXACT_APPROVED_FUNDING_TRAN
 const result = await submitPasskeyApprovedFunding({
   vaultId,
   expectedFinalizationDigest: finalizationDigest,
+  expectedFinalTxid: releaseReport.fundingFinalization.finalTxid,
 });
 console.log(JSON.stringify({
   ok: true,
@@ -44,6 +55,13 @@ console.log(JSON.stringify({
 
 function parseArgs(values: string[]): Record<string, string> {
   const parsed: Record<string, string> = {};
+  const supported = new Set([
+    'vault-id',
+    'finalization-digest',
+    'live-sigbash-proof-digest',
+    'release-report-digest',
+    'confirm-mainnet-broadcast',
+  ]);
   for (let index = 0; index < values.length; index += 1) {
     const name = values[index];
     const value = values[index + 1];
@@ -54,7 +72,11 @@ function parseArgs(values: string[]): Record<string, string> {
         '--confirm-mainnet-broadcast BROADCAST_EXACT_APPROVED_FUNDING_TRANSACTION',
       );
     }
-    parsed[name.slice(2)] = value;
+    const key = name.slice(2);
+    if (!supported.has(key) || parsed[key]) {
+      throw new Error(`unsupported or repeated funding-broadcast argument: --${key}`);
+    }
+    parsed[key] = value;
     index += 1;
   }
   return parsed;

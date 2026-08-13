@@ -76,11 +76,13 @@ record('initial funding has no browser-accessible broadcast route', () => {
   assert.deepEqual(fundingBroadcastRoutes, []);
 });
 
-record('the private funding command is bound to the protected live-proof receipt', () => {
+record('the private funding command is bound to protected live-proof and funding-release artifacts', () => {
   const source = readFileSync(resolve(root, 'web/scripts/broadcast-funding.ts'), 'utf8');
   assert.match(source, /readProtectedLiveSigbashProofReceipt/u);
   assert.match(source, /LIVE_SIGBASH_MAINNET_PROOF_DIGEST/u);
   assert.match(source, /FUNDING_RELEASE_REPORT_DIGEST/u);
+  assert.match(source, /readProtectedFundingReleaseReport/u);
+  assert.match(source, /expectedFinalTxid/u);
   assert.match(source, /submitPasskeyApprovedFunding/u);
 });
 

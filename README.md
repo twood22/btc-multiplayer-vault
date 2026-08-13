@@ -328,11 +328,22 @@ input scriptPubKey, so you only pass `--participant`.
    npm run funding-psbt -- --inputs-json '[{"participantId":"alice",...},...]' --fee-sats 3000
    ```
 
-   After independently reviewing the successful live Sigbash proof and a fresh
-   `web:release-status` report, record their non-secret fingerprints in the
-   protected operator environment. A separate explicit operator decision can
-   then submit only the unanimously approved bytes through private Bitcoin
-   Core preflight:
+   After independently reviewing the successful live Sigbash proof and all
+   automated and manual gates, write a fresh protected report only after the
+   three final passkey approvals:
+
+   ```bash
+   npm run web:release-status -- \
+     --write-protected-report live-run/funding-release-report.json \
+     --confirm-manual-gates REVIEWED_EVERY_MANUAL_FUNDING_GATE
+   ```
+
+   Record its non-secret `reportDigest` and exact path in the protected
+   operator environment. The private command authenticates that owner-only
+   artifact and requires it to bind the same vault, finalization, transaction,
+   and live proof within a 30-minute window. A separate explicit operator
+   decision can then submit only the unanimously approved bytes through private
+   Bitcoin Core preflight:
 
    ```bash
    npm run web:broadcast-funding -- \

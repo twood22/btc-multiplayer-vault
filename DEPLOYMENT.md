@@ -117,10 +117,16 @@ rejected by the release report.
    Sigbash and confirming all three organizations are mainnet-enabled.
 8. Exercise backup/restore and mainnet-backend rejection, retry, mempool,
    confirmation, and reorganization behavior without a funded vault.
-9. Run `npm run web:release-status`. Save and review its `reportDigest`. Only
-   after its automated funding checks and every manual gate are complete may
-   funding be considered. Funding still requires a new, explicit approval.
-10. After that separate approval, each participant uses the web funding ceremony
+9. Place the independently reviewed protected receipt's `proofDigest` in
+   `LIVE_SIGBASH_MAINNET_PROOF_DIGEST` and keep
+   `LIVE_SIGBASH_MAINNET_PROOF_RECEIPT` pointed at that owner-only receipt.
+   Mount the receipt read-only into the release-report and funding-broadcast
+   operator jobs; never bake it into the application image. Run
+   `npm run web:release-status` as a preliminary pre-funding audit. Review its
+   checks and `statusDigest`; this status output is not a broadcast artifact
+   and cannot authorize funding.
+10. After separately authorizing the non-broadcast funding ceremony, each
+    participant uses the web funding ceremony
     to passkey-approve one independently observed wallet coin and its change
     destination. Confirm that all three browsers reproduce the same PSBT
     fingerprint before any external wallet signs it. Each wallet signs only its
@@ -128,15 +134,27 @@ rejected by the release report.
     finalizes the pristine PSBT, and requires all three friends to passkey-approve
     the exact witness bytes. The service does not possess the wallet private
     keys, and none of these browser steps broadcasts.
-11. Place the independently reviewed protected receipt's `proofDigest` in
-    `LIVE_SIGBASH_MAINNET_PROOF_DIGEST` and keep
-    `LIVE_SIGBASH_MAINNET_PROOF_RECEIPT` pointed at that owner-only receipt.
-    Mount the receipt read-only into the release-report and funding-broadcast
-    operator jobs; never bake it into the application image.
-    Place the reviewed release report's `reportDigest` in
-    `FUNDING_RELEASE_REPORT_DIGEST`. These are non-secret review fingerprints,
-    not substitutes for reviewing the evidence.
-12. Only after a separate explicit funding decision, run the private
+11. After all three final passkey approvals, rerun the complete release audit
+    and deliberately acknowledge every manual gate while writing a fresh
+    owner-only artifact to a new path:
+
+    ```bash
+    npm run web:release-status -- \
+      --write-protected-report live-run/funding-release-report.json \
+      --confirm-manual-gates REVIEWED_EVERY_MANUAL_FUNDING_GATE
+    ```
+
+    The writer refuses incomplete automated checks, an untouched or partially
+    approved funding ceremony, unsafe file permissions, and replacement of a
+    different existing report. Independently review the artifact, place its
+    `reportDigest` in `FUNDING_RELEASE_REPORT_DIGEST`, and point
+    `FUNDING_RELEASE_REPORT_PATH` at that exact file. The artifact binds the
+    vault UUID, finalization digest and txid, live-proof digest, and complete
+    gate list. It expires for broadcast after 30 minutes; generate a fresh file
+    at a fresh path if the window closes. These are non-secret review
+    fingerprints, not substitutes for reviewing the evidence.
+12. Only after a final, separate explicit broadcast decision made after
+    reviewing the protected artifact from step 11, run the private
     `web:broadcast-funding` command below against Bitcoin Core. Then keep
     `web:watch-chain` scheduled; it activates only the exact stored transaction
     after the configured confirmation depth.
@@ -164,6 +182,7 @@ Run these only in a private job or shell attached to the same immutable image:
 npm run web:migrate
 npm run web:create-invite -- --vault-name '<reviewed name>' --participant alice
 npm run web:release-status
+npm run web:release-status -- --write-protected-report live-run/funding-release-report.json --confirm-manual-gates REVIEWED_EVERY_MANUAL_FUNDING_GATE
 npm run web:watch-chain
 ```
 

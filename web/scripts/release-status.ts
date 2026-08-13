@@ -3,6 +3,8 @@ import { existsSync } from 'node:fs';
 import { loadEnvFile } from 'node:process';
 import postgres from 'postgres';
 import { getBlockchainInfo } from '../../src/bitcoin-rpc';
+import { createFundingReleaseReport } from '../../src/funding-release-report';
+import { writeProtectedFile } from '../../src/operator-environment';
 import { reviewedNodeRuntimeCheck } from '../../src/runtime-version';
 import { readProtectedLiveSigbashProofReceipt } from '../../src/live-proof-receipt';
 import { databaseEndpointCheck } from '../lib/database-config';
@@ -10,16 +12,27 @@ import { EXPECTED_MIGRATION_VERSIONS } from '../lib/migrations';
 
 if (existsSync('.env.local')) loadEnvFile('.env.local');
 
+const outputArgs = parseOutputArgs(process.argv.slice(2));
+
 interface Check { name: string; ok: boolean; detail?: string }
 const checks: Check[] = [];
+let verifiedProofDigest: string | null = null;
+let approvedFundingBinding: {
+  vaultId: string;
+  finalizationDigest: string;
+  finalTxid: string;
+} | null = null;
 const manualGates = [
   'Independently review the protected predeployment live-Sigbash receipt and its consensus-authorized mainnet signature.',
   'Sigbash must explicitly enable mainnet for all three independent participant organization hashes.',
   'Each friend must complete setup and recovery with two real, distinct PRF-capable passkeys.',
   'Each friend must independently review the unanimous roster and tiny-mainnet economics.',
+  'The deployed private service must use the independently reviewed immutable image digest and narrow private access control.',
   'Before initial wallet signing, all three friends must review the same funding PSBT fingerprint, inputs, change outputs, vault output, and fee.',
+  'Three independent real wallets must sign only their own P2WPKH or P2TR funding inputs and all three final passkey approvals must be completed.',
   'The selected production database backup and restore procedure must be exercised.',
-  'Funding remains a separate explicit decision after this report passes.',
+  'The private Bitcoin Core path must complete rejection, retry, duplicate, interruption, mempool, confirmation, and reorganization drills.',
+  'The operator has documented that this report does not authorize funding and a separate explicit broadcast decision is still required.',
 ];
 
 try {
@@ -28,6 +41,7 @@ try {
     process.env.LIVE_SIGBASH_MAINNET_PROOF_RECEIPT || 'live-run/predeployment-proof-receipt.json',
     proofDigest,
   );
+  verifiedProofDigest = receipt.proofDigest;
   checks.push(check(
     'protected live Sigbash mainnet proof receipt is present and matches its reviewed digest',
     true,
@@ -154,6 +168,8 @@ if (process.env.DATABASE_URL) {
         funding_final_approvals: number;
         funding_finalization_status: string | null;
         funding_finalization_digest: string | null;
+        funding_final_txid: string | null;
+        vault_id: string | null;
       }>>`
         SELECT
           (SELECT count(*)::integer FROM vaults) AS vaults,
@@ -174,7 +190,10 @@ if (process.env.DATABASE_URL) {
           (SELECT count(*)::integer FROM funding_final_approvals) AS funding_final_approvals,
           (SELECT status FROM funding_finalizations LIMIT 1) AS funding_finalization_status,
           (SELECT encode(finalization_digest, 'hex') FROM funding_finalizations LIMIT 1)
-            AS funding_finalization_digest
+            AS funding_finalization_digest,
+          (SELECT encode(final_txid, 'hex') FROM funding_finalizations LIMIT 1)
+            AS funding_final_txid,
+          (SELECT id::text FROM vaults LIMIT 1) AS vault_id
       `;
       const state = states[0]!;
       checks.push(check('exactly one three-person private-beta vault exists',
@@ -193,7 +212,15 @@ if (process.env.DATABASE_URL) {
         state.funding_final_approvals === 0 && state.funding_finalization_status === null;
       const unanimouslyApprovedFunding = state.funding_inputs === 3 && state.funding_signatures === 3 &&
         state.funding_final_approvals === 3 && state.funding_finalization_status === 'approved' &&
-        /^[0-9a-f]{64}$/u.test(state.funding_finalization_digest || '');
+        /^[0-9a-f]{64}$/u.test(state.funding_finalization_digest || '') &&
+        /^[0-9a-f]{64}$/u.test(state.funding_final_txid || '') && Boolean(state.vault_id);
+      if (unanimouslyApprovedFunding) {
+        approvedFundingBinding = {
+          vaultId: state.vault_id!,
+          finalizationDigest: state.funding_finalization_digest!,
+          finalTxid: state.funding_final_txid!,
+        };
+      }
       checks.push(check(
         'funding ceremony is either untouched or unanimously approved and still unbroadcast',
         untouchedFunding || unanimouslyApprovedFunding,
@@ -242,8 +269,48 @@ const reportBody = {
   checks,
   manualGates,
 };
-const reportDigest = createHash('sha256').update(JSON.stringify(reportBody)).digest('hex');
-console.log(JSON.stringify({ ...reportBody, reportDigest }, null, 2));
+const statusDigest = createHash('sha256').update(JSON.stringify(reportBody)).digest('hex');
+let protectedRelease: null | {
+  path: string;
+  reused: boolean;
+  reportDigest: string;
+  vaultId: string;
+  finalizationDigest: string;
+  finalTxid: string;
+} = null;
+if (outputArgs.outputPath) {
+  if (!automatedPreflightPassed) {
+    throw new Error('refusing to write a funding release report while an automated gate is incomplete');
+  }
+  if (!approvedFundingBinding) {
+    throw new Error('refusing to write a funding release report before unanimous final transaction approval');
+  }
+  if (!verifiedProofDigest) {
+    throw new Error('refusing to write a funding release report without the authenticated live Sigbash proof');
+  }
+  const report = createFundingReleaseReport({
+    createdAt: new Date().toISOString(),
+    vaultId: approvedFundingBinding.vaultId,
+    finalizationDigest: approvedFundingBinding.finalizationDigest,
+    finalTxid: approvedFundingBinding.finalTxid,
+    liveSigbashProofDigest: verifiedProofDigest,
+    checks,
+    manualGates,
+    manualReviewAcknowledged: outputArgs.manualReviewAcknowledged,
+  });
+  const written = writeProtectedFile(
+    outputArgs.outputPath,
+    `${JSON.stringify(report, null, 2)}\n`,
+  );
+  protectedRelease = {
+    ...written,
+    reportDigest: report.reportDigest,
+    vaultId: report.vaultId,
+    finalizationDigest: report.fundingFinalization.finalizationDigest,
+    finalTxid: report.fundingFinalization.finalTxid,
+  };
+}
+console.log(JSON.stringify({ ...reportBody, statusDigest, protectedRelease }, null, 2));
 if (!automatedPreflightPassed) process.exitCode = 1;
 
 function check(name: string, ok: boolean, detail?: string): Check {
@@ -290,4 +357,35 @@ async function runtimePinCheck(name: string, rawUrl: string, expected: string | 
 function safeError(error: unknown): string {
   const message = error instanceof Error ? error.message : 'check failed';
   return message.replace(/postgres(?:ql)?:\/\/[^\s]+/giu, '[database URL redacted]').slice(0, 300);
+}
+
+function parseOutputArgs(values: string[]): {
+  outputPath: string | null;
+  manualReviewAcknowledged: boolean;
+} {
+  const parsed: Record<string, string> = {};
+  for (let index = 0; index < values.length; index += 2) {
+    const name = values[index];
+    const value = values[index + 1];
+    if (!name?.startsWith('--') || !value || value.startsWith('--')) {
+      throw new Error(
+        'usage: [--write-protected-report <path> ' +
+        '--confirm-manual-gates REVIEWED_EVERY_MANUAL_FUNDING_GATE]',
+      );
+    }
+    const key = name.slice(2);
+    if (!['write-protected-report', 'confirm-manual-gates'].includes(key) || parsed[key]) {
+      throw new Error(`unsupported or repeated release-status argument: --${key}`);
+    }
+    parsed[key] = value;
+  }
+  const outputPath = parsed['write-protected-report'] || null;
+  const acknowledgement = parsed['confirm-manual-gates'];
+  if (Boolean(outputPath) !== Boolean(acknowledgement)) {
+    throw new Error('protected release output and manual-gate acknowledgement must be supplied together');
+  }
+  if (acknowledgement && acknowledgement !== 'REVIEWED_EVERY_MANUAL_FUNDING_GATE') {
+    throw new Error('--confirm-manual-gates must equal REVIEWED_EVERY_MANUAL_FUNDING_GATE');
+  }
+  return { outputPath, manualReviewAcknowledged: Boolean(acknowledgement) };
 }
