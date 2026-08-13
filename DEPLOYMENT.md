@@ -42,6 +42,20 @@ The web role exposes:
 Neither endpoint checks or bypasses Sigbash, passkey, roster, broadcast, or
 funding gates. Configure the platform's health probe to use the readiness path.
 
+Before building a release image, exercise the same optimized standalone output
+and static-asset layout used by the container:
+
+```bash
+npm run web:test:browser:production
+```
+
+This command creates disposable PostgreSQL state, builds the production bundle,
+and runs the full Chromium passkey and three-participant cooperative MuSig2
+suite. It contacts neither Sigbash nor Bitcoin and never broadcasts. A passing
+result proves the optimized local bundle renders and executes; it does not
+prove the later immutable container digest, HTTPS proxy, physical authenticators,
+live Sigbash service, production database, or mainnet backend.
+
 ## Required runtime configuration
 
 Set the variables documented in `.env.example`, including:

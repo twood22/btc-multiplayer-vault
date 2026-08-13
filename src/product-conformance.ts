@@ -132,6 +132,20 @@ record('the release surface includes an actual Bitcoin Core reorganization drill
   assert.match(acceptance, /reconcileConfirmedChainState/u);
 });
 
+record('the release surface exercises the optimized standalone browser product', () => {
+  const packageJson = readFileSync(resolve(root, 'package.json'), 'utf8');
+  const runner = readFileSync(
+    resolve(root, 'scripts/run-production-browser-acceptance.sh'),
+    'utf8',
+  );
+  assert.match(packageJson, /web:test:browser:production/u);
+  assert.match(runner, /npm run web:build/u);
+  assert.match(runner, /\.next\/standalone\/server\.js/u);
+  assert.match(runner, /cooperative-musig2\.spec\.ts/u);
+  assert.match(runner, /passkey-prf\.spec\.ts/u);
+  assert.match(runner, /never live Sigbash or funding/u);
+});
+
 record('every required PostgreSQL product-state migration is present', () => {
   const actual = readdirSync(resolve(root, 'db/migrations'))
     .filter((name) => name.endsWith('.sql'))

@@ -163,6 +163,7 @@ npm run web:typecheck
 npm run web:test
 npm run web:test:db # requires a disposable or dedicated empty PostgreSQL database
 npm run web:test:browser # requires the migrated database, running web app, and Playwright Chromium
+npm run web:test:browser:production # builds and exercises the optimized standalone bundle in isolation
 npm run web:build
 npm run web:release-status # read-only; exits nonzero until every automated gate passes
 npm test
@@ -206,14 +207,20 @@ replacement re-inclusion, and a controlled transport failure;
 that is not a substitute for the selected production database and a complete
 real-authenticator/backend run.
 
-The Playwright test runs the production HTTP and PostgreSQL paths in Chromium
-with two separate PRF-capable virtual authenticators: a platform passkey and a
-USB recovery key. It registers and encrypts the participant key, authorizes and
-rewraps the exact same identity for recovery, clears sessions, signs in and
-unlocks independently with each credential, verifies one public identity and
-two ciphertext envelopes in PostgreSQL, and inspects server-bound assertions
-to ensure PRF results never leave the browser. This is meaningful browser-level
-coverage, but virtual authenticators do not satisfy the physical-passkey gate.
+The Playwright suite runs the HTTP and PostgreSQL paths in Chromium. It covers
+the inert pre-hydration surface, independent primary and recovery PRF passkeys,
+and a three-browser cooperative MuSig2 ceremony with six encrypted passkey
+envelopes. The ceremony survives a reload between nonce and partial rounds,
+persists only public contributions, independently verifies the final consensus
+transaction, and never broadcasts. `web:test:browser:production` creates a
+fresh PostgreSQL 16 cluster, builds the optimized standalone application,
+copies the exact static assets used by the container, starts that bundle with
+production settings, and runs the entire suite against it. This catches missing
+production JavaScript or static assets that development-server acceptance
+cannot expose. Synthetic public Sigbash registrations and the observed coin are
+explicit test prerequisites; no Sigbash runtime or Bitcoin backend is contacted,
+and virtual authenticators do not satisfy the live-service, physical-passkey,
+container-image, deployment, or funding gates.
 
 `web:release-status` is the post-deployment funding audit and prints only
 non-secret gate summaries plus a non-authorizing `statusDigest`. It verifies the
@@ -272,10 +279,11 @@ deployed, the following gates remain mandatory before funding:
    with real authenticators. The migrations pass PostgreSQL 16 locally, but no
    real Sigbash registrations are present and the database-backed ceremony has
    not yet been run end to end.
-6. Expand the seeded database and virtual-authenticator browser tests from
-   passkey custody and broadcast approval to the full roster/signing lifecycle;
-   rate limiting, audit events that never contain secrets, backup/restore
-   drills, and operational monitoring.
+6. Expand the seeded database and virtual-authenticator browser acceptance
+   beyond the now-covered unanimous roster and distributed cooperative MuSig2
+   lifecycle to the recovery, final-sweep, funding-wallet, and live-Sigbash solo
+   surfaces without presenting local fixtures as external evidence; retain
+   rate-limit, secret-free audit, backup/restore, and operational drills.
 7. Exercise the implemented passkey-approved broadcast and private chain
    watcher against the selected production Bitcoin backend. Verify rejection,
    duplicate submission, interrupted submission, mempool, confirmation, and
