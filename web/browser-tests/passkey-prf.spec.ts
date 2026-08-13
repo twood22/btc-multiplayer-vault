@@ -2,6 +2,25 @@ import { createHash, randomBytes } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import postgres from 'postgres';
 
+test('keeps the server-rendered action surface inert when hydration cannot run', async ({
+  browser,
+  baseURL,
+}) => {
+  if (!baseURL) throw new Error('browser test base URL is required');
+  const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
+  const page = await context.newPage();
+
+  try {
+    await page.goto('/');
+    await expect(page.locator('body')).toHaveAttribute('inert', '');
+    await expect(page.locator('body')).toHaveAttribute('aria-busy', 'true');
+    await expect(page.locator('button')).toContainText('Sign in with a passkey');
+    expect(await page.locator('body').evaluate((body) => (body as HTMLElement).inert)).toBe(true);
+  } finally {
+    await context.close();
+  }
+});
+
 test('registers and independently PRF-unlocks the same participant key with two passkeys', async ({
   page,
   context,
@@ -49,6 +68,8 @@ test('registers and independently PRF-unlocks the same participant key with two 
 
   try {
     await page.goto(`/join/${token}`);
+    await expect(page.locator('body')).not.toHaveAttribute('inert', '');
+    await expect(page.locator('body')).not.toHaveAttribute('aria-busy', 'true');
     await page.getByLabel('Your name').fill('Alice Browser Test');
     await page.getByRole('button', { name: 'Create my passkey' }).click();
     await expect(page.getByRole('heading', { name: 'Your seat is secured' })).toBeVisible();

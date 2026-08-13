@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { HydrationReady } from '../web/components/hydration-ready';
 import './styles.css';
 
 export const metadata: Metadata = {
@@ -10,7 +11,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body inert aria-busy="true">
+        {children}
+        <HydrationReady />
+      </body>
     </html>
   );
 }
