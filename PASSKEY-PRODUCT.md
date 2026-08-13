@@ -168,6 +168,7 @@ npm run web:test
 npm run web:test:db # requires a disposable or dedicated empty PostgreSQL database
 npm run web:test:browser # advanced: also requires the isolated chain-fixture port and matching app RPC URL
 npm run web:test:browser:production # builds and exercises the optimized standalone bundle in isolation
+npm run web:test:browser:container  # engine-enabled Linux: builds and exercises the exact local image
 npm run web:build
 npm run web:release-status # read-only; exits nonzero until every automated gate passes
 npm test
@@ -248,6 +249,12 @@ test-wallet keys, and mainnet-shaped chain/Core responses are explicit test
 prerequisites; no external Sigbash runtime or Bitcoin backend is contacted, and
 virtual authenticators do not satisfy the live-service, physical-passkey,
 real-wallet, container-image, deployment, or funding gates.
+
+`web:test:browser:container` runs that same isolated suite against the exact
+Dockerfile image as its unprivileged runtime user and prints its local image ID.
+It requires a Linux container engine and has not passed merely because the
+standalone command passed; a registry manifest digest is still separate
+deployment evidence.
 
 `web:release-status` is the post-deployment funding audit and prints only
 non-secret gate summaries plus a non-authorizing `statusDigest`. It verifies the

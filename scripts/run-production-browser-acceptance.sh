@@ -6,6 +6,14 @@ set -euo pipefail
 # chain responses, and ephemeral wallet signers used by the browser tests are
 # explicit prerequisites, never live Sigbash, real-wallet, or funding evidence.
 
+container_acceptance=${CONTAINER_ACCEPTANCE:-false}
+container_engine=${CONTAINER_ENGINE:-docker}
+container_image_tag=${CONTAINER_IMAGE_TAG:-btc-multiplayer-vault:local-acceptance}
+if [ "$container_acceptance" = true ] && ! command -v "$container_engine" >/dev/null 2>&1; then
+  echo "Container acceptance requires the configured engine: $container_engine" >&2
+  exit 1
+fi
+
 readonly DEFAULT_POSTGRES_BIN='/home/codex/.cache/btc-multiplayer-vault/postgresql-16.14/usr/lib/postgresql/16/bin'
 readonly DEFAULT_POSTGRES_LIB='/home/codex/.cache/btc-multiplayer-vault/postgresql-16.14/usr/lib/x86_64-linux-gnu'
 
@@ -34,14 +42,20 @@ fi
 work_dir=$(mktemp -d /tmp/btc-vault-production-browser.XXXXXX)
 postgres_started=false
 web_started=false
+container_started=false
 acceptance_passed=false
+container_image_id=''
 
 cleanup() {
   safe_to_trash=true
   preserve_diagnostics=false
   if [ "$acceptance_passed" != true ]; then preserve_diagnostics=true; fi
   if [ "$web_started" = true ]; then
-    kill "$web_pid" >/dev/null 2>&1 || true
+    if [ "$container_started" = true ]; then
+      "$container_engine" stop --time 10 "$container_name" >/dev/null 2>&1 || true
+    else
+      kill "$web_pid" >/dev/null 2>&1 || true
+    fi
     wait "$web_pid" >/dev/null 2>&1 || true
     if kill -0 "$web_pid" >/dev/null 2>&1; then safe_to_trash=false; fi
   fi
@@ -106,12 +120,34 @@ export RECOVERY_DELAY_BLOCKS=144
 export BROWSER_TEST_BASE_URL="$WEBAUTHN_ORIGIN"
 
 npm run web:migrate >/dev/null
-npm run web:build
-mkdir -p .next/standalone/.next/static
-cp -a .next/static/. .next/standalone/.next/static/
+if [ "$container_acceptance" = true ]; then
+  container_name="btc-vault-container-acceptance-$$"
+  "$container_engine" build --pull --tag "$container_image_tag" .
+  container_image_id=$("$container_engine" image inspect --format '{{.Id}}' "$container_image_tag")
+  if [[ ! "$container_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo 'Container engine returned an invalid local image ID' >&2
+    exit 1
+  fi
+  "$container_engine" run --rm --name "$container_name" --network host \
+    --env NODE_ENV --env NEXT_TELEMETRY_DISABLED \
+    --env DATABASE_URL --env WEBAUTHN_RP_ID --env WEBAUTHN_ORIGIN --env APP_ORIGIN \
+    --env CHAIN_OBSERVATION_ORIGINS --env BITCOIN_BACKEND --env BITCOIN_RPC_URL \
+    --env VAULT_CONFIRMATIONS_REQUIRED --env VAULT_DEPOSIT_SATS \
+    --env PRIVATE_BETA_MAX_DEPOSIT_SATS --env VAULT_FUNDING_FEE_SATS \
+    --env VAULT_SOLO_FEE_SATS --env VAULT_SOLO_FEE_BUDGET_SATS \
+    --env VAULT_COOP_FEE_SATS --env VAULT_RECOVERY_FEE_SATS \
+    --env VAULT_FINAL_SWEEP_FEE_SATS --env RECOVERY_DELAY_BLOCKS \
+    --env "HOSTNAME=127.0.0.1" --env "PORT=$web_port" \
+    "$container_image_tag" >"$work_dir/web.log" 2>&1 &
+  container_started=true
+else
+  npm run web:build
+  mkdir -p .next/standalone/.next/static
+  cp -a .next/static/. .next/standalone/.next/static/
 
-HOSTNAME=127.0.0.1 PORT="$web_port" \
-  "$node_executable" .next/standalone/server.js >"$work_dir/web.log" 2>&1 &
+  HOSTNAME=127.0.0.1 PORT="$web_port" \
+    "$node_executable" .next/standalone/server.js >"$work_dir/web.log" 2>&1 &
+fi
 web_pid=$!
 web_started=true
 
@@ -139,5 +175,11 @@ npx playwright test \
   web/browser-tests/funding-wallet.spec.ts
 
 acceptance_passed=true
-printf 'Optimized standalone bundle, PostgreSQL %s, and all browser acceptance checks passed.\n' \
-  "$("$postgres_bin/postgres" --version | awk '{print $3}')"
+if [ "$container_acceptance" = true ]; then
+  printf 'Local container image %s (%s), PostgreSQL %s, and all browser acceptance checks passed.\n' \
+    "$container_image_tag" "$container_image_id" \
+    "$("$postgres_bin/postgres" --version | awk '{print $3}')"
+else
+  printf 'Optimized standalone bundle, PostgreSQL %s, and all browser acceptance checks passed.\n' \
+    "$("$postgres_bin/postgres" --version | awk '{print $3}')"
+fi

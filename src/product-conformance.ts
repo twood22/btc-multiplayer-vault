@@ -165,6 +165,28 @@ record('the release surface exercises the optimized standalone browser product',
   assert.match(runner, /never live Sigbash, real-wallet, or funding evidence/u);
 });
 
+record('the release surface provides a fail-closed exact-container acceptance command', () => {
+  const packageJson = readFileSync(resolve(root, 'package.json'), 'utf8');
+  const runner = readFileSync(
+    resolve(root, 'scripts/run-production-browser-acceptance.sh'),
+    'utf8',
+  );
+  const dockerfile = readFileSync(resolve(root, 'Dockerfile'), 'utf8');
+  const dockerignore = readFileSync(resolve(root, '.dockerignore'), 'utf8');
+  assert.match(packageJson, /web:test:browser:container/u);
+  assert.match(runner, /CONTAINER_ACCEPTANCE/u);
+  assert.match(runner, /build --pull --tag/u);
+  assert.match(runner, /image inspect --format/u);
+  assert.match(runner, /run --rm --name/u);
+  assert.match(dockerfile, /FROM node:22\.23\.2-bookworm-slim@sha256:[0-9a-f]{64}/u);
+  assert.match(dockerfile, /npm ci --omit=dev/u);
+  assert.match(dockerfile, /\.next\/standalone/u);
+  assert.match(dockerfile, /USER node/u);
+  assert.match(dockerfile, /\/api\/health\/ready/u);
+  assert.match(dockerignore, /^\.env\.\*$/mu);
+  assert.match(dockerignore, /^live-run$/mu);
+});
+
 record('the production Sigbash solo-signing and persistence boundaries have isolated acceptance coverage', () => {
   const packageJson = readFileSync(resolve(root, 'package.json'), 'utf8');
   const acceptance = readFileSync(

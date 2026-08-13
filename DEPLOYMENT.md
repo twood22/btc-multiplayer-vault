@@ -49,8 +49,21 @@ and static-asset layout used by the container:
 npm run web:test:browser:production
 ```
 
-This command creates disposable PostgreSQL state, builds the production bundle,
-and runs the full Chromium passkey, three-participant cooperative MuSig2,
+On a Linux host with Docker or a CLI-compatible engine, build the exact
+reviewed Dockerfile and rerun the same browser suite from that unprivileged
+container:
+
+```bash
+npm run web:test:browser:container
+```
+
+Set `CONTAINER_ENGINE` only for a compatible alternative. The command prints
+the local content-addressed image ID. That ID proves the tested local image
+only; the separately reviewed registry manifest digest remains the deployment
+artifact after CI publishes the image.
+
+Both commands create disposable PostgreSQL state and run the full Chromium
+passkey, three-participant cooperative MuSig2,
 distributed recovery, owner-only final-sweep, and three-wallet funding suite.
 The funding acceptance imports independently produced, consensus-valid
 wallet-format signatures into the real user flow, but its wallet coins, mainnet
