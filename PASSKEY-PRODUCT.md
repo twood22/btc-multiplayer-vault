@@ -258,8 +258,9 @@ deployment evidence.
 
 `web:release-status` is the post-deployment funding audit and prints only
 non-secret gate summaries plus a non-authorizing `statusDigest`. It verifies the
-declared Node runtime, HTTPS WebAuthn/RP binding, independent chain source,
-explicit tiny-mainnet amount cap, funding fee, and recovery delay, current
+declared Node runtime, an explicit independently reviewed registry manifest
+digest for the deployed image, HTTPS WebAuthn/RP binding, independent chain
+source, explicit tiny-mainnet amount cap, funding fee, and recovery delay, current
 upstream Sigbash runtime hashes, a non-local TLS PostgreSQL endpoint, an
 authenticated fresh receipt proving an isolated restore exactly matched its
 schema, migrations, and rows, the exact
@@ -269,8 +270,9 @@ protected exact-restore receipt, absence of a pre-funding coin, and a mainnet
 Bitcoin backend. After unanimous final
 transaction approval, an explicit manual-gate acknowledgement can write a
 fresh owner-only release artifact. That canonical artifact binds the exact
-vault, finalization digest and txid, live-proof digest, and passing checks; the
-private broadcast command authenticates it and rejects tampering, unsafe paths,
+vault, finalization digest and txid, live-proof digest, deployed registry
+manifest digest, and passing checks; the private broadcast command authenticates
+it and rejects tampering, unsafe paths, a different current image digest,
 mismatched bindings, future timestamps, or reports older than 30 minutes. It
 still records `fundingAllowed: false`, because funding remains a later separate
 human decision. The earlier

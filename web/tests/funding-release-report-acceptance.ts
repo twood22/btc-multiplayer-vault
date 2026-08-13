@@ -25,11 +25,13 @@ const vaultId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const finalizationDigest = '11'.repeat(32);
 const finalTxid = '22'.repeat(32);
 const liveSigbashProofDigest = '33'.repeat(32);
+const deployedImageManifestDigest = `sha256:${'44'.repeat(32)}`;
 
 try {
   const reportChecks: FundingReleaseCheck[] = [
     { name: 'protected live Sigbash mainnet proof receipt is present and matches its reviewed digest', ok: true },
     { name: 'reviewed Node runtime is active', ok: true },
+    { name: 'deployed service image manifest digest is explicit and immutable', ok: true },
     { name: 'production WebAuthn origin and RP ID are explicit HTTPS values', ok: true },
     { name: 'at least one independent HTTPS chain-observation origin is explicit', ok: true },
     { name: 'tiny-mainnet amount is explicit and within the private-beta cap', ok: true },
@@ -75,12 +77,16 @@ try {
     finalizationDigest,
     finalTxid,
     liveSigbashProofDigest,
+    deployedImageManifestDigest,
     checks: reportChecks,
     manualGates,
     manualReviewAcknowledged: true,
   });
   assert.deepEqual(validateFundingReleaseReport(report), report);
-  checks.push({ name: 'a canonical release report binds the exact vault, final transaction, live proof, and passing gates', ok: true });
+  checks.push({
+    name: 'a canonical release report binds the exact vault, final transaction, live proof, deployed image, and passing gates',
+    ok: true,
+  });
 
   assert.throws(
     () => createFundingReleaseReport({
@@ -89,6 +95,22 @@ try {
       finalizationDigest,
       finalTxid,
       liveSigbashProofDigest,
+      deployedImageManifestDigest: '44'.repeat(32),
+      checks: reportChecks,
+      manualGates,
+      manualReviewAcknowledged: true,
+    }),
+    /invalid release identity/u,
+  );
+
+  assert.throws(
+    () => createFundingReleaseReport({
+      createdAt,
+      vaultId,
+      finalizationDigest,
+      finalTxid,
+      liveSigbashProofDigest,
+      deployedImageManifestDigest,
       checks: reportChecks,
       manualGates,
       manualReviewAcknowledged: false,
@@ -102,6 +124,7 @@ try {
       finalizationDigest,
       finalTxid,
       liveSigbashProofDigest,
+      deployedImageManifestDigest,
       checks: reportChecks.map((item, index) => index === 0 ? { ...item, ok: false } : item),
       manualGates,
       manualReviewAcknowledged: true,
@@ -115,6 +138,7 @@ try {
       finalizationDigest,
       finalTxid,
       liveSigbashProofDigest,
+      deployedImageManifestDigest,
       checks: reportChecks.slice(1),
       manualGates,
       manualReviewAcknowledged: true,
@@ -128,6 +152,22 @@ try {
       finalizationDigest,
       finalTxid,
       liveSigbashProofDigest,
+      deployedImageManifestDigest,
+      checks: reportChecks.filter((item) =>
+        !item.name.startsWith('deployed service image manifest digest')),
+      manualGates,
+      manualReviewAcknowledged: true,
+    }),
+    /missing a mandatory automated gate/u,
+  );
+  assert.throws(
+    () => createFundingReleaseReport({
+      createdAt,
+      vaultId,
+      finalizationDigest,
+      finalTxid,
+      liveSigbashProofDigest,
+      deployedImageManifestDigest,
       checks: reportChecks.filter((item) =>
         !item.name.startsWith('protected production database restore receipt')),
       manualGates,
@@ -142,6 +182,7 @@ try {
       finalizationDigest,
       finalTxid,
       liveSigbashProofDigest,
+      deployedImageManifestDigest,
       checks: reportChecks,
       manualGates: manualGates.slice(1),
       manualReviewAcknowledged: true,
@@ -164,6 +205,10 @@ try {
     () => validateFundingReleaseReport({ ...report, unexpected: true }),
     /unexpected or missing fields/u,
   );
+  assert.throws(
+    () => validateFundingReleaseReport({ ...report, version: 1 }),
+    /invalid release identity/u,
+  );
   checks.push({ name: 'tampered canonical fields and schema additions are rejected', ok: true });
 
   const protectedDirectory = join(directory, 'protected');
@@ -175,6 +220,7 @@ try {
     vaultId,
     finalizationDigest,
     liveSigbashProofDigest,
+    deployedImageManifestDigest,
     now: Date.parse(createdAt) + 60_000,
   };
   assert.deepEqual(readProtectedFundingReleaseReport(reportPath, expected), report);
@@ -183,13 +229,17 @@ try {
     { ...expected, vaultId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' },
     { ...expected, finalizationDigest: '66'.repeat(32) },
     { ...expected, liveSigbashProofDigest: '77'.repeat(32) },
+    { ...expected, deployedImageManifestDigest: `sha256:${'88'.repeat(32)}` },
   ]) {
     assert.throws(
       () => readProtectedFundingReleaseReport(reportPath, changed),
-      /reviewed report digest|different vault, finalization, or live proof/u,
+      /reviewed report digest|different vault, finalization, live proof, or deployed image/u,
     );
   }
-  checks.push({ name: 'the protected reader binds independently reviewed report, vault, finalization, and proof digests', ok: true });
+  checks.push({
+    name: 'the protected reader binds independently reviewed report, vault, finalization, proof, and deployed-image digests',
+    ok: true,
+  });
 
   assert.throws(
     () => readProtectedFundingReleaseReport(reportPath, {

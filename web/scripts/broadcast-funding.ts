@@ -13,6 +13,7 @@ const vaultId = required(args, 'vault-id');
 const finalizationDigest = digestArg(args, 'finalization-digest');
 const liveProofDigest = digestArg(args, 'live-sigbash-proof-digest');
 const releaseReportDigest = digestArg(args, 'release-report-digest');
+const deployedImageManifestDigest = process.env.DEPLOYED_IMAGE_MANIFEST_DIGEST || '';
 if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(vaultId)) {
   throw new Error('--vault-id must be a UUID');
 }
@@ -33,6 +34,7 @@ const releaseReport = readProtectedFundingReleaseReport(
     vaultId,
     finalizationDigest,
     liveSigbashProofDigest: liveProofDigest,
+    deployedImageManifestDigest,
   },
 );
 if (args['confirm-mainnet-broadcast'] !== 'BROADCAST_EXACT_APPROVED_FUNDING_TRANSACTION') {

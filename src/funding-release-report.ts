@@ -10,7 +10,7 @@ export interface FundingReleaseCheck {
 }
 
 export interface FundingReleaseReport {
-  version: 1;
+  version: 2;
   kind: 'mainnet-funding-release';
   network: 'mainnet';
   createdAt: string;
@@ -24,6 +24,7 @@ export interface FundingReleaseReport {
     finalTxid: string;
   };
   liveSigbashProofDigest: string;
+  deployedImageManifestDigest: string;
   checks: FundingReleaseCheck[];
   manualGates: string[];
   reportDigest: string;
@@ -31,6 +32,7 @@ export interface FundingReleaseReport {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const DIGEST = /^[0-9a-f]{64}$/u;
+const IMAGE_MANIFEST_DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const DEFAULT_MAX_AGE_MS = 30 * 60 * 1000;
 
 export function createFundingReleaseReport(input: {
@@ -39,6 +41,7 @@ export function createFundingReleaseReport(input: {
   finalizationDigest: string;
   finalTxid: string;
   liveSigbashProofDigest: string;
+  deployedImageManifestDigest: string;
   checks: FundingReleaseCheck[];
   manualGates: string[];
   manualReviewAcknowledged: boolean;
@@ -50,7 +53,7 @@ export function createFundingReleaseReport(input: {
     throw new Error('funding release report requires every automated preflight check to pass');
   }
   const body = canonicalBody({
-    version: 1,
+    version: 2,
     kind: 'mainnet-funding-release',
     network: 'mainnet',
     createdAt: input.createdAt,
@@ -64,6 +67,7 @@ export function createFundingReleaseReport(input: {
       finalTxid: input.finalTxid,
     },
     liveSigbashProofDigest: input.liveSigbashProofDigest,
+    deployedImageManifestDigest: input.deployedImageManifestDigest,
     checks: input.checks,
     manualGates: input.manualGates,
   });
@@ -78,17 +82,19 @@ export function validateFundingReleaseReport(input: unknown): FundingReleaseRepo
   const allowedKeys = [
     'version', 'kind', 'network', 'createdAt', 'automatedPreflightPassed',
     'fundingAllowed', 'manualReviewAcknowledged', 'vaultId', 'fundingFinalization',
-    'liveSigbashProofDigest', 'checks', 'manualGates', 'reportDigest',
+    'liveSigbashProofDigest', 'deployedImageManifestDigest', 'checks', 'manualGates', 'reportDigest',
   ];
   if (Object.keys(input).sort().join(',') !== [...allowedKeys].sort().join(',')) {
     throw new Error('funding release report has unexpected or missing fields');
   }
-  if (input.version !== 1 || input.kind !== 'mainnet-funding-release' ||
+  if (input.version !== 2 || input.kind !== 'mainnet-funding-release' ||
       input.network !== 'mainnet' || input.automatedPreflightPassed !== true ||
       input.fundingAllowed !== false || input.manualReviewAcknowledged !== true ||
       typeof input.createdAt !== 'string' || !validIsoTimestamp(input.createdAt) ||
       typeof input.vaultId !== 'string' || !UUID.test(input.vaultId) ||
       typeof input.liveSigbashProofDigest !== 'string' || !DIGEST.test(input.liveSigbashProofDigest) ||
+      typeof input.deployedImageManifestDigest !== 'string' ||
+        !IMAGE_MANIFEST_DIGEST.test(input.deployedImageManifestDigest) ||
       typeof input.reportDigest !== 'string' || !DIGEST.test(input.reportDigest) ||
       !isPlainObject(input.fundingFinalization)) {
     throw new Error('funding release report has an invalid release identity');
@@ -112,6 +118,7 @@ export function validateFundingReleaseReport(input: unknown): FundingReleaseRepo
   const requiredCheckPrefixes = [
     'protected live Sigbash mainnet proof receipt',
     'reviewed Node runtime is active',
+    'deployed service image manifest digest is explicit and immutable',
     'production WebAuthn origin and RP ID are explicit HTTPS values',
     'at least one independent HTTPS chain-observation origin is explicit',
     'tiny-mainnet amount is explicit and within the private-beta cap',
@@ -151,7 +158,7 @@ export function validateFundingReleaseReport(input: unknown): FundingReleaseRepo
     throw new Error('funding release report is missing a mandatory acknowledged manual gate');
   }
   const body = canonicalBody({
-    version: 1,
+    version: 2,
     kind: 'mainnet-funding-release',
     network: 'mainnet',
     createdAt: input.createdAt,
@@ -165,6 +172,7 @@ export function validateFundingReleaseReport(input: unknown): FundingReleaseRepo
       finalTxid: finalization.finalTxid as string,
     },
     liveSigbashProofDigest: input.liveSigbashProofDigest,
+    deployedImageManifestDigest: input.deployedImageManifestDigest,
     checks,
     manualGates,
   });
@@ -181,6 +189,7 @@ export function readProtectedFundingReleaseReport(
     vaultId: string;
     finalizationDigest: string;
     liveSigbashProofDigest: string;
+    deployedImageManifestDigest: string;
     now?: number;
     maxAgeMs?: number;
   },
@@ -202,10 +211,16 @@ export function readProtectedFundingReleaseReport(
   if (!DIGEST.test(expected.reportDigest) || report.reportDigest !== expected.reportDigest) {
     throw new Error('funding release report does not match the reviewed report digest');
   }
+  if (!IMAGE_MANIFEST_DIGEST.test(expected.deployedImageManifestDigest)) {
+    throw new Error('expected deployed image manifest digest is invalid');
+  }
   if (report.vaultId !== expected.vaultId ||
       report.fundingFinalization.finalizationDigest !== expected.finalizationDigest ||
-      report.liveSigbashProofDigest !== expected.liveSigbashProofDigest) {
-    throw new Error('funding release report is bound to a different vault, finalization, or live proof');
+      report.liveSigbashProofDigest !== expected.liveSigbashProofDigest ||
+      report.deployedImageManifestDigest !== expected.deployedImageManifestDigest) {
+    throw new Error(
+      'funding release report is bound to a different vault, finalization, live proof, or deployed image',
+    );
   }
   const now = expected.now ?? Date.now();
   const age = now - Date.parse(report.createdAt);
@@ -221,7 +236,7 @@ export function readProtectedFundingReleaseReport(
 
 function canonicalBody(input: Omit<FundingReleaseReport, 'reportDigest'>): Omit<FundingReleaseReport, 'reportDigest'> {
   return {
-    version: 1,
+    version: 2,
     kind: 'mainnet-funding-release',
     network: 'mainnet',
     createdAt: input.createdAt,
@@ -235,6 +250,7 @@ function canonicalBody(input: Omit<FundingReleaseReport, 'reportDigest'>): Omit<
       finalTxid: input.fundingFinalization.finalTxid,
     },
     liveSigbashProofDigest: input.liveSigbashProofDigest,
+    deployedImageManifestDigest: input.deployedImageManifestDigest,
     checks: input.checks.map((item) => ({
       name: item.name,
       ok: item.ok,

@@ -65,6 +65,15 @@ checks.push(check(
   `Node ${runtime.actual}; expected ${runtime.expected}`,
 ));
 
+const deployedImageManifestDigest = process.env.DEPLOYED_IMAGE_MANIFEST_DIGEST || '';
+checks.push(check(
+  'deployed service image manifest digest is explicit and immutable',
+  /^sha256:[0-9a-f]{64}$/u.test(deployedImageManifestDigest),
+  /^sha256:[0-9a-f]{64}$/u.test(deployedImageManifestDigest)
+    ? deployedImageManifestDigest
+    : 'DEPLOYED_IMAGE_MANIFEST_DIGEST is absent or malformed',
+));
+
 const rpId = process.env.WEBAUTHN_RP_ID;
 const webauthnOrigin = parsedOrigin(process.env.WEBAUTHN_ORIGIN);
 const appOrigin = parsedOrigin(process.env.APP_ORIGIN);
@@ -310,6 +319,7 @@ let protectedRelease: null | {
   vaultId: string;
   finalizationDigest: string;
   finalTxid: string;
+  deployedImageManifestDigest: string;
 } = null;
 if (outputArgs.outputPath) {
   if (!automatedPreflightPassed) {
@@ -327,6 +337,7 @@ if (outputArgs.outputPath) {
     finalizationDigest: approvedFundingBinding.finalizationDigest,
     finalTxid: approvedFundingBinding.finalTxid,
     liveSigbashProofDigest: verifiedProofDigest,
+    deployedImageManifestDigest,
     checks,
     manualGates,
     manualReviewAcknowledged: outputArgs.manualReviewAcknowledged,
@@ -341,6 +352,7 @@ if (outputArgs.outputPath) {
     vaultId: report.vaultId,
     finalizationDigest: report.fundingFinalization.finalizationDigest,
     finalTxid: report.fundingFinalization.finalTxid,
+    deployedImageManifestDigest: report.deployedImageManifestDigest,
   };
 }
 console.log(JSON.stringify({ ...reportBody, statusDigest, protectedRelease }, null, 2));

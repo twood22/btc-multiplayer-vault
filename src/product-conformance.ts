@@ -78,10 +78,15 @@ record('initial funding has no browser-accessible broadcast route', () => {
 
 record('the private funding command is bound to protected live-proof and funding-release artifacts', () => {
   const source = readFileSync(resolve(root, 'web/scripts/broadcast-funding.ts'), 'utf8');
+  const release = readFileSync(resolve(root, 'web/scripts/release-status.ts'), 'utf8');
+  const artifact = readFileSync(resolve(root, 'src/funding-release-report.ts'), 'utf8');
   assert.match(source, /readProtectedLiveSigbashProofReceipt/u);
   assert.match(source, /LIVE_SIGBASH_MAINNET_PROOF_DIGEST/u);
   assert.match(source, /FUNDING_RELEASE_REPORT_DIGEST/u);
   assert.match(source, /readProtectedFundingReleaseReport/u);
+  assert.match(source, /DEPLOYED_IMAGE_MANIFEST_DIGEST/u);
+  assert.match(release, /DEPLOYED_IMAGE_MANIFEST_DIGEST/u);
+  assert.match(artifact, /deployedImageManifestDigest/u);
   assert.match(source, /expectedFinalTxid/u);
   assert.match(source, /submitPasskeyApprovedFunding/u);
 });

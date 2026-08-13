@@ -140,8 +140,12 @@ rejected by the release report.
    owner-only `live-run/predeployment-proof-receipt.json`. Independently review
    its public evidence and `proofDigest`. The current external service result
    is unproven; no local or dry-run success substitutes for this command.
-2. Build the immutable image in CI and record its digest. Do not inject runtime
-   secrets during the build.
+2. Build and publish the immutable image in CI, then independently resolve and
+   record the registry manifest digest as `sha256:<64 lowercase hex>`. This is
+   `DEPLOYED_IMAGE_MANIFEST_DIGEST` for the release-report and funding-broadcast
+   operator jobs. Do not substitute the local Docker image ID printed by the
+   container acceptance runner, and do not inject runtime secrets during the
+   build.
 3. Restore the latest encrypted database backup into an isolated database with
    a database name distinct from the source and
    run `npm run web:migrate`; verify the application and rollback procedure.
@@ -188,8 +192,9 @@ rejected by the release report.
    `LIVE_SIGBASH_MAINNET_PROOF_RECEIPT` pointed at that owner-only receipt.
    Mount it and the reviewed database-restore receipt read-only into the
    release-report operator job; mount only the Sigbash receipt into the
-   funding-broadcast job. Never bake either artifact into the application
-   image. Run
+   funding-broadcast job. Set the independently reviewed registry manifest
+   digest from step 2 as `DEPLOYED_IMAGE_MANIFEST_DIGEST` in both jobs. Never
+   bake either artifact into the application image. Run
    `npm run web:release-status` as a preliminary pre-funding audit. Review its
    checks and `statusDigest`; this status output is not a broadcast artifact
    and cannot authorize funding.
@@ -217,10 +222,12 @@ rejected by the release report.
     different existing report. Independently review the artifact, place its
     `reportDigest` in `FUNDING_RELEASE_REPORT_DIGEST`, and point
     `FUNDING_RELEASE_REPORT_PATH` at that exact file. The artifact binds the
-    vault UUID, finalization digest and txid, live-proof digest, and complete
-    gate list. It expires for broadcast after 30 minutes; generate a fresh file
-    at a fresh path if the window closes. These are non-secret review
-    fingerprints, not substitutes for reviewing the evidence.
+    vault UUID, finalization digest and txid, live-proof digest, exact deployed
+    registry manifest digest, and complete gate list. The private broadcast
+    command requires its current `DEPLOYED_IMAGE_MANIFEST_DIGEST` to match that
+    report. It expires for broadcast after 30 minutes; generate a fresh file at
+    a fresh path if the window closes. These are non-secret review fingerprints,
+    not substitutes for reviewing the evidence.
 12. Only after a final, separate explicit broadcast decision made after
     reviewing the protected artifact from step 11, run the private
     `web:broadcast-funding` command below against Bitcoin Core. Then keep
@@ -256,6 +263,10 @@ rejected by the release report.
 ## Operator commands
 
 Run these only in a private job or shell attached to the same immutable image:
+
+Set `DEPLOYED_IMAGE_MANIFEST_DIGEST` to the independently reviewed registry
+manifest digest for that deployed image before either release-status command
+and keep the same value in the later funding-broadcast job.
 
 ```bash
 npm run web:migrate

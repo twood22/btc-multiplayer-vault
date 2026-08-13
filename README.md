@@ -381,8 +381,10 @@ input scriptPubKey, so you only pass `--participant`.
    ```
 
    After independently reviewing the successful live Sigbash proof and all
-   automated and manual gates, write a fresh protected report only after the
-   three final passkey approvals:
+   automated and manual gates, set `DEPLOYED_IMAGE_MANIFEST_DIGEST` to the exact
+   published registry manifest digest (`sha256:<64 lowercase hex>`) and write a
+   fresh protected report only after the three final passkey approvals. Do not
+   substitute a local Docker image ID:
 
    ```bash
    npm run web:release-status -- \
@@ -393,7 +395,9 @@ input scriptPubKey, so you only pass `--participant`.
    Record its non-secret `reportDigest` and exact path in the protected
    operator environment. The private command authenticates that owner-only
    artifact and requires it to bind the same vault, finalization, transaction,
-   and live proof within a 30-minute window. A separate explicit operator
+   live proof, and deployed registry manifest digest within a 30-minute window.
+   The funding-broadcast job must carry the same independently reviewed
+   `DEPLOYED_IMAGE_MANIFEST_DIGEST`. A separate explicit operator
    decision can then submit only the unanimously approved bytes through private
    Bitcoin Core preflight:
 
