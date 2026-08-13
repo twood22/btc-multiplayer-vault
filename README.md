@@ -1,12 +1,12 @@
 # Bitcoin Multiplayer Savings Vault
 
-A mainnet-only implementation of the round-based product originally described
-in the historical signet `spec.md`: Alice, Bob, and Carol each contribute the
-configured deposit to a shared Taproot vault. Solo withdrawals follow an
-incentive schedule (first out takes a 0.95 BTC haircut, later leavers get a
-bonus) enforced by a Sigbash policy co-signer; the cooperative exit is a
-MuSig2 key-path spend of the participants' personal keys with Sigbash
-completely uninvolved.
+A mainnet-only implementation of the round-based product now governed by the
+[authoritative product specification](./spec.md): Alice, Bob, and Carol each
+contribute the configured deposit to a shared Taproot vault. Solo withdrawals
+follow the original incentive proportions (first out takes a 5% haircut,
+later leavers get a bonus) enforced by a Sigbash policy co-signer; the
+cooperative exit is a MuSig2 key-path spend of the participants' personal keys
+with Sigbash completely uninvolved.
 
 The passkey-backed user product is being built without changing those vault
 semantics. Its current implementation and hard deployment gates are documented
@@ -58,8 +58,8 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 
 ```bash
 npm install
-npm test        # full offline acceptance suite
-npm run demo    # setup → deposits → withdrawals → final sweep
+npm run product:conformance # local mechanics and product-surface contract
+npm test                    # full offline acceptance suite
 ```
 
 `SIGBASH_MODE=local` (the default) runs everything offline: it builds the
@@ -134,14 +134,14 @@ cooldowns.
   merkle commitment and BIP-341 sighash, verifies every Schnorr signature,
   emulates the CHECKSIG/CHECKSIGADD/NUMEQUAL and CSV/BIP-68 semantics, and
   enforces a 1 sat/vB relay-fee floor.
-- The full-run demo: three deposits, first withdrawal (0.95), rejected
-  double-spend, second withdrawal (1.025), final sweep; timelocked recovery
-  before/after the delay.
+- The offline state-transition harness: three deposits, first withdrawal
+  (0.95), rejected double-spend, second withdrawal (1.025), final sweep;
+  timelocked recovery before/after the delay.
 
 ## Key custody (production, each friend on their own device)
 
-The demo derives all keys from one seed. For real use, no one should hold
-anyone else's keys:
+The offline fixture derives all keys from one seed. In the product, no one
+should hold anyone else's keys:
 
 ```bash
 # Each participant, on their own machine, with their own secret:
@@ -192,7 +192,7 @@ and public nonce, then destroyed before the partial signature is generated.
 
 Everything is `npm run <command> [-- args]`. Offline: `setup`, `vault-keygen`,
 `verify-roster`, `cooperative`,
-`solo`, `recovery`, `demo` (full-run), `signed-local-run`, `funding-manifest`,
+`solo`, `recovery`, `offline:state-machine`, `signed-local-run`, `funding-manifest`,
 `watch-manifest`, `vault-output`, `funding-psbt`, `solo-psbt`,
 `sign-solo-psbt`, `cooperative-psbt`, `sign-cooperative-psbt`,
 `recovery-psbt`, `recovery-share`, `recovery-aggregate`,
@@ -240,7 +240,8 @@ input scriptPubKey, so you only pass `--participant`.
    Each participant should hold their own triplet
    (`SIGBASH_API_KEY_ALICE=...` etc.); the unsuffixed triplet is the fallback
    for single-operator runs — in that case one machine holds every browser
-   share, which is fine for a demo and unacceptable for real funds.
+   share, which is suitable only for isolated testing and unacceptable for
+   real funds.
    Locally generated credentials are signet-only until Sigbash enables their
    organization hash for mainnet. The user-facing passkey flow generates these
    triplets automatically, but it cannot grant that external entitlement; all
@@ -403,16 +404,16 @@ input scriptPubKey, so you only pass `--participant`.
   UTXO sits `RECOVERY_DELAY_BLOCKS` (default 6, ~1 hour) without moving, any
   N-1 of the current participants can co-sign the recovery leaf and send the
   whole pot wherever they agree — in a pair round that is *one* person. The
-  spec mandates this leaf and a short demo delay; for anything but throwaway
-  amounts, raise `RECOVERY_DELAY_BLOCKS` substantially (via env) and treat the
-  leaf as the explicit trust trade-off it is.
+  spec mandates this leaf, while the offline fixture uses a short delay. Before
+  funding, choose and review a production `RECOVERY_DELAY_BLOCKS` value and
+  treat the leaf as the explicit trust trade-off it is.
 - **Solo withdrawals trust Sigbash for policy, never for custody.** A hostile
   Sigbash can refuse to co-sign (griefing) but can never move funds — exits
   remain available via the cooperative key path or the recovery leaf.
 - **Cooperative exit is now trust-minimized in ceremony too.** The
   `ceremony-*` commands run the real interactive BIP-327 MuSig2 protocol
   (validated against the official vectors), so no machine holds all keys. The
-  single-process `signCooperativeExitPsbt` remains only as a local-demo
+  single-process `signCooperativeExitPsbt` remains only as an offline-test
   convenience and is not used in the ceremony path.
 - **Key custody.** `vault-keygen`/`verify-roster` let each participant generate
   keys from their own secret and confirm identical vault addresses before
