@@ -176,6 +176,8 @@ ceremony approves the exact finalized transaction. The server re-authorizes the
 stored bytes, submits only those bytes to private mainnet Bitcoin Core, handles
 idempotent retry, and advances coordinator state only after observing the exact
 confirmed transaction. Reorganizations must roll state back safely.
+The private watcher holds a crash-released database session lease for the whole
+poll; overlapping scheduler invocations must not both reconcile or submit.
 
 ## 8. Mainnet release gates
 

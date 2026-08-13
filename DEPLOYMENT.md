@@ -18,7 +18,10 @@ roles:
    starts. Start with one replica for the three-person beta.
 3. **Private chain watcher** — run `npm run web:watch-chain` on a private
    scheduler. It continuously reconciles every recorded confirmation block,
-   not only pending transactions. Never expose this command as an HTTP endpoint.
+   not only pending transactions. A dedicated PostgreSQL session advisory lease
+   permits only one invocation to act; overlap is a successful no-op and a
+   dropped process or connection releases the lease. Never expose this command
+   as an HTTP endpoint.
 
 The image uses Next.js standalone output, includes the reviewed operator
 scripts, and receives configuration only at runtime. Do not pass credentials as
@@ -175,9 +178,10 @@ rejected by the release report.
   sustained rate-limit activity. Do not log
   request bodies, invite tokens, passkey assertions, session cookies, Sigbash
   ciphertext, recovery kits, or database URLs.
-- Keep the watcher private and single-scheduled for the initial beta. Database
-  transaction claims make retries safe, but a duplicate scheduler provides no
-  benefit at this scale.
+- Keep the watcher private and single-scheduled for the initial beta. Its
+  PostgreSQL lease makes accidental overlap a visible no-op and releases on
+  process/connection loss; transaction claims still make later retries safe.
+  A duplicate scheduler provides no availability benefit at this scale.
 - A failed block-status lookup is an operational failure, not reorganization
   evidence, and must leave coordinator state unchanged. Drill both paths: an
   orphaned block rolls back the exact successor atomically, while a transaction

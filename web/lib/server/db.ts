@@ -22,3 +22,10 @@ export function db(): Sql {
 export async function transaction<T>(run: (sql: TransactionSql) => Promise<T>): Promise<T> {
   return db().begin(async (sql) => run(sql)) as Promise<T>;
 }
+
+/** Close the singleton pool when a one-shot private operator process finishes. */
+export async function closeDatabase(): Promise<void> {
+  const active = client;
+  client = undefined;
+  if (active) await active.end({ timeout: 5 });
+}

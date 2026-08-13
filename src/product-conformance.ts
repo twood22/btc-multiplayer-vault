@@ -90,6 +90,8 @@ record('the private watcher continuously reconciles confirmed mainnet block anch
   const runtime = readFileSync(resolve(root, 'web/lib/server/vault-runtime-store.ts'), 'utf8');
   const reconciliation = readFileSync(resolve(root, 'web/lib/server/chain-reconciliation.ts'), 'utf8');
   const rollback = readFileSync(resolve(root, 'web/lib/server/chain-reorganization-store.ts'), 'utf8');
+  const watcher = readFileSync(resolve(root, 'web/scripts/watch-chain.ts'), 'utf8');
+  const lease = readFileSync(resolve(root, 'web/lib/server/watcher-lease.ts'), 'utf8');
   assert.match(runtime, /reconcileConfirmedChainState/u);
   assert.match(runtime, /getBlockStatus/u);
   assert.match(reconciliation, /rollbackConfirmedFunding/u);
@@ -98,6 +100,9 @@ record('the private watcher continuously reconciles confirmed mainnet block anch
   assert.match(rollback, /chain_reorganization_events/u);
   assert.match(rollback, /status = 'orphaned'/u);
   assert.match(rollback, /status = 'current', spent_by_txid = NULL/u);
+  assert.match(watcher, /withChainWatcherLease/u);
+  assert.match(lease, /pg_try_advisory_lock/u);
+  assert.match(lease, /pg_advisory_unlock/u);
 });
 
 record('the release surface includes an actual Bitcoin Core reorganization drill', () => {

@@ -227,8 +227,12 @@ the private beta. Run `npm run web:watch-chain` from a private scheduler to
 resume an interrupted approved runtime submission, activate the exact
 operator-submitted initial funding transaction, and advance later broadcast
 proposals only after the backend returns the exact bytes with that confirmation
-depth. It retains each confirmation block hash and continues checking confirmed
-state: an orphaned anchor causes an atomic rollback to the exact prior coin,
+depth. The command holds a dedicated PostgreSQL session advisory lease for its
+entire run; an overlapping scheduler invocation reports that it took no action
+and exits successfully, while a crashed process releases the lease with its
+database connection. It retains each confirmation block hash and continues
+checking confirmed state: an orphaned anchor causes an atomic rollback to the
+exact prior coin,
 while the same transaction re-included deeply enough is reanchored without
 changing product state. RPC unavailability never counts as reorganization
 evidence. Initial funding itself has no HTTP broadcast route.

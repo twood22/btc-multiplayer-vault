@@ -103,6 +103,9 @@ participant-only MuSig2 path, or the timelocked recovery path.
 - Confirmed broadcast transactions can atomically spend the old coordinator
   coin, derive the exact surviving pair or final-owner coin after a solo exit,
   or close the vault after a terminal cooperative, recovery, or final sweep.
+- The private watcher holds one crash-released PostgreSQL advisory lease across
+  reconciliation, retry, submission, and confirmation processing. Overlapping
+  scheduler invocations cannot both act and report an explicit no-op.
 - Every confirmed funding and runtime transition retains its exact mainnet
   block hash and remains under watcher reconciliation. An orphaned anchor
   atomically orphans its successor and restores the prior coin; a deeply
@@ -192,7 +195,8 @@ required passkey-consumed state, globally unique funding outpoints, one
 immutable funding approval and signature per seat, finalization/submission
 state consistency, unanimous restart audit preservation, auditable retry after
 failure, proposal-digest foreign-key binding, and atomic concurrent rate-limit
-counting/reset without raw subjects. It also proves paired confirmation anchors,
+counting/reset without raw subjects. It also proves one-winner watcher leasing
+and release after failure, paired confirmation anchors,
 atomic funding and transition rollback, exact prior-coin restoration,
 observation invalidation, broadcast-descendant preservation, and immutable
 public-fingerprint reorganization events. The separate Bitcoin Core 31.1 drill
