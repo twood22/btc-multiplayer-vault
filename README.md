@@ -350,7 +350,9 @@ input scriptPubKey, so you only pass `--participant`.
    match. Back up both secret files before continuing. Never fund the proof
    address. A successful real signing run exclusively writes an owner-only
    `live-run/predeployment-proof-receipt.json`; review its consensus evidence
-   and bind its `proofDigest` into the later funding release environment.
+   and bind its `proofDigest` into the later funding release environment. The
+   command and receipt retain only the explicit public signing-result fields;
+   unexpected provider-response fields are discarded.
 
    *Leaf-key assumption:* the tapscript leaf key is derived from each key's
    BIP-328 xpub at child path 0/0, matching the SDK's documented

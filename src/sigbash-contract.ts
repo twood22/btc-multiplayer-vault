@@ -452,6 +452,11 @@ function signingNormalizationChecks(): ContractCheck[] {
   const successFalse = normalizeSigbashSigningResult(signedFailed);
   const successTrueWithError = normalizeSigbashSigningResult({ success: true, error: 'boom' });
   const successAbsent = normalizeSigbashSigningResult({});
+  const unexpectedSecret = 'unexpected-provider-secret-sentinel';
+  const sanitized = normalizeSigbashSigningResult({
+    ...signedOk,
+    unexpectedSecret,
+  });
   return [
     check(
       'signing normalization succeeds on success === true with no error and extracts artifacts',
@@ -476,6 +481,14 @@ function signingNormalizationChecks(): ContractCheck[] {
       'signing normalization fails closed on null and undefined results',
       normalizeSigbashSigningResult(null).success === false &&
         normalizeSigbashSigningResult(undefined).success === false,
+    ),
+    check(
+      'signing normalization allowlists public artifacts and drops unexpected provider fields',
+      !JSON.stringify(sanitized).includes(unexpectedSecret) &&
+        Object.keys(sanitized).sort().join(',') === [
+          'error', 'pathId', 'policyRootHex', 'satisfiedClause',
+          'signedPsbtBase64', 'success', 'txHex',
+        ].sort().join(','),
     ),
   ];
 }

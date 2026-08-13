@@ -111,7 +111,15 @@ try {
     keyId: 'live-proof-key',
     placeholderOutpoint: true,
     psbtBase64: 'cHNidP8BAA==',
-    signedArtifacts: { success: true, txHex: '0200' },
+    signedArtifacts: {
+      success: true,
+      txHex: '0200',
+      signedPsbtBase64: null,
+      pathId: null,
+      policyRootHex: null,
+      satisfiedClause: null,
+      error: null,
+    },
     authorization: {
       finalTxid: '11'.repeat(32),
       consensus: { txid: '11'.repeat(32), vsize: 100, feeSats: 500, checks: ['verified'] },
@@ -131,6 +139,13 @@ try {
   assert.throws(
     () => validateLiveSigbashProofReceipt({ ...receipt, createdAt: '2026-08-13T00:00:00.000Z' }),
     /digest does not match/u,
+  );
+  assert.throws(
+    () => validateLiveSigbashProofReceipt({
+      ...receipt,
+      signedArtifacts: { ...receipt.signedArtifacts, unexpectedSecret: 'must-not-survive' },
+    }),
+    /unexpected or missing fields/u,
   );
   assert.throws(
     () => readProtectedLiveSigbashProofReceipt(receiptPath, '33'.repeat(32)),

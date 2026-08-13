@@ -134,7 +134,6 @@ export interface NormalizedSigningResult {
   policyRootHex: string | null;
   satisfiedClause: string | null;
   error: string | null;
-  raw: unknown;
 }
 
 // The SDK's signing result shape has drifted across versions; probe every
@@ -168,7 +167,6 @@ export function normalizeSigbashSigningResult(
     policyRootHex: (result.policyRootHex as string | undefined) || null,
     satisfiedClause: (result.satisfiedClause as string | undefined) || null,
     error: (result.error as string | undefined) || null,
-    raw: rawResult,
   };
 }
 

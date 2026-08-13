@@ -13,7 +13,7 @@ export interface LiveSigbashProofReceipt {
   keyId: string;
   placeholderOutpoint: true;
   requestPsbtBase64: string;
-  signedArtifacts: unknown;
+  signedArtifacts: LiveSigbashProofArtifacts;
   authorization: Record<string, unknown>;
   requestPsbtDigest: string;
   signedArtifactDigest: string;
@@ -21,6 +21,16 @@ export interface LiveSigbashProofReceipt {
   finalTxid: string;
   checkNames: string[];
   proofDigest: string;
+}
+
+export interface LiveSigbashProofArtifacts {
+  success: true;
+  txHex: string | null;
+  signedPsbtBase64: string | null;
+  pathId: string | null;
+  policyRootHex: string | null;
+  satisfiedClause: string | null;
+  error: null;
 }
 
 export function createLiveSigbashProofReceipt<TAuthorization extends { finalTxid?: unknown }>(input: {
@@ -40,6 +50,7 @@ export function createLiveSigbashProofReceipt<TAuthorization extends { finalTxid
   if (!input.checks.length || input.checks.some((item) => !item.ok)) {
     throw new Error('predeployment proof receipt requires every proof check to pass');
   }
+  const signedArtifacts = validateProofArtifacts(input.signedArtifacts);
   const finalTxid = String(input.authorization.finalTxid || '');
   const body = canonicalReceiptBody({
     version: 1,
@@ -51,10 +62,10 @@ export function createLiveSigbashProofReceipt<TAuthorization extends { finalTxid
     keyId: input.keyId,
     placeholderOutpoint: true,
     requestPsbtBase64: input.psbtBase64,
-    signedArtifacts: input.signedArtifacts,
+    signedArtifacts,
     authorization: input.authorization as Record<string, unknown>,
     requestPsbtDigest: sha256Hex(input.psbtBase64),
-    signedArtifactDigest: sha256Hex(JSON.stringify(input.signedArtifacts)),
+    signedArtifactDigest: sha256Hex(JSON.stringify(signedArtifacts)),
     authorizationDigest: sha256Hex(JSON.stringify(input.authorization)),
     finalTxid,
     checkNames: input.checks.map((item) => item.name),
@@ -97,15 +108,14 @@ export function validateLiveSigbashProofReceipt(input: unknown): LiveSigbashProo
     bobcarol: ['bob', 'carol'],
   };
   if (!roundParticipants[row.round]!.includes(row.leaverId) ||
-      row.signedArtifacts.success !== true ||
-      (typeof row.signedArtifacts.txHex !== 'string' &&
-        typeof row.signedArtifacts.signedPsbtBase64 !== 'string') ||
+      !isPlainObject(row.signedArtifacts) ||
       !isPlainObject(row.authorization.consensus) ||
       !Array.isArray(row.authorization.consensus.checks) ||
       row.authorization.consensus.checks.length === 0 ||
       row.authorization.consensus.txid !== row.finalTxid) {
     throw new Error('live Sigbash proof receipt lacks a successful signed consensus artifact');
   }
+  const signedArtifacts = validateProofArtifacts(row.signedArtifacts);
   for (const name of [
     'requestPsbtDigest', 'signedArtifactDigest', 'authorizationDigest', 'finalTxid', 'proofDigest',
   ]) {
@@ -114,7 +124,7 @@ export function validateLiveSigbashProofReceipt(input: unknown): LiveSigbashProo
     }
   }
   if (sha256Hex(row.requestPsbtBase64) !== row.requestPsbtDigest ||
-      sha256Hex(JSON.stringify(row.signedArtifacts)) !== row.signedArtifactDigest ||
+      sha256Hex(JSON.stringify(signedArtifacts)) !== row.signedArtifactDigest ||
       sha256Hex(JSON.stringify(row.authorization)) !== row.authorizationDigest ||
       row.authorization.finalTxid !== row.finalTxid) {
     throw new Error('live Sigbash proof receipt evidence does not match its committed digests');
@@ -129,7 +139,7 @@ export function validateLiveSigbashProofReceipt(input: unknown): LiveSigbashProo
     keyId: row.keyId,
     placeholderOutpoint: true,
     requestPsbtBase64: row.requestPsbtBase64,
-    signedArtifacts: row.signedArtifacts,
+    signedArtifacts,
     authorization: row.authorization,
     requestPsbtDigest: row.requestPsbtDigest as string,
     signedArtifactDigest: row.signedArtifactDigest as string,
@@ -204,4 +214,41 @@ function validIsoTimestamp(value: string): boolean {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function validateProofArtifacts(input: unknown): LiveSigbashProofArtifacts {
+  if (!isPlainObject(input)) {
+    throw new Error('live Sigbash proof receipt signed artifacts are not an object');
+  }
+  const expectedKeys = [
+    'success', 'txHex', 'signedPsbtBase64', 'pathId', 'policyRootHex',
+    'satisfiedClause', 'error',
+  ];
+  if (Object.keys(input).sort().join(',') !== expectedKeys.sort().join(',')) {
+    throw new Error('live Sigbash proof receipt signed artifacts have unexpected or missing fields');
+  }
+  const optionalText = (value: unknown, maxLength: number): value is string | null =>
+    value === null || (typeof value === 'string' && value.length > 0 && value.length <= maxLength);
+  if (input.success !== true || input.error !== null ||
+      !optionalText(input.txHex, 800_000) ||
+      !optionalText(input.signedPsbtBase64, 600_000) ||
+      !optionalText(input.pathId, 256) ||
+      !optionalText(input.policyRootHex, 64) ||
+      !optionalText(input.satisfiedClause, 1_000) ||
+      (input.txHex === null && input.signedPsbtBase64 === null) ||
+      (typeof input.txHex === 'string' && !/^(?:[0-9a-f]{2})+$/u.test(input.txHex)) ||
+      (typeof input.signedPsbtBase64 === 'string' &&
+        !/^[A-Za-z0-9+/]+={0,2}$/u.test(input.signedPsbtBase64)) ||
+      (typeof input.policyRootHex === 'string' && !/^[0-9a-f]{64}$/u.test(input.policyRootHex))) {
+    throw new Error('live Sigbash proof receipt signed artifacts are invalid');
+  }
+  return {
+    success: true,
+    txHex: input.txHex,
+    signedPsbtBase64: input.signedPsbtBase64,
+    pathId: input.pathId,
+    policyRootHex: input.policyRootHex,
+    satisfiedClause: input.satisfiedClause,
+    error: null,
+  };
 }

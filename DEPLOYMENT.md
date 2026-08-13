@@ -153,8 +153,10 @@ rejected by the release report.
    Its address must never be funded. The proof command
    must end with `passed: true`, a non-null consensus authorization, and a new
    owner-only `live-run/predeployment-proof-receipt.json`. Independently review
-   its public evidence and `proofDigest`. The current external service result
-   is unproven; no local or dry-run success substitutes for this command.
+   its allowlisted public signing evidence and `proofDigest`; unexpected
+   provider-response fields are discarded rather than logged or sealed into
+   the receipt. The current external service result is unproven; no local or
+   dry-run success substitutes for this command.
 2. Build and publish the immutable image in CI, then independently resolve and
    record the registry manifest digest as `sha256:<64 lowercase hex>`. This is
    `DEPLOYED_IMAGE_MANIFEST_DIGEST` for the release-report and funding-broadcast

@@ -2551,14 +2551,13 @@ async function liveSoloWithdrawal() {
       failures: localPolicyFailures,
     },
     liveVerification,
-    liveSignature,
     signedArtifacts,
     authorization,
     checks,
     passed: checks.every((item) => item.ok),
     nextCommands: signedArtifacts && authorization ? sigbashSignedNextCommands(signedArtifacts) : [],
     nextStep:
-      liveSignature === null
+      signedArtifacts === null
         ? 'Resolve failed checks or rerun without --sign false to request Sigbash signing.'
         : authorization === null
           ? 'Do not broadcast: the signer artifact failed local authorization.'
@@ -2691,7 +2690,6 @@ async function livePolicyDryRun() {
       valueSats,
       placeholderOutpoint,
       signatureRequested: requestSignature,
-      liveSignature,
       signedArtifacts,
       authorization,
       proofReceipt: proofReceipt ? {
