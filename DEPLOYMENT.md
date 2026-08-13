@@ -94,9 +94,10 @@ rejected by the release report.
    configuration to `live-run/predeployment.env`; the proof command loads both
    automatically. The whole `live-run` directory is excluded from Git and the
    container build context. Its address must never be funded. The proof command
-   must end with `passed: true` and a non-null consensus authorization. The
-   current external service result is unproven; no local or dry-run success
-   substitutes for this command.
+   must end with `passed: true`, a non-null consensus authorization, and a new
+   owner-only `live-run/predeployment-proof-receipt.json`. Independently review
+   its public evidence and `proofDigest`. The current external service result
+   is unproven; no local or dry-run success substitutes for this command.
 2. Build the immutable image in CI and record its digest. Do not inject runtime
    secrets during the build.
 3. Restore the latest encrypted database backup into an isolated database and
@@ -127,10 +128,14 @@ rejected by the release report.
     finalizes the pristine PSBT, and requires all three friends to passkey-approve
     the exact witness bytes. The service does not possess the wallet private
     keys, and none of these browser steps broadcasts.
-11. Hash the owner-only successful `live-predeployment-proof` output and place
-    that SHA-256 value in `LIVE_SIGBASH_MAINNET_PROOF_DIGEST`. Place the reviewed
-    release report's `reportDigest` in `FUNDING_RELEASE_REPORT_DIGEST`. These are
-    non-secret review fingerprints, not substitutes for reviewing the proof.
+11. Place the independently reviewed protected receipt's `proofDigest` in
+    `LIVE_SIGBASH_MAINNET_PROOF_DIGEST` and keep
+    `LIVE_SIGBASH_MAINNET_PROOF_RECEIPT` pointed at that owner-only receipt.
+    Mount the receipt read-only into the release-report and funding-broadcast
+    operator jobs; never bake it into the application image.
+    Place the reviewed release report's `reportDigest` in
+    `FUNDING_RELEASE_REPORT_DIGEST`. These are non-secret review fingerprints,
+    not substitutes for reviewing the evidence.
 12. Only after a separate explicit funding decision, run the private
     `web:broadcast-funding` command below against Bitcoin Core. Then keep
     `web:watch-chain` scheduled; it activates only the exact stored transaction

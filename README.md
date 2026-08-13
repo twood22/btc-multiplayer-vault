@@ -291,7 +291,9 @@ input scriptPubKey, so you only pass `--participant`.
    configuration to owner-only `live-run/predeployment.env`; the corresponding
    `live-predeployment-proof` package command loads it together with the
    separately protected credential file automatically. Never fund the proof
-   address.
+   address. A successful real signing run exclusively writes an owner-only
+   `live-run/predeployment-proof-receipt.json`; review its consensus evidence
+   and bind its `proofDigest` into the later funding release environment.
 
    *Leaf-key assumption:* the tapscript leaf key is derived from each key's
    BIP-328 xpub at child path 0/0, matching the SDK's documented

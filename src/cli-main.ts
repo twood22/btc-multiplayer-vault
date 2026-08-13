@@ -10,7 +10,8 @@ import {
 import { dirname } from 'node:path';
 import { assertReviewedNodeRuntime } from './runtime-version.js';
 import { createSigbashCredentialFile } from './sigbash-credentials.js';
-import { writeProtectedEnvironmentFile } from './operator-environment.js';
+import { writeProtectedEnvironmentFile, writeProtectedFile } from './operator-environment.js';
+import { createLiveSigbashProofReceipt, type LiveSigbashProofReceipt } from './live-proof-receipt.js';
 import {
   AMOUNTS,
   DEFAULT_DEMO_SEED,
@@ -2564,6 +2565,13 @@ async function livePolicyDryRun() {
   const vout = Number(args.vout ?? 0);
   const valueSats = Number(stringArg(args, 'value-sats') ?? expectedVaultValueSats(currentIds));
   const requestSignature = args.sign === true || args.sign === 'true';
+  const placeholderOutpoint = stringArg(args, 'txid') === undefined;
+  assert(!requestSignature || placeholderOutpoint,
+    'the predeployment signing proof must use its deliberately unfunded placeholder outpoint');
+  const proofReceiptPath = requestSignature
+    ? stringArg(args, 'receipt-output') || 'live-run/predeployment-proof-receipt.json'
+    : null;
+  if (proofReceiptPath) assertFreshProtectedOutputPath(proofReceiptPath, 'live Sigbash proof receipt');
   const state = createConfiguredState();
   const round = roundId(currentIds);
   const leafKey = sigbashRoundKey(participantById(state, leaverId), round);
@@ -2595,6 +2603,8 @@ async function livePolicyDryRun() {
   let liveSignature: SigbashSignResult | null = null;
   let signedArtifacts: ReturnType<typeof normalizeSigbashSigningResult> | null = null;
   let authorization: SoloSigningAuthorization | null = null;
+  let proofReceipt: LiveSigbashProofReceipt | null = null;
+  let proofReceiptFile: { path: string; reused: boolean } | null = null;
   if (requestSignature && checks.every((item) => item.ok)) {
     liveSignature = await adapter.signPSBT({ psbtBase64: variants.valid.psbtBase64 }, policy);
     signedArtifacts = normalizeSigbashSigningResult(liveSignature);
@@ -2632,6 +2642,23 @@ async function livePolicyDryRun() {
       }
     }
   }
+  if (requestSignature && checks.every((item) => item.ok) && signedArtifacts && authorization) {
+    proofReceipt = createLiveSigbashProofReceipt({
+      createdAt: new Date().toISOString(),
+      round,
+      leaverId,
+      keyId,
+      placeholderOutpoint,
+      psbtBase64: variants.valid.psbtBase64,
+      signedArtifacts,
+      authorization,
+      checks,
+    });
+    proofReceiptFile = writeProtectedFile(
+      proofReceiptPath!,
+      `${JSON.stringify(proofReceipt, null, 2)}\n`,
+    );
+  }
   printResult(requestSignature
     ? 'live predeployment Sigbash mainnet signing proof'
     : 'live policy dry-run (no chain lookup, no nullifier consumed)', {
@@ -2640,11 +2667,16 @@ async function livePolicyDryRun() {
     keyId,
     outpoint: `${txid}:${vout}`,
     valueSats,
-    placeholderOutpoint: stringArg(args, 'txid') === undefined,
+    placeholderOutpoint,
     signatureRequested: requestSignature,
     liveSignature,
     signedArtifacts,
     authorization,
+    proofReceipt: proofReceipt ? {
+      proofDigest: proofReceipt.proofDigest,
+      finalTxid: proofReceipt.finalTxid,
+      file: proofReceiptFile,
+    } : null,
     checks,
     passed: checks.every((item) => item.ok),
   });
@@ -3677,6 +3709,18 @@ function printSetup(state: VaultState): void {
 function printResult(title: string, value: unknown): void {
   console.log(`\n=== ${title} ===`);
   console.log(JSON.stringify(value, null, 2));
+}
+
+function assertFreshProtectedOutputPath(rawPath: string, label: string): void {
+  const parent = dirname(rawPath);
+  mkdirSync(parent, { recursive: true, mode: 0o700 });
+  const parentStat = lstatSync(parent);
+  assert(parentStat.isDirectory() && !parentStat.isSymbolicLink(),
+    `${label} parent must be a real directory, not a link`);
+  assert((parentStat.mode & 0o077) === 0,
+    `${label} parent must not be accessible by group or other users`);
+  assert(!existsSync(rawPath),
+    `${label} already exists; archive it or choose a fresh --receipt-output before consuming another nullifier`);
 }
 
 // Live leaf keys come in one env var as nested JSON, exactly as printed by

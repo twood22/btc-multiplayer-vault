@@ -38,6 +38,13 @@ export function writeProtectedEnvironmentFile(
   rawPath: string,
   content: string,
 ): { path: string; reused: boolean } {
+  return writeProtectedFile(rawPath, content);
+}
+
+export function writeProtectedFile(
+  rawPath: string,
+  content: string,
+): { path: string; reused: boolean } {
   const environmentPath = resolve(rawPath);
   const parent = dirname(environmentPath);
   mkdirSync(parent, { recursive: true, mode: 0o700 });

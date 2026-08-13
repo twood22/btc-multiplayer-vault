@@ -196,11 +196,12 @@ declared Node runtime, HTTPS WebAuthn/RP binding, independent chain source,
 explicit tiny-mainnet amount cap, funding fee, and recovery delay, current upstream Sigbash
 runtime hashes, a non-local TLS PostgreSQL endpoint and migrations, the exact
 three-member/two-passkey/nine-key/three-confirmation/nine-proof database state,
-absence of a pre-funding coin, and a mainnet Bitcoin backend. It always keeps
+the protected live-Sigbash proof receipt and its reviewed digest, absence of a
+pre-funding coin, and a mainnet Bitcoin backend. It always keeps
 funding gate closed until the listed real-device and operational review items
 are documented; funding remains a later separate decision. The earlier
-deployment gate is the explicit `live-predeployment-proof` command described in
-`DEPLOYMENT.md`.
+deployment gate creates that receipt through the explicit
+`live-predeployment-proof` command described in `DEPLOYMENT.md`.
 
 ## Sequenced hard gates
 

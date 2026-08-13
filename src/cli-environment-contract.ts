@@ -13,7 +13,12 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
-import { writeProtectedEnvironmentFile } from './operator-environment.js';
+import { writeProtectedEnvironmentFile, writeProtectedFile } from './operator-environment.js';
+import {
+  createLiveSigbashProofReceipt,
+  readProtectedLiveSigbashProofReceipt,
+  validateLiveSigbashProofReceipt,
+} from './live-proof-receipt.js';
 
 const cliPath = resolve('src/cli.ts');
 const tsxCliPath = createRequire(import.meta.url).resolve('tsx/cli');
@@ -79,6 +84,43 @@ try {
   assert.match(withProof.stdout, /"relativeBlocks": 321/u);
   checks.push({
     name: 'the proof environment is owner-only, exact-content resumable, and loaded before configuration',
+    ok: true,
+  });
+
+  const receipt = createLiveSigbashProofReceipt({
+    createdAt: '2026-08-12T00:00:00.000Z',
+    round: 'alicebob',
+    leaverId: 'alice',
+    keyId: 'live-proof-key',
+    placeholderOutpoint: true,
+    psbtBase64: 'cHNidP8BAA==',
+    signedArtifacts: { success: true, txHex: '0200' },
+    authorization: {
+      finalTxid: '11'.repeat(32),
+      consensus: { txid: '11'.repeat(32), vsize: 100, feeSats: 500, checks: ['verified'] },
+    },
+    checks: [
+      { name: 'Sigbash verifyPSBT accepts the valid solo PSBT (REQKEY leaf-key assumption holds)', ok: true },
+      { name: 'Sigbash verifyPSBT explicitly rejects tampered wrong-amount PSBT', ok: true },
+      { name: 'Sigbash verifyPSBT explicitly rejects tampered wrong-address PSBT', ok: true },
+      { name: 'Sigbash verifyPSBT explicitly rejects tampered extra-output PSBT', ok: true },
+      { name: 'Sigbash live signPSBT returns a transaction or signed PSBT artifact', ok: true },
+      { name: 'live Sigbash artifact is the exact consensus-valid policy-leaf transaction', ok: true },
+    ],
+  });
+  const receiptPath = join(proofDirectory, 'proof-receipt.json');
+  writeProtectedFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+  assert.deepEqual(readProtectedLiveSigbashProofReceipt(receiptPath, receipt.proofDigest), receipt);
+  assert.throws(
+    () => validateLiveSigbashProofReceipt({ ...receipt, createdAt: '2026-08-13T00:00:00.000Z' }),
+    /digest does not match/u,
+  );
+  assert.throws(
+    () => readProtectedLiveSigbashProofReceipt(receiptPath, '33'.repeat(32)),
+    /reviewed proof digest/u,
+  );
+  checks.push({
+    name: 'a protected live-proof receipt binds the successful signature and hostile-case evidence',
     ok: true,
   });
 

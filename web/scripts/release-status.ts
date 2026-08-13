@@ -4,6 +4,7 @@ import { loadEnvFile } from 'node:process';
 import postgres from 'postgres';
 import { getBlockchainInfo } from '../../src/bitcoin-rpc';
 import { reviewedNodeRuntimeCheck } from '../../src/runtime-version';
+import { readProtectedLiveSigbashProofReceipt } from '../../src/live-proof-receipt';
 import { databaseEndpointCheck } from '../lib/database-config';
 import { EXPECTED_MIGRATION_VERSIONS } from '../lib/migrations';
 
@@ -12,7 +13,7 @@ if (existsSync('.env.local')) loadEnvFile('.env.local');
 interface Check { name: string; ok: boolean; detail?: string }
 const checks: Check[] = [];
 const manualGates = [
-  'The predeployment live-predeployment-proof output must show a real consensus-authorized Sigbash mainnet signature.',
+  'Independently review the protected predeployment live-Sigbash receipt and its consensus-authorized mainnet signature.',
   'Sigbash must explicitly enable mainnet for all three independent participant organization hashes.',
   'Each friend must complete setup and recovery with two real, distinct PRF-capable passkeys.',
   'Each friend must independently review the unanimous roster and tiny-mainnet economics.',
@@ -20,6 +21,25 @@ const manualGates = [
   'The selected production database backup and restore procedure must be exercised.',
   'Funding remains a separate explicit decision after this report passes.',
 ];
+
+try {
+  const proofDigest = process.env.LIVE_SIGBASH_MAINNET_PROOF_DIGEST || '';
+  const receipt = readProtectedLiveSigbashProofReceipt(
+    process.env.LIVE_SIGBASH_MAINNET_PROOF_RECEIPT || 'live-run/predeployment-proof-receipt.json',
+    proofDigest,
+  );
+  checks.push(check(
+    'protected live Sigbash mainnet proof receipt is present and matches its reviewed digest',
+    true,
+    `round ${receipt.round}; leaver ${receipt.leaverId}; final txid ${receipt.finalTxid}`,
+  ));
+} catch (error) {
+  checks.push(check(
+    'protected live Sigbash mainnet proof receipt is present and matches its reviewed digest',
+    false,
+    safeError(error),
+  ));
+}
 
 const runtime = reviewedNodeRuntimeCheck();
 checks.push(check(
@@ -211,14 +231,14 @@ const reportBody = {
   automatedPreflightPassed,
   fundingAllowed: false,
   deploymentGate: {
-    evaluatedByThisReport: false,
+    evaluatedByThisReport: true,
     organizationCommand: 'npm run sigbash-proof-org-id',
     setupCommand: 'SIGBASH_MODE=live npm run live-predeployment-setup',
     proofCommand: 'SIGBASH_MODE=live npm run live-predeployment-proof',
   },
   reason: automatedPreflightPassed
-    ? 'Automated funding checks passed; complete and document every manual gate. Funding still requires a later, separate approval.'
-    : 'One or more mandatory automated funding gates are incomplete. Do not fund. This report does not evaluate the separate predeployment gate.',
+    ? 'Automated funding checks, including the bound live-proof receipt, passed; complete and document every manual gate. Funding still requires a later, separate approval.'
+    : 'One or more mandatory automated funding gates are incomplete. Do not fund.',
   checks,
   manualGates,
 };

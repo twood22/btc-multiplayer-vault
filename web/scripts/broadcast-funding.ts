@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { loadEnvFile } from 'node:process';
 import { assertReviewedNodeRuntime } from '../../src/runtime-version';
+import { readProtectedLiveSigbashProofReceipt } from '../../src/live-proof-receipt';
 import { submitPasskeyApprovedFunding } from '../lib/server/funding-signature-store';
 
 if (existsSync('.env.local')) loadEnvFile('.env.local');
@@ -17,6 +18,10 @@ if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 if (liveProofDigest !== process.env.LIVE_SIGBASH_MAINNET_PROOF_DIGEST) {
   throw new Error('live Sigbash proof digest does not match the protected operator environment');
 }
+readProtectedLiveSigbashProofReceipt(
+  process.env.LIVE_SIGBASH_MAINNET_PROOF_RECEIPT || 'live-run/predeployment-proof-receipt.json',
+  liveProofDigest,
+);
 if (releaseReportDigest !== process.env.FUNDING_RELEASE_REPORT_DIGEST) {
   throw new Error('funding release report digest does not match the protected operator environment');
 }
