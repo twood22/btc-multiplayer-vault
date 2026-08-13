@@ -8,6 +8,7 @@ import { ceremonyStart } from '../../src/ceremony.js';
 import { observeVaultCoin } from '../lib/client/chain-observation';
 import {
   createSigbashBrowserClient,
+  disposeSigbashBrowserClient,
   loadSigbashBrowserRuntime,
 } from '../lib/client/sigbash-browser';
 import { deriveParticipantSigbashPrivateKey } from '../lib/client/participant-identity';
@@ -352,8 +353,11 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
                 : {}),
             });
           } finally {
-            client?.disconnect();
-            privateKey?.fill(0);
+            try {
+              if (client) disposeSigbashBrowserClient(client);
+            } finally {
+              privateKey?.fill(0);
+            }
           }
         },
       });

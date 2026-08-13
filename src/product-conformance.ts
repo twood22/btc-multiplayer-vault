@@ -187,6 +187,22 @@ record('the production Sigbash solo-signing and persistence boundaries have isol
   assert.match(databaseAcceptance, /cannot be replayed through the finalization boundary/u);
 });
 
+record('every browser Sigbash flow disposes the SDK copy of private-key material', () => {
+  const client = readFileSync(resolve(root, 'web/lib/client/sigbash-browser.ts'), 'utf8');
+  assert.match(client, /export function disposeSigbashBrowserClient/u);
+  assert.match(client, /client\.disconnect\(\)/u);
+  assert.match(client, /client\.dispose\(\)/u);
+  for (const path of [
+    'web/components/sigbash-custody-setup.tsx',
+    'web/components/sigbash-readiness-proof.tsx',
+    'web/components/vault-runtime-panel.tsx',
+  ]) {
+    const source = readFileSync(resolve(root, path), 'utf8');
+    assert.match(source, /disposeSigbashBrowserClient\(client\)/u, `${path} skips Sigbash SDK disposal`);
+    assert.doesNotMatch(source, /client\?\.disconnect\(\)/u, `${path} only disconnects Sigbash sockets`);
+  }
+});
+
 record('every required PostgreSQL product-state migration is present', () => {
   const actual = readdirSync(resolve(root, 'db/migrations'))
     .filter((name) => name.endsWith('.sql'))

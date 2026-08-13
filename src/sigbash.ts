@@ -86,6 +86,7 @@ export interface SigbashLiveClient {
   }): Promise<SigbashSignResult>;
   updatePolicy(opts: { keyId: string; newPolicyJson: string }): Promise<void>;
   disconnect?(): void;
+  dispose?(): void;
 }
 
 export interface SigbashVerifyResult {

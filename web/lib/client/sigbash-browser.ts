@@ -91,6 +91,17 @@ export function createSigbashBrowserClient(
   });
 }
 
+/** Release sockets and overwrite the SDK's copied private-key material. */
+export function disposeSigbashBrowserClient(
+  client: Pick<SigbashClient, 'disconnect' | 'dispose'>,
+): void {
+  try {
+    client.disconnect();
+  } finally {
+    client.dispose();
+  }
+}
+
 async function postJson(path: string, body: unknown): Promise<Record<string, unknown>> {
   const response = await fetch(path, {
     method: 'POST',

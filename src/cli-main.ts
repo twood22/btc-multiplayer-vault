@@ -3626,7 +3626,11 @@ async function sigbashLiveSetup() {
         `(${doneKeys.size}/${proofRound ? 2 : 9})${matching ? ' (resumed live key)' : ''}`,
       );
     } finally {
-      client.disconnect?.();
+      try {
+        client.disconnect?.();
+      } finally {
+        client.dispose?.();
+      }
     }
   };
 

@@ -11,6 +11,9 @@ import {
   deriveParticipantSigbashPrivateKey,
 } from '../lib/client/participant-identity';
 import { deriveParticipantKeys } from '../../src/vault.js';
+import { unlockPublishedVault } from '../lib/client/vault-signing.js';
+import { scrubUnlockedVaultCustody } from '../lib/client/unlocked-vault-custody.js';
+import { createIsolatedSoloFixture } from './solo-signing-fixture.js';
 
 const checks: Array<{ name: string; ok: boolean }> = [];
 
@@ -95,6 +98,26 @@ await check('browser BYO Sigbash share exactly matches every authoritative round
     const browserPrivateKey = await deriveParticipantSigbashPrivateKey(secret, 'alice', round);
     assert(Buffer.from(browserPrivateKey).toString('hex') === key.privateKeyHex, `${round} private share mismatch`);
     browserPrivateKey.fill(0);
+  }
+});
+
+await check('one-action vault unlock drops every transient private-key reference on teardown', () => {
+  const fixture = createIsolatedSoloFixture('70d14fe5-e04b-4737-a098-b2482062bf16');
+  const unlocked = unlockPublishedVault({
+    artifact: fixture.artifact,
+    expectedDigest: fixture.digest,
+    participantSecret: fixture.participantSecrets.alice,
+  });
+  const alice = unlocked.signer.state.participants.find((item) => item.id === 'alice')!;
+  assert(Boolean(alice.personal.privateKeyHex), 'test unlock has no personal private key');
+  assert(Boolean(alice.payout.privateKeyHex), 'test unlock has no payout private key');
+  scrubUnlockedVaultCustody(unlocked);
+  for (const participant of unlocked.signer.state.participants) {
+    assert(participant.personal.privateKeyHex === '', `${participant.id} personal key reference survived teardown`);
+    assert(participant.payout.privateKeyHex === '', `${participant.id} payout key reference survived teardown`);
+    for (const key of Object.values(participant.sigbashByRound)) {
+      assert(key.privateKeyHex === '', `${participant.id} Sigbash key reference survived teardown`);
+    }
   }
 });
 

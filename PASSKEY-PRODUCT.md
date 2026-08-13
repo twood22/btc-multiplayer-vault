@@ -28,7 +28,9 @@ participant-only MuSig2 path, or the timelocked recovery path.
 - Strict CSP with request nonces. The only external connection origin is the
   configured HTTPS/WSS Sigbash service; its Go runtime is fetched through a
   same-origin route and checked against an operator-pinned SHA-384 digest, and
-  the WASM is independently pinned before execution.
+  the WASM is independently pinned before execution. Every browser Sigbash
+  operation then disconnects its sockets and invokes the SDK disposal boundary
+  that overwrites its copied MuSig2 private-key buffer.
 - A recovery-passkey ceremony that first unlocks with an existing credential,
   registers a distinct credential, and encrypts the exact same participant
   secret under a credential-specific PRF salt and authenticated envelope. Either

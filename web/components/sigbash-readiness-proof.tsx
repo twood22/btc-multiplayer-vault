@@ -6,6 +6,7 @@ import type { VaultCoinSnapshot } from '../../src/vault-runtime.js';
 import { deriveParticipantSigbashPrivateKey } from '../lib/client/participant-identity';
 import {
   createSigbashBrowserClient,
+  disposeSigbashBrowserClient,
   loadSigbashBrowserRuntime,
 } from '../lib/client/sigbash-browser';
 import { withUnlockedVaultCustody } from '../lib/client/unlocked-vault-custody';
@@ -164,9 +165,12 @@ export function SigbashReadinessProof({
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Live Sigbash readiness proof failed');
     } finally {
-      client?.disconnect();
-      privateKey?.fill(0);
-      setWorking(false);
+      try {
+        if (client) disposeSigbashBrowserClient(client);
+      } finally {
+        privateKey?.fill(0);
+        setWorking(false);
+      }
     }
   }
 

@@ -306,6 +306,11 @@ function sdkContractChecks(sdk: typeof import('@sigbash/sdk')): ContractCheck[] 
     check('loadWasm is exported as a function', typeof sdk.loadWasm === 'function'),
     check('SigbashClient is exported as a constructor', typeof sdk.SigbashClient === 'function'),
     check(
+      'SigbashClient exposes socket disconnect and private-key disposal',
+      typeof sdk.SigbashClient.prototype.disconnect === 'function' &&
+        typeof sdk.SigbashClient.prototype.dispose === 'function',
+    ),
+    check(
       'conditionConfigToPoetPolicy is exported as a function',
       typeof sdk.conditionConfigToPoetPolicy === 'function',
     ),

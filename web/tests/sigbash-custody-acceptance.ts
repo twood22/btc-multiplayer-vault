@@ -9,6 +9,7 @@ import {
   recoverLatestSigbashCustodyBundle,
   type SigbashCustodyBundle,
 } from '../lib/client/sigbash-custody';
+import { disposeSigbashBrowserClient } from '../lib/client/sigbash-browser';
 
 const checks: Array<{ name: string; ok: boolean }> = [];
 
@@ -91,6 +92,28 @@ await check('recovery kit is bound to its key and mainnet', async () => {
     ...withKey,
     keys: [{ ...withKey.keys[0]!, recoveryKit: { ...withKey.keys[0]!.recoveryKit, keyId: 'other' } }],
   }, participantSecret, 1, aadOne));
+});
+
+await check('browser Sigbash teardown disconnects sockets and disposes copied private-key material', () => {
+  const calls: string[] = [];
+  disposeSigbashBrowserClient({
+    disconnect() { calls.push('disconnect'); },
+    dispose() { calls.push('dispose'); },
+  });
+  assert(JSON.stringify(calls) === JSON.stringify(['disconnect', 'dispose']), 'Sigbash teardown order changed');
+
+  let disposedAfterFailure = false;
+  let rejected = false;
+  try {
+    disposeSigbashBrowserClient({
+      disconnect() { throw new Error('controlled disconnect failure'); },
+      dispose() { disposedAfterFailure = true; },
+    });
+  } catch (error) {
+    rejected = error instanceof Error && error.message === 'controlled disconnect failure';
+  }
+  assert(disposedAfterFailure, 'SDK private-key disposal was skipped after disconnect failed');
+  assert(rejected, 'disconnect failure was not surfaced');
 });
 
 console.log(JSON.stringify({ passed: checks.every((item) => item.ok), checks }, null, 2));

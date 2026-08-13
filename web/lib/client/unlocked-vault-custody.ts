@@ -23,6 +23,7 @@ export async function withUnlockedVaultCustody<T>(input: {
   let prfOutput: Uint8Array | undefined;
   let participantSecret = '';
   let custody: SigbashCustodyBundle | undefined;
+  let unlocked: UnlockedPublishedVault | undefined;
   try {
     const authorization = await postJson('/api/sigbash/custody/authorize/options', {
       credentialId: input.credentialId,
@@ -58,7 +59,7 @@ export async function withUnlockedVaultCustody<T>(input: {
       throw new Error('encrypted Sigbash custody belongs to a different participant');
     }
     const published = await postJson('/api/vault/artifact', {});
-    const unlocked = unlockPublishedVault({
+    unlocked = unlockPublishedVault({
       artifact: published.artifact as PublishedRosterArtifact,
       expectedDigest: String(published.digest),
       participantSecret,
@@ -73,6 +74,16 @@ export async function withUnlockedVaultCustody<T>(input: {
     prfOutput?.fill(0);
     participantSecret = '';
     if (custody) scrubCustody(custody);
+    if (unlocked) scrubUnlockedVaultCustody(unlocked);
+  }
+}
+
+/** Drop the transient personal and payout private-key strings after one action. */
+export function scrubUnlockedVaultCustody(unlocked: UnlockedPublishedVault): void {
+  for (const participant of unlocked.signer.state.participants) {
+    participant.personal.privateKeyHex = '';
+    participant.payout.privateKeyHex = '';
+    for (const key of Object.values(participant.sigbashByRound)) key.privateKeyHex = '';
   }
 }
 

@@ -8,6 +8,7 @@ import {
 } from '../lib/client/participant-identity';
 import {
   createSigbashBrowserClient,
+  disposeSigbashBrowserClient,
   loadSigbashBrowserRuntime,
 } from '../lib/client/sigbash-browser';
 import {
@@ -273,10 +274,13 @@ export function SigbashCustodySetup({
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Sigbash key registration failed');
     } finally {
-      client?.disconnect();
-      privateKey?.fill(0);
-      participantSecret = '';
-      setWorking(false);
+      try {
+        if (client) disposeSigbashBrowserClient(client);
+      } finally {
+        privateKey?.fill(0);
+        participantSecret = '';
+        setWorking(false);
+      }
     }
   }
 
