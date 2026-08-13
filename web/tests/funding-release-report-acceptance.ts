@@ -40,6 +40,10 @@ try {
     { name: 'Sigbash WASM matches the pinned SHA-384', ok: true },
     { name: 'Sigbash Go loader matches the pinned SHA-384', ok: true },
     { name: 'production database uses a non-local TLS endpoint', ok: true },
+    {
+      name: 'protected production database restore receipt is present, fresh, and bound to this endpoint',
+      ok: true,
+    },
     { name: 'production database is PostgreSQL 16 or newer', ok: true },
     { name: 'all required database migrations are applied', ok: true },
     { name: 'exactly one three-person private-beta vault exists', ok: true },
@@ -62,7 +66,6 @@ try {
     'The deployed private service must use the independently reviewed immutable image digest and narrow private access control.',
     'Before initial wallet signing, all three friends must review the same funding PSBT fingerprint, inputs, change outputs, vault output, and fee.',
     'Three independent real wallets must sign only their own P2WPKH or P2TR funding inputs and all three final passkey approvals must be completed.',
-    'The selected production database backup and restore procedure must be exercised.',
     'The private Bitcoin Core path must complete rejection, retry, duplicate, interruption, mempool, confirmation, and reorganization drills.',
     'The operator has documented that this report does not authorize funding and a separate explicit broadcast decision is still required.',
   ];
@@ -113,6 +116,20 @@ try {
       finalTxid,
       liveSigbashProofDigest,
       checks: reportChecks.slice(1),
+      manualGates,
+      manualReviewAcknowledged: true,
+    }),
+    /missing a mandatory automated gate/u,
+  );
+  assert.throws(
+    () => createFundingReleaseReport({
+      createdAt,
+      vaultId,
+      finalizationDigest,
+      finalTxid,
+      liveSigbashProofDigest,
+      checks: reportChecks.filter((item) =>
+        !item.name.startsWith('protected production database restore receipt')),
       manualGates,
       manualReviewAcknowledged: true,
     }),

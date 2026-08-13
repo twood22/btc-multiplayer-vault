@@ -105,8 +105,24 @@ rejected by the release report.
    is unproven; no local or dry-run success substitutes for this command.
 2. Build the immutable image in CI and record its digest. Do not inject runtime
    secrets during the build.
-3. Restore the latest encrypted database backup into an isolated database and
+3. Restore the latest encrypted database backup into an isolated database with
+   a database name distinct from the source and
    run `npm run web:migrate`; verify the application and rollback procedure.
+   Quiesce the source while comparing it with the restored copy. The verifier
+   uses read-only repeatable snapshots and refuses any schema, migration, or
+   row mismatch:
+
+   ```bash
+   RESTORED_DATABASE_URL='<isolated verified-TLS restore URL>' \
+     npm run web:verify-database-restore -- \
+       --write-protected-receipt live-run/database-restore-receipt.json \
+       --confirm-source-quiesced SOURCE_QUIESCED_FOR_BACKUP_RESTORE
+   ```
+
+   Review the non-secret `receiptDigest`, set
+   `DATABASE_RESTORE_RECEIPT_DIGEST`, and mount the owner-only receipt at
+   `DATABASE_RESTORE_RECEIPT`. Do not give the web role the restored database
+   URL.
 4. Run the migration job once against the selected production database. The
    migrator takes a PostgreSQL advisory lock and refuses migration files that do
    not exactly match the reviewed manifest.
@@ -121,17 +137,22 @@ rejected by the release report.
    This includes sending each participant's non-secret organization hash to
    Sigbash and confirming all three organizations are mainnet-enabled.
 8. Exercise backup/restore and mainnet-backend rejection, retry, mempool,
-   confirmation, and reorganization behavior without a funded vault.
+   confirmation, and reorganization behavior without a funded vault. Repeat
+   the restore comparison after the real three-person state exists so its
+   protected receipt is less than 24 hours old when the final release report is
+   written.
    First run `npm run web:test:core-reorg` to prove the exact reconciliation
    and PostgreSQL boundary with a checksum-pinned disposable Bitcoin Core
    31.1 node. Its regtest chain is isolated test infrastructure only; repeat
    the operational checks against the selected private mainnet node before
    funding.
-9. Place the independently reviewed protected receipt's `proofDigest` in
+9. Place the independently reviewed Sigbash receipt's `proofDigest` in
    `LIVE_SIGBASH_MAINNET_PROOF_DIGEST` and keep
    `LIVE_SIGBASH_MAINNET_PROOF_RECEIPT` pointed at that owner-only receipt.
-   Mount the receipt read-only into the release-report and funding-broadcast
-   operator jobs; never bake it into the application image. Run
+   Mount it and the reviewed database-restore receipt read-only into the
+   release-report operator job; mount only the Sigbash receipt into the
+   funding-broadcast job. Never bake either artifact into the application
+   image. Run
    `npm run web:release-status` as a preliminary pre-funding audit. Review its
    checks and `statusDigest`; this status output is not a broadcast artifact
    and cannot authorize funding.
@@ -172,7 +193,9 @@ rejected by the release report.
 ## Backup and monitoring minimums
 
 - Use encrypted automated PostgreSQL backups with point-in-time recovery, and
-  perform a real restore drill before the private beta.
+  perform a real restore drill before the private beta. A restore counts only
+  when `web:verify-database-restore` records exact schema and row equality in a
+  fresh protected receipt bound to the production endpoint.
 - Alert on web readiness failures, watcher failures, repeated broadcast
   failures, new `chain_reorganization_events`, database saturation, and
   sustained rate-limit activity. Do not log
@@ -200,6 +223,7 @@ Run these only in a private job or shell attached to the same immutable image:
 ```bash
 npm run web:migrate
 npm run web:create-invite -- --vault-name '<reviewed name>' --participant alice
+npm run web:verify-database-restore -- --write-protected-receipt live-run/database-restore-receipt.json --confirm-source-quiesced SOURCE_QUIESCED_FOR_BACKUP_RESTORE
 npm run web:release-status
 npm run web:release-status -- --write-protected-report live-run/funding-release-report.json --confirm-manual-gates REVIEWED_EVERY_MANUAL_FUNDING_GATE
 npm run web:watch-chain

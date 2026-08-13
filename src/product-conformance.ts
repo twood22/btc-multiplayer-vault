@@ -86,6 +86,18 @@ record('the private funding command is bound to protected live-proof and funding
   assert.match(source, /submitPasskeyApprovedFunding/u);
 });
 
+record('the funding release requires executable production database restore evidence', () => {
+  const packageJson = readFileSync(resolve(root, 'package.json'), 'utf8');
+  const verifier = readFileSync(resolve(root, 'web/scripts/verify-database-restore.ts'), 'utf8');
+  const release = readFileSync(resolve(root, 'web/scripts/release-status.ts'), 'utf8');
+  assert.match(packageJson, /web:verify-database-restore/u);
+  assert.match(verifier, /captureDatabaseSnapshot/u);
+  assert.match(verifier, /RESTORED_DATABASE_URL/u);
+  assert.match(verifier, /writeProtectedFile/u);
+  assert.match(release, /readProtectedDatabaseRestoreReceipt/u);
+  assert.match(release, /DATABASE_RESTORE_RECEIPT_DIGEST/u);
+});
+
 record('the private watcher continuously reconciles confirmed mainnet block anchors', () => {
   const runtime = readFileSync(resolve(root, 'web/lib/server/vault-runtime-store.ts'), 'utf8');
   const reconciliation = readFileSync(resolve(root, 'web/lib/server/chain-reconciliation.ts'), 'utf8');

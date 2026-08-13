@@ -122,6 +122,7 @@ export function validateFundingReleaseReport(input: unknown): FundingReleaseRepo
     'Sigbash WASM matches the pinned SHA-384',
     'Sigbash Go loader matches the pinned SHA-384',
     'production database uses a non-local TLS endpoint',
+    'protected production database restore receipt is present, fresh, and bound to this endpoint',
     'production database is PostgreSQL 16 or newer',
     'all required database migrations are applied',
     'exactly one three-person private-beta vault exists',
@@ -143,7 +144,6 @@ export function validateFundingReleaseReport(input: unknown): FundingReleaseRepo
     'The deployed private service must use the independently reviewed immutable image digest',
     'Before initial wallet signing, all three friends must review the same funding PSBT fingerprint',
     'Three independent real wallets must sign only their own P2WPKH or P2TR funding inputs',
-    'The selected production database backup and restore procedure must be exercised',
     'The private Bitcoin Core path must complete rejection, retry, duplicate, interruption, mempool, confirmation, and reorganization drills',
     'The operator has documented that this report does not authorize funding',
   ];

@@ -196,7 +196,8 @@ immutable funding approval and signature per seat, finalization/submission
 state consistency, unanimous restart audit preservation, auditable retry after
 failure, proposal-digest foreign-key binding, and atomic concurrent rate-limit
 counting/reset without raw subjects. It also proves one-winner watcher leasing
-and release after failure, paired confirmation anchors,
+and release after failure, an exact PostgreSQL schema-and-row restore copy,
+paired confirmation anchors,
 atomic funding and transition rollback, exact prior-coin restoration,
 observation invalidation, broadcast-descendant preservation, and immutable
 public-fingerprint reorganization events. The separate Bitcoin Core 31.1 drill
@@ -217,11 +218,14 @@ coverage, but virtual authenticators do not satisfy the physical-passkey gate.
 `web:release-status` is the post-deployment funding audit and prints only
 non-secret gate summaries plus a non-authorizing `statusDigest`. It verifies the
 declared Node runtime, HTTPS WebAuthn/RP binding, independent chain source,
-explicit tiny-mainnet amount cap, funding fee, and recovery delay, current upstream Sigbash
-runtime hashes, a non-local TLS PostgreSQL endpoint and migrations, the exact
+explicit tiny-mainnet amount cap, funding fee, and recovery delay, current
+upstream Sigbash runtime hashes, a non-local TLS PostgreSQL endpoint, an
+authenticated fresh receipt proving an isolated restore exactly matched its
+schema, migrations, and rows, the exact
 three-member/two-passkey/nine-key/three-confirmation/nine-proof database state,
-the protected live-Sigbash proof receipt and its reviewed digest, absence of a
-pre-funding coin, and a mainnet Bitcoin backend. After unanimous final
+the protected live-Sigbash proof receipt and its reviewed digest, a fresh
+protected exact-restore receipt, absence of a pre-funding coin, and a mainnet
+Bitcoin backend. After unanimous final
 transaction approval, an explicit manual-gate acknowledgement can write a
 fresh owner-only release artifact. That canonical artifact binds the exact
 vault, finalization digest and txid, live-proof digest, and passing checks; the

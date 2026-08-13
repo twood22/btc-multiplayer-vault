@@ -255,6 +255,17 @@ keys. Set `BITCOIN_CORE_BIN`, `POSTGRES_BIN`, and, when necessary,
 failure drill, not permission to use regtest in the product and not evidence of
 Sigbash or Bitcoin mainnet readiness.
 
+`web:verify-database-restore` closes the production restore-evidence boundary.
+With the source quiesced, it opens read-only repeatable snapshots against the
+selected production database and an isolated restored database with a distinct
+server-reported database name, compares the
+complete public schema and every application row, and writes an owner-only
+receipt containing only endpoint fingerprints, counts, and digests. The
+pre-funding release report authenticates that receipt, requires it to name the
+configured production endpoint, and rejects it after 24 hours. It never logs
+database URLs or row contents and does not perform, replace, or schedule the
+provider's encrypted backup itself.
+
 `policy-check-psbt` and `sigbash-sign-psbt` infer the round from the PSBT's
 input scriptPubKey, so you only pass `--participant`.
 

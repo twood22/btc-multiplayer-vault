@@ -225,7 +225,8 @@ Completion requires evidence for all of the following:
 5. passkey custody, recovery, roster, funding, signing, restart, observation,
    and broadcast bindings survive adversarial and replay tests;
 6. database migrations, concurrency constraints, production build, dependency
-   audit, backup restore, and runtime health checks pass;
+   audit, an authenticated exact schema-and-row backup restore, and runtime
+   health checks pass;
 7. a real Sigbash mainnet signing proof and all real-device/backend drills are
    recorded; and
 8. no deployment, funding, or broadcast occurred before its required gate and

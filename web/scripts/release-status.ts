@@ -7,6 +7,10 @@ import { createFundingReleaseReport } from '../../src/funding-release-report';
 import { writeProtectedFile } from '../../src/operator-environment';
 import { reviewedNodeRuntimeCheck } from '../../src/runtime-version';
 import { readProtectedLiveSigbashProofReceipt } from '../../src/live-proof-receipt';
+import {
+  databaseEndpointFingerprint,
+  readProtectedDatabaseRestoreReceipt,
+} from '../../src/database-restore-receipt';
 import { databaseEndpointCheck } from '../lib/database-config';
 import { EXPECTED_MIGRATION_VERSIONS } from '../lib/migrations';
 
@@ -30,7 +34,6 @@ const manualGates = [
   'The deployed private service must use the independently reviewed immutable image digest and narrow private access control.',
   'Before initial wallet signing, all three friends must review the same funding PSBT fingerprint, inputs, change outputs, vault output, and fee.',
   'Three independent real wallets must sign only their own P2WPKH or P2TR funding inputs and all three final passkey approvals must be completed.',
-  'The selected production database backup and restore procedure must be exercised.',
   'The private Bitcoin Core path must complete rejection, retry, duplicate, interruption, mempool, confirmation, and reorganization drills.',
   'The operator has documented that this report does not authorize funding and a separate explicit broadcast decision is still required.',
 ];
@@ -136,11 +139,37 @@ if (process.env.DATABASE_URL) {
   ));
   if (!databaseEndpoint.ok) {
     checks.push(check(
+      'protected production database restore receipt is present, fresh, and bound to this endpoint',
+      false,
+      'not attempted until the database endpoint passes TLS validation',
+    ));
+    checks.push(check(
       'production database readiness query succeeds',
       false,
       'not attempted until the database endpoint passes TLS validation',
     ));
   } else {
+    try {
+      const restoreReceipt = readProtectedDatabaseRestoreReceipt(
+        process.env.DATABASE_RESTORE_RECEIPT || 'live-run/database-restore-receipt.json',
+        {
+          receiptDigest: process.env.DATABASE_RESTORE_RECEIPT_DIGEST || '',
+          sourceEndpointFingerprint: databaseEndpointFingerprint(process.env.DATABASE_URL),
+        },
+      );
+      checks.push(check(
+        'protected production database restore receipt is present, fresh, and bound to this endpoint',
+        true,
+        `receipt ${restoreReceipt.receiptDigest}; ${restoreReceipt.sourceSnapshot.tableCount} tables; ` +
+          `${restoreReceipt.sourceSnapshot.totalRows} rows`,
+      ));
+    } catch (error) {
+      checks.push(check(
+        'protected production database restore receipt is present, fresh, and bound to this endpoint',
+        false,
+        safeError(error),
+      ));
+    }
     const sql = postgres(process.env.DATABASE_URL, { max: 1, connect_timeout: 10 });
     try {
       const version = await sql<Array<{ version: string }>>`SELECT version()`;
@@ -237,6 +266,10 @@ if (process.env.DATABASE_URL) {
   }
 } else {
   checks.push(check('production database is configured', false));
+  checks.push(check(
+    'protected production database restore receipt is present, fresh, and bound to this endpoint',
+    false,
+  ));
 }
 
 if (process.env.BITCOIN_BACKEND || process.env.BITCOIN_RPC_URL) {
