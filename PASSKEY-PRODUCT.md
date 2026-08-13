@@ -209,18 +209,22 @@ real-authenticator/backend run.
 
 The Playwright suite runs the HTTP and PostgreSQL paths in Chromium. It covers
 the inert pre-hydration surface, independent primary and recovery PRF passkeys,
-and a three-browser cooperative MuSig2 ceremony with six encrypted passkey
-envelopes. The ceremony survives a reload between nonce and partial rounds,
-persists only public contributions, independently verifies the final consensus
-transaction, and never broadcasts. `web:test:browser:production` creates a
-fresh PostgreSQL 16 cluster, builds the optimized standalone application,
-copies the exact static assets used by the container, starts that bundle with
-production settings, and runs the entire suite against it. This catches missing
-production JavaScript or static assets that development-server acceptance
-cannot expose. Synthetic public Sigbash registrations and the observed coin are
-explicit test prerequisites; no Sigbash runtime or Bitcoin backend is contacted,
-and virtual authenticators do not satisfy the live-service, physical-passkey,
-container-image, deployment, or funding gates.
+and three-browser runtime ceremonies with six encrypted passkey envelopes. The
+cooperative ceremony survives a reload between nonce and partial rounds,
+persists only public contributions, and independently verifies the final
+consensus transaction. The recovery ceremony makes two survivors independently
+observe a mature coin, bind it with their passkeys, and produce separate public
+shares while excluding the vanished participant. The final-sweep ceremony lets
+only the payout owner observe, propose, and sign the exact one-output spend.
+None broadcasts. `web:test:browser:production` creates a fresh PostgreSQL 16
+cluster, builds the optimized standalone application, copies the exact static
+assets used by the container, starts that bundle with production settings, and
+runs the entire suite against it. This catches missing production JavaScript or
+static assets that development-server acceptance cannot expose. Synthetic
+public Sigbash registrations, current coins, and mainnet-shaped chain responses
+are explicit test prerequisites; no Sigbash runtime or Bitcoin backend is
+contacted, and virtual authenticators do not satisfy the live-service,
+physical-passkey, container-image, deployment, or funding gates.
 
 `web:release-status` is the post-deployment funding audit and prints only
 non-secret gate summaries plus a non-authorizing `statusDigest`. It verifies the
@@ -280,9 +284,9 @@ deployed, the following gates remain mandatory before funding:
    real Sigbash registrations are present and the database-backed ceremony has
    not yet been run end to end.
 6. Expand the seeded database and virtual-authenticator browser acceptance
-   beyond the now-covered unanimous roster and distributed cooperative MuSig2
-   lifecycle to the recovery, final-sweep, funding-wallet, and live-Sigbash solo
-   surfaces without presenting local fixtures as external evidence; retain
+   beyond the now-covered unanimous roster, cooperative MuSig2, distributed
+   recovery, and owner-only final sweep to the funding-wallet and live-Sigbash
+   solo surfaces without presenting local fixtures as external evidence; retain
    rate-limit, secret-free audit, backup/restore, and operational drills.
 7. Exercise the implemented passkey-approved broadcast and private chain
    watcher against the selected production Bitcoin backend. Verify rejection,

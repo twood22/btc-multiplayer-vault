@@ -142,6 +142,7 @@ record('the release surface exercises the optimized standalone browser product',
   assert.match(runner, /npm run web:build/u);
   assert.match(runner, /\.next\/standalone\/server\.js/u);
   assert.match(runner, /cooperative-musig2\.spec\.ts/u);
+  assert.match(runner, /recovery-final-sweep\.spec\.ts/u);
   assert.match(runner, /passkey-prf\.spec\.ts/u);
   assert.match(runner, /never live Sigbash or funding/u);
 });

@@ -27,15 +27,15 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 |---|---|
 | Vault tree, addresses, taproot construction | ✅ consensus-verified |
 | Cooperative exit (interactive BIP-327 MuSig2 ceremony) | ✅ verified, no single machine holds all keys |
-| Timelocked recovery (N−1 multi_a) | ✅ consensus-verified |
-| Final sweep | ✅ consensus-verified |
+| Timelocked recovery (N−1 multi_a) | ✅ consensus + distributed passkey-browser verified |
+| Final sweep | ✅ consensus + owner-only passkey-browser verified |
 | Mainnet address, PSBT, policy, RPC, and explorer configuration | ✅ offline suite; real Core run still required |
 | Sigbash policy enforcement + tamper rejection | ✅ historical signet evidence; mainnet unproven |
 | Sigbash co-signing a live mainnet withdrawal | ⛔ browser proof gate implemented; external execution not proven |
 | Per-participant key custody | ✅ browser-distributed and passkey protected |
 | Recoverable passkey custody + encrypted Sigbash credentials/kits | ✅ implemented; real authenticator run still required |
 | Browser PRF setup/recovery/sign-in/unlock | ✅ Chromium + two virtual authenticators; physical devices still required |
-| Optimized standalone user-facing bundle | ✅ full Chromium passkey + three-participant MuSig2 gate; exact container image still requires digest review |
+| Optimized standalone user-facing bundle | ✅ passkey + cooperative/recovery/final-sweep Chromium gate; exact container image still requires digest review |
 | Immediate session revocation and vault-tab cleanup | ✅ browser + PostgreSQL verified |
 | Immutable three-passkey roster gate | ✅ implemented; PostgreSQL 16 migrations verified, real authenticator run still required |
 | User-facing solo/cooperative/recovery/final signing | ✅ implemented and server re-authorized |

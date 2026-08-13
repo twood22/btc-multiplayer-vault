@@ -38,7 +38,8 @@ acceptance_passed=false
 
 cleanup() {
   safe_to_trash=true
-  if [ "$acceptance_passed" != true ]; then safe_to_trash=false; fi
+  preserve_diagnostics=false
+  if [ "$acceptance_passed" != true ]; then preserve_diagnostics=true; fi
   if [ "$web_started" = true ]; then
     kill "$web_pid" >/dev/null 2>&1 || true
     wait "$web_pid" >/dev/null 2>&1 || true
@@ -54,8 +55,10 @@ cleanup() {
       fi
     fi
   fi
-  if [ "$safe_to_trash" = true ]; then
+  if [ "$safe_to_trash" = true ] && [ "$preserve_diagnostics" = false ]; then
     gio trash "$work_dir" >/dev/null 2>&1 || true
+  elif [ "$safe_to_trash" = true ]; then
+    echo "Acceptance failed; preserved owner-only diagnostics at $work_dir" >&2
   else
     echo "An isolated acceptance service did not stop; preserved its data at $work_dir" >&2
   fi
@@ -122,7 +125,8 @@ fi
 
 npx playwright test \
   web/browser-tests/passkey-prf.spec.ts \
-  web/browser-tests/cooperative-musig2.spec.ts
+  web/browser-tests/cooperative-musig2.spec.ts \
+  web/browser-tests/recovery-final-sweep.spec.ts
 
 acceptance_passed=true
 printf 'Optimized standalone bundle, PostgreSQL %s, and all browser acceptance checks passed.\n' \
