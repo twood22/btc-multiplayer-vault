@@ -1,5 +1,6 @@
 import {
   esploraEnabled,
+  esploraGetBlockStatus,
   esploraGetBlockchainInfo,
   esploraGetRawTransaction,
   esploraGetTxOut,
@@ -65,6 +66,13 @@ export interface RpcMempoolAcceptResult {
   'reject-reason'?: string;
   vsize?: number;
   fees?: { base?: number };
+}
+
+export interface RpcBlockStatus {
+  hash: string;
+  height: number;
+  confirmations: number;
+  inBestChain: boolean;
 }
 
 interface RpcEnvelope {
@@ -157,6 +165,28 @@ export async function getBlockchainInfo(): Promise<{ chain: string; blocks: numb
     : await bitcoinRpc<{ chain: string; blocks: number; headers: number }>('getblockchaininfo');
   assertMainnetChain(info.chain);
   return info;
+}
+
+/** Positive active-chain evidence for one previously recorded confirmation block. */
+export async function getBlockStatus(blockHash: string): Promise<RpcBlockStatus> {
+  if (!/^[0-9a-f]{64}$/u.test(blockHash)) throw new Error('Bitcoin block hash is invalid');
+  if (esploraEnabled()) return esploraGetBlockStatus(blockHash);
+  const header = await bitcoinRpc<{
+    hash: string;
+    height: number;
+    confirmations: number;
+  }>('getblockheader', [blockHash, true]);
+  if (header.hash !== blockHash || !Number.isSafeInteger(header.height) || header.height <= 0 ||
+      !Number.isSafeInteger(header.confirmations) ||
+      (header.confirmations !== -1 && header.confirmations <= 0)) {
+    throw new Error('Bitcoin Core returned an invalid block status');
+  }
+  return {
+    hash: header.hash,
+    height: header.height,
+    confirmations: header.confirmations,
+    inBestChain: header.confirmations >= 0,
+  };
 }
 
 export async function getDescriptorInfo(descriptor: string): Promise<{ descriptor: string; checksum: string }> {

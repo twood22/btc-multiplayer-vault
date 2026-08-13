@@ -10,6 +10,7 @@ export const EXPECTED_MIGRATION_VERSIONS = [
   '009_funding_ceremony',
   '010_funding_signatures',
   '011_funding_restart',
+  '012_chain_reorganization',
 ] as const;
 
 export const EXPECTED_MIGRATION_FILES = EXPECTED_MIGRATION_VERSIONS

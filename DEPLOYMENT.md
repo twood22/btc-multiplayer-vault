@@ -17,7 +17,8 @@ roles:
    The launcher rejects any runtime other than `.node-version` before Next.js
    starts. Start with one replica for the three-person beta.
 3. **Private chain watcher** — run `npm run web:watch-chain` on a private
-   scheduler. Never expose this command as an HTTP endpoint.
+   scheduler. It continuously reconciles every recorded confirmation block,
+   not only pending transactions. Never expose this command as an HTTP endpoint.
 
 The image uses Next.js standalone output, includes the reviewed operator
 scripts, and receives configuration only at runtime. Do not pass credentials as
@@ -164,12 +165,17 @@ rejected by the release report.
 - Use encrypted automated PostgreSQL backups with point-in-time recovery, and
   perform a real restore drill before the private beta.
 - Alert on web readiness failures, watcher failures, repeated broadcast
-  failures, database saturation, and sustained rate-limit activity. Do not log
+  failures, new `chain_reorganization_events`, database saturation, and
+  sustained rate-limit activity. Do not log
   request bodies, invite tokens, passkey assertions, session cookies, Sigbash
   ciphertext, recovery kits, or database URLs.
 - Keep the watcher private and single-scheduled for the initial beta. Database
   transaction claims make retries safe, but a duplicate scheduler provides no
   benefit at this scale.
+- A failed block-status lookup is an operational failure, not reorganization
+  evidence, and must leave coordinator state unchanged. Drill both paths: an
+  orphaned block rolls back the exact successor atomically, while a transaction
+  re-included at the required depth is reanchored to its replacement block.
 - Keep the service private to the three invited participants. No health probe,
   invite, operator command, or deployment platform setting may make the funding
   recorder or watcher publicly callable.

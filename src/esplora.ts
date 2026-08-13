@@ -1,4 +1,4 @@
-import type { RpcTransaction, RpcTxOut } from './bitcoin-rpc.js';
+import type { RpcBlockStatus, RpcTransaction, RpcTxOut } from './bitcoin-rpc.js';
 import {
   BITCOIN_CORE_CHAIN,
   DEFAULT_ESPLORA_URL,
@@ -154,6 +154,35 @@ export async function esploraGetRawTransaction(txid: string): Promise<RpcTransac
     ...(tx.status.block_height !== undefined ? { blockheight: tx.status.block_height } : {}),
     ...(tx.status.block_time !== undefined ? { blocktime: tx.status.block_time, time: tx.status.block_time } : {}),
     ...(hex ? { hex } : {}),
+  };
+}
+
+export async function esploraGetBlockStatus(blockHash: string): Promise<RpcBlockStatus> {
+  const [statusResponse, blockResponse] = await Promise.all([
+    esploraGet(`/block/${blockHash}/status`),
+    esploraGet(`/block/${blockHash}`),
+  ]);
+  if (!statusResponse.ok || !blockResponse.ok) {
+    throw new Error(`Esplora block ${blockHash} status is unavailable`);
+  }
+  const status = await statusResponse.json() as { in_best_chain?: unknown };
+  const block = await blockResponse.json() as { id?: unknown; height?: unknown };
+  if (typeof status.in_best_chain !== 'boolean' || block.id !== blockHash ||
+      !Number.isSafeInteger(block.height) || Number(block.height) <= 0) {
+    throw new Error('Esplora returned an invalid block status');
+  }
+  const height = Number(block.height);
+  const tip = status.in_best_chain ? await tipHeight() : null;
+  const blockConfirmations = tip === null ? -1 : tip - height + 1;
+  if (!Number.isSafeInteger(blockConfirmations) ||
+      (status.in_best_chain ? blockConfirmations <= 0 : blockConfirmations !== -1)) {
+    throw new Error('Esplora returned an invalid block confirmation count');
+  }
+  return {
+    hash: blockHash,
+    height,
+    confirmations: blockConfirmations,
+    inBestChain: status.in_best_chain,
   };
 }
 

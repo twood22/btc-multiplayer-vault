@@ -86,6 +86,18 @@ record('the private funding command is bound to protected live-proof and funding
   assert.match(source, /submitPasskeyApprovedFunding/u);
 });
 
+record('the private watcher continuously reconciles confirmed mainnet block anchors', () => {
+  const runtime = readFileSync(resolve(root, 'web/lib/server/vault-runtime-store.ts'), 'utf8');
+  const rollback = readFileSync(resolve(root, 'web/lib/server/chain-reorganization-store.ts'), 'utf8');
+  assert.match(runtime, /reconcileConfirmedChainState/u);
+  assert.match(runtime, /getBlockStatus/u);
+  assert.match(runtime, /rollbackConfirmedFunding/u);
+  assert.match(runtime, /rollbackConfirmedVaultTransition/u);
+  assert.match(rollback, /chain_reorganization_events/u);
+  assert.match(rollback, /status = 'orphaned'/u);
+  assert.match(rollback, /status = 'current', spent_by_txid = NULL/u);
+});
+
 record('every required PostgreSQL product-state migration is present', () => {
   const actual = readdirSync(resolve(root, 'db/migrations'))
     .filter((name) => name.endsWith('.sql'))

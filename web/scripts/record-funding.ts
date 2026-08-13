@@ -38,10 +38,14 @@ if (confirmations < requiredConfirmations) {
   throw new Error(`funding output has ${confirmations} confirmation(s); ${requiredConfirmations} required`);
 }
 const confirmedHeight = transaction.blockheight;
+const confirmedBlockHash = transaction.blockhash;
 if (typeof confirmedHeight !== 'number' ||
     !Number.isSafeInteger(confirmedHeight) ||
     confirmedHeight <= 0) {
   throw new Error('funding transaction has no valid confirmed block height');
+}
+if (!confirmedBlockHash || !/^[0-9a-f]{64}$/u.test(confirmedBlockHash)) {
+  throw new Error('funding transaction has no valid confirmed block hash');
 }
 const recorded = await recordConfirmedFundingCoin({
   vaultId,
@@ -53,6 +57,7 @@ const recorded = await recordConfirmedFundingCoin({
   },
   fundingTransaction: transaction,
   confirmedHeight,
+  confirmedBlockHash,
   confirmations,
 });
 console.log(JSON.stringify({
@@ -62,6 +67,7 @@ console.log(JSON.stringify({
   vout,
   confirmations,
   confirmedHeight,
+  confirmedBlockHash,
   snapshotDigest: recorded.snapshotDigest,
   fundingProposalDigest: recorded.fundingProposalDigest,
   fundingFinalizationDigest: recorded.fundingFinalizationDigest,

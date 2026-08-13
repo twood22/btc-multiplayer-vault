@@ -223,7 +223,11 @@ the private beta. Run `npm run web:watch-chain` from a private scheduler to
 resume an interrupted approved runtime submission, activate the exact
 operator-submitted initial funding transaction, and advance later broadcast
 proposals only after the backend returns the exact bytes with that confirmation
-depth. Initial funding itself has no HTTP broadcast route.
+depth. It retains each confirmation block hash and continues checking confirmed
+state: an orphaned anchor causes an atomic rollback to the exact prior coin,
+while the same transaction re-included deeply enough is reanchored without
+changing product state. RPC unavailability never counts as reorganization
+evidence. Initial funding itself has no HTTP broadcast route.
 
 `policy-check-psbt` and `sigbash-sign-psbt` infer the round from the PSBT's
 input scriptPubKey, so you only pass `--participant`.
@@ -356,7 +360,7 @@ input scriptPubKey, so you only pass `--participant`.
 
    The private watcher activates that exact output only after
    `VAULT_CONFIRMATIONS_REQUIRED`. `web:record-funding` remains a manual
-   recovery boundary for the same exact-byte checks:
+   recovery boundary for the same exact-byte and confirmation-block checks:
 
    ```bash
    npm run web:record-funding -- --vault-id <uuid> --txid <round1_txid> --vout <n>
@@ -368,6 +372,12 @@ input scriptPubKey, so you only pass `--participant`.
    inputs, the canonical input/output order, exactly one roster-derived vault
    output, non-dust change, fee sanity, vault readiness, and the configured
    confirmation depth before the database can become active.
+   The watcher keeps checking the recorded block after activation. If mainnet
+   removes it, the successor coin becomes orphaned, the exact prior coin and
+   vault status are restored atomically, participant observations of the
+   orphaned coin are cleared, and the event retains only public chain
+   fingerprints. Already-broadcast descendants remain tracked; unsigned
+   descendants require a fresh ceremony after their ancestor reconfirms.
    The chain structure cannot identify the human owner of each input, so the
    three friends must still review their own wallet's input and the final
    transaction before signing. The recorder is not an HTTP route and must not

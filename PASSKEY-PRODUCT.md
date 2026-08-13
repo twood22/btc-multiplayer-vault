@@ -103,6 +103,12 @@ participant-only MuSig2 path, or the timelocked recovery path.
 - Confirmed broadcast transactions can atomically spend the old coordinator
   coin, derive the exact surviving pair or final-owner coin after a solo exit,
   or close the vault after a terminal cooperative, recovery, or final sweep.
+- Every confirmed funding and runtime transition retains its exact mainnet
+  block hash and remains under watcher reconciliation. An orphaned anchor
+  atomically orphans its successor and restores the prior coin; a deeply
+  re-included exact transaction is reanchored. Unsigned descendants and old
+  observations are invalidated, already-broadcast exact descendants remain
+  tracked, and backend unavailability never triggers rollback.
 - Initial activation accepts only a confirmed transaction with three unique
   P2WPKH or P2TR inputs, each covering one committed participant deposit, and
   exactly one committed round-one output. It also bounds change/output count
@@ -175,14 +181,17 @@ one independently observed and server-verified wallet coin per participant,
 deterministic three-input funding PSBT reproduction, external P2WPKH/P2TR
 signature normalization, exact finalization, unanimous restart binding, and
 adversarial rejection of malformed or single-funder activation transactions.
-The complete migrations through 011 have also been applied and re-applied
+The complete migrations through 012 have also been applied and re-applied
 idempotently on an isolated PostgreSQL 16 instance. The database acceptance
 test proves one-winner concurrent approval creation and submission claims,
 required passkey-consumed state, globally unique funding outpoints, one
 immutable funding approval and signature per seat, finalization/submission
 state consistency, unanimous restart audit preservation, auditable retry after
 failure, proposal-digest foreign-key binding, and atomic concurrent rate-limit
-counting/reset without raw subjects;
+counting/reset without raw subjects. It also proves paired confirmation anchors,
+atomic funding and transition rollback, exact prior-coin restoration,
+observation invalidation, broadcast-descendant preservation, and immutable
+public-fingerprint reorganization events;
 that is not a substitute for the selected production database and a complete
 real-authenticator/backend run.
 

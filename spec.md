@@ -150,7 +150,12 @@ passkey approval and commits the same vault, finalization digest, transaction
 ID, live-proof digest, and passing automated/manual gate list; the broadcast
 command authenticates the file and rejects stale or mismatched evidence. A private
 watcher activates only that exact transaction after the configured confirmation
-depth.
+depth. Every confirmation stores its active-chain block hash. The watcher keeps
+reconciling confirmed state: backend failure leaves state untouched, a deeply
+re-included exact transaction is reanchored, and an orphaned confirmation
+atomically restores the prior coin while invalidating unsigned descendants and
+stale observations. Already-broadcast exact descendants remain tracked for
+safe replay after their ancestor reconfirms.
 
 ## 7. Runtime signing and broadcast lifecycle
 

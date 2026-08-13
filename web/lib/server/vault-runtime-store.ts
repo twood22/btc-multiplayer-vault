@@ -3,7 +3,13 @@ import { Buffer } from 'buffer';
 import * as bitcoin from 'bitcoinjs-lib';
 import type { AuthenticatorTransportFuture, Base64URLString } from '@simplewebauthn/server';
 import type { TrustedVaultInput } from '../../../src/types';
-import { getRawTransaction, getTxOut, sendRawTransaction, type RpcTransaction } from '../../../src/bitcoin-rpc';
+import {
+  getBlockStatus,
+  getRawTransaction,
+  getTxOut,
+  sendRawTransaction,
+  type RpcTransaction,
+} from '../../../src/bitcoin-rpc';
 import {
   authorizeConfirmedFundingTransaction,
   type ConfirmedFundingAuthorization,
@@ -32,6 +38,7 @@ import {
   validateCooperativePubnonce,
 } from '../../../src/ceremony';
 import { sha256Hex } from '../../../src/crypto';
+import { decideConfirmationReconciliation } from '../../../src/chain-reorganization';
 import {
   buildVaultProposal,
   deriveNextVaultCoin,
@@ -48,6 +55,12 @@ import { getConfirmedVaultArtifactForVault } from './roster-store';
 import type { StoredCredential } from './webauthn-store';
 import { getApprovedFundingProposalForVault } from './funding-ceremony-store';
 import { getPasskeyApprovedFinalizedFundingForVault } from './funding-signature-store';
+import {
+  reanchorConfirmedFunding,
+  reanchorConfirmedVaultTransition,
+  rollbackConfirmedFunding,
+  rollbackConfirmedVaultTransition,
+} from './chain-reorganization-store';
 
 const PROPOSAL_LIFETIME_MS = 15 * 60 * 1000;
 
@@ -581,10 +594,15 @@ export async function submitApprovedBroadcast(input: {
 }
 
 export async function pollVaultChain(): Promise<{
+  reanchoredFundingTransactions: string[];
+  reanchoredTransactions: string[];
+  rolledBackFundingTransactions: string[];
+  rolledBackTransactions: string[];
   resumedBroadcasts: string[];
   confirmedFundingTransactions: string[];
   confirmedTransactions: string[];
 }> {
+  const reconciled = await reconcileConfirmedChainState();
   const interrupted = await db()<Array<{ id: string }>>`
     SELECT id FROM vault_broadcast_approvals
     WHERE status = 'submitting' AND updated_at < now() - interval '30 seconds'
@@ -607,7 +625,12 @@ export async function pollVaultChain(): Promise<{
   const confirmedFundingTransactions: string[] = [];
   for (const funding of fundingBroadcasts) {
     const expectedTxid = funding.final_txid.toString('hex');
-    const observed = await getRawTransaction(expectedTxid, 2);
+    const observed = await observeOrResubmitExactTransaction(
+      expectedTxid,
+      funding.transaction_hex,
+      2,
+    );
+    if (!observed) continue;
     assertExactBroadcastTransaction({
       finalizedTxHex: funding.transaction_hex,
       finalTxid: expectedTxid,
@@ -636,6 +659,7 @@ export async function pollVaultChain(): Promise<{
       },
       fundingTransaction: observed,
       confirmedHeight: height,
+      confirmedBlockHash: confirmedBlockHash(observed),
       confirmations: observed.confirmations!,
     });
     confirmedFundingTransactions.push(expectedTxid);
@@ -647,12 +671,17 @@ export async function pollVaultChain(): Promise<{
   }>>`
     SELECT vault_id, final_txid, finalized_tx_hex
     FROM vault_transaction_proposals
-    WHERE status = 'broadcast' ORDER BY updated_at
+    WHERE status = 'broadcast' ORDER BY updated_at DESC
   `;
   const confirmedTransactions: string[] = [];
   for (const proposal of broadcasts) {
     const expectedTxid = proposal.final_txid.toString('hex');
-    const observed = await getRawTransaction(expectedTxid, true);
+    const observed = await observeOrResubmitExactTransaction(
+      expectedTxid,
+      proposal.finalized_tx_hex,
+      true,
+    );
+    if (!observed) continue;
     assertExactBroadcastTransaction({
       finalizedTxHex: proposal.finalized_tx_hex,
       finalTxid: expectedTxid,
@@ -667,11 +696,216 @@ export async function pollVaultChain(): Promise<{
       vaultId: proposal.vault_id,
       txid: expectedTxid,
       confirmedHeight: height,
+      confirmedBlockHash: confirmedBlockHash(observed),
       confirmations: observed.confirmations!,
+      confirmedTransaction: observed,
     });
     confirmedTransactions.push(expectedTxid);
   }
-  return { resumedBroadcasts, confirmedFundingTransactions, confirmedTransactions };
+  return {
+    ...reconciled,
+    resumedBroadcasts,
+    confirmedFundingTransactions,
+    confirmedTransactions,
+  };
+}
+
+async function reconcileConfirmedChainState(): Promise<{
+  reanchoredFundingTransactions: string[];
+  reanchoredTransactions: string[];
+  rolledBackFundingTransactions: string[];
+  rolledBackTransactions: string[];
+}> {
+  const requiredConfirmations = chainConfirmationsRequired();
+  const transitions = await db()<Array<{
+    id: string;
+    vault_id: string;
+    final_txid: Buffer;
+    finalized_tx_hex: string;
+    confirmed_height: string | null;
+    confirmed_block_hash: Buffer | null;
+  }>>`
+    SELECT id, vault_id, final_txid, finalized_tx_hex,
+           confirmed_height::text, confirmed_block_hash
+    FROM vault_transaction_proposals
+    WHERE status = 'confirmed'
+    ORDER BY confirmed_height DESC NULLS LAST, updated_at DESC
+  `;
+  const reanchoredTransactions: string[] = [];
+  const rolledBackTransactions: string[] = [];
+  for (const transition of transitions) {
+    const anchor = storedConfirmationAnchor(transition, 'confirmed vault transition');
+    const txid = transition.final_txid.toString('hex');
+    const status = await getBlockStatus(anchor.blockHash);
+    const replacement = status.inBestChain && status.confirmations >= requiredConfirmations
+      ? null
+      : await currentlyConfirmedTransaction(
+          txid,
+          transition.finalized_tx_hex,
+          requiredConfirmations,
+        );
+    const decision = decideConfirmationReconciliation({
+      stored: anchor,
+      status,
+      replacement,
+      requiredConfirmations,
+    });
+    if (decision.action === 'stable') continue;
+    if (decision.action === 'reanchor') {
+      await reanchorConfirmedVaultTransition({
+        proposalId: transition.id,
+        vaultId: transition.vault_id,
+        txid,
+        priorBlockHash: anchor.blockHash,
+        replacementBlockHash: decision.replacement.blockHash,
+        replacementConfirmedHeight: decision.replacement.height,
+      });
+      reanchoredTransactions.push(txid);
+    } else {
+      await rollbackConfirmedVaultTransition({
+        proposalId: transition.id,
+        vaultId: transition.vault_id,
+        txid,
+        priorBlockHash: anchor.blockHash,
+      });
+      rolledBackTransactions.push(txid);
+    }
+  }
+
+  const fundingRows = await db()<Array<{
+    vault_id: string;
+    final_txid: Buffer;
+    transaction_hex: string;
+    confirmed_height: string | null;
+    confirmed_block_hash: Buffer | null;
+  }>>`
+    SELECT vault_id, final_txid, transaction_hex,
+           confirmed_height::text, confirmed_block_hash
+    FROM funding_finalizations
+    WHERE status = 'confirmed'
+    ORDER BY confirmed_height DESC NULLS LAST
+  `;
+  const reanchoredFundingTransactions: string[] = [];
+  const rolledBackFundingTransactions: string[] = [];
+  for (const funding of fundingRows) {
+    const anchor = storedConfirmationAnchor(funding, 'confirmed funding transaction');
+    const txid = funding.final_txid.toString('hex');
+    const status = await getBlockStatus(anchor.blockHash);
+    const replacement = status.inBestChain && status.confirmations >= requiredConfirmations
+      ? null
+      : await currentlyConfirmedTransaction(
+          txid,
+          funding.transaction_hex,
+          requiredConfirmations,
+        );
+    const decision = decideConfirmationReconciliation({
+      stored: anchor,
+      status,
+      replacement,
+      requiredConfirmations,
+    });
+    if (decision.action === 'stable') continue;
+    if (decision.action === 'reanchor') {
+      await reanchorConfirmedFunding({
+        vaultId: funding.vault_id,
+        txid,
+        priorBlockHash: anchor.blockHash,
+        replacementBlockHash: decision.replacement.blockHash,
+        replacementConfirmedHeight: decision.replacement.height,
+      });
+      reanchoredFundingTransactions.push(txid);
+    } else {
+      await rollbackConfirmedFunding({
+        vaultId: funding.vault_id,
+        txid,
+        priorBlockHash: anchor.blockHash,
+      });
+      rolledBackFundingTransactions.push(txid);
+    }
+  }
+  return {
+    reanchoredFundingTransactions,
+    reanchoredTransactions,
+    rolledBackFundingTransactions,
+    rolledBackTransactions,
+  };
+}
+
+async function currentlyConfirmedTransaction(
+  txid: string,
+  exactTransactionHex: string,
+  requiredConfirmations: number,
+): Promise<{ blockHash: string; height: number } | null> {
+  let observed: RpcTransaction;
+  try {
+    observed = await getRawTransaction(txid, true);
+  } catch {
+    return null;
+  }
+  assertExactBroadcastTransaction({
+    finalizedTxHex: exactTransactionHex,
+    finalTxid: txid,
+    observedTxid: observed.txid,
+    ...(observed.hex ? { observedTxHex: observed.hex } : {}),
+  });
+  if ((observed.confirmations || 0) < requiredConfirmations) return null;
+  return {
+    blockHash: confirmedBlockHash(observed),
+    height: confirmedBlockHeight(observed)!,
+  };
+}
+
+async function observeOrResubmitExactTransaction(
+  txid: string,
+  exactTransactionHex: string,
+  verbosity: boolean | number,
+): Promise<RpcTransaction | null> {
+  try {
+    return await getRawTransaction(txid, verbosity);
+  } catch {
+    try {
+      const returnedTxid = await sendRawTransaction(exactTransactionHex);
+      assertExactBroadcastTransaction({
+        finalizedTxHex: exactTransactionHex,
+        finalTxid: txid,
+        observedTxid: returnedTxid,
+      });
+      return null;
+    } catch (submissionError) {
+      try {
+        const observed = await getRawTransaction(txid, verbosity);
+        assertExactBroadcastTransaction({
+          finalizedTxHex: exactTransactionHex,
+          finalTxid: txid,
+          observedTxid: observed.txid,
+          ...(observed.hex ? { observedTxHex: observed.hex } : {}),
+        });
+        return observed;
+      } catch {
+        throw submissionError;
+      }
+    }
+  }
+}
+
+function storedConfirmationAnchor(
+  row: { confirmed_height: string | null; confirmed_block_hash: Buffer | null },
+  label: string,
+): { height: number; blockHash: string } {
+  const height = Number(row.confirmed_height);
+  const blockHash = row.confirmed_block_hash?.toString('hex') || '';
+  if (!Number.isSafeInteger(height) || height <= 0 || !/^[0-9a-f]{64}$/u.test(blockHash)) {
+    throw new Error(`${label} lacks an active-chain block anchor; manual reconciliation is required`);
+  }
+  return { height, blockHash };
+}
+
+function confirmedBlockHash(transaction: RpcTransaction): string {
+  const blockHash = transaction.blockhash || '';
+  if (!/^[0-9a-f]{64}$/u.test(blockHash)) {
+    throw new Error('confirmed transaction is missing a valid block hash');
+  }
+  return blockHash;
 }
 
 function boundedFailure(error: unknown): string {
@@ -1545,6 +1779,7 @@ export async function recordConfirmedFundingCoin(input: {
   trustedInput: TrustedVaultInput;
   fundingTransaction: RpcTransaction;
   confirmedHeight: number;
+  confirmedBlockHash: string;
   confirmations: number;
 }): Promise<{
   id: string;
@@ -1555,6 +1790,10 @@ export async function recordConfirmedFundingCoin(input: {
 }> {
   if (!Number.isSafeInteger(input.confirmedHeight) || input.confirmedHeight <= 0) {
     throw new Error('confirmed funding height must be a positive integer');
+  }
+  if (confirmedBlockHash(input.fundingTransaction) !== input.confirmedBlockHash ||
+      confirmedBlockHeight(input.fundingTransaction) !== input.confirmedHeight) {
+    throw new Error('funding confirmation anchor differs from the observed transaction');
   }
   if (!Number.isSafeInteger(input.confirmations) ||
       input.confirmations < chainConfirmationsRequired()) {
@@ -1620,31 +1859,62 @@ export async function recordConfirmedFundingCoin(input: {
     if (Number(approvals[0]?.count || 0) !== 3) {
       throw new Error('funding activation requires all three final passkey approvals');
     }
-    const existing = await sql<Array<{ id: string }>>`
-      SELECT id FROM vault_coins WHERE vault_id = ${input.vaultId}::uuid FOR UPDATE
+    const current = await sql<Array<{ id: string }>>`
+      SELECT id FROM vault_coins
+      WHERE vault_id = ${input.vaultId}::uuid AND status = 'current'
+      FOR UPDATE
     `;
-    if (existing.length) throw new Error('vault already has recorded chain state');
-    const inserted = await sql<Array<{ id: string }>>`
-      INSERT INTO vault_coins (
-        vault_id, roster_digest, kind, round_id, owner_participant_id,
-        txid, vout, value_sats, script_pubkey, confirmed_height
-      ) VALUES (
-        ${input.vaultId}::uuid,
-        ${Buffer.from(confirmed.digest, 'hex')},
-        'vault',
-        ${coin.roundId},
-        NULL,
-        ${Buffer.from(coin.txid, 'hex')},
-        ${coin.vout},
-        ${coin.valueSats},
-        ${Buffer.from(coin.scriptPubKeyHex, 'hex')},
-        ${input.confirmedHeight}
-      )
-      RETURNING id
+    if (current.length) throw new Error('vault already has a current chain coin');
+    const prior = await sql<StoredCoinRow[]>`
+      SELECT id, vault_id, roster_digest, kind, round_id, owner_participant_id,
+             txid, vout::text, value_sats::text, script_pubkey, status,
+             confirmed_height::text
+      FROM vault_coins
+      WHERE vault_id = ${input.vaultId}::uuid
+        AND txid = ${Buffer.from(coin.txid, 'hex')} AND vout = ${coin.vout}
+      FOR UPDATE
     `;
+    let coinId: string;
+    if (prior.length) {
+      const stored = storedCoinSnapshot(prior[0]!);
+      if (prior.length !== 1 || prior[0]!.status !== 'orphaned' ||
+          vaultCoinSnapshotDigest(stored) !== snapshotDigest) {
+        throw new Error('previously orphaned funding coin differs from the reconfirmed transaction');
+      }
+      const reactivated = await sql<Array<{ id: string }>>`
+        UPDATE vault_coins
+        SET status = 'current', confirmed_height = ${input.confirmedHeight}, updated_at = now()
+        WHERE id = ${stored.id}::uuid AND status = 'orphaned'
+        RETURNING id
+      `;
+      if (reactivated.length !== 1) throw new Error('orphaned funding coin changed during reconfirmation');
+      coinId = reactivated[0]!.id;
+    } else {
+      const inserted = await sql<Array<{ id: string }>>`
+        INSERT INTO vault_coins (
+          vault_id, roster_digest, kind, round_id, owner_participant_id,
+          txid, vout, value_sats, script_pubkey, confirmed_height
+        ) VALUES (
+          ${input.vaultId}::uuid,
+          ${Buffer.from(confirmed.digest, 'hex')},
+          'vault',
+          ${coin.roundId},
+          NULL,
+          ${Buffer.from(coin.txid, 'hex')},
+          ${coin.vout},
+          ${coin.valueSats},
+          ${Buffer.from(coin.scriptPubKeyHex, 'hex')},
+          ${input.confirmedHeight}
+        )
+        RETURNING id
+      `;
+      coinId = inserted[0]!.id;
+    }
     const confirmedFinalization = await sql<Array<{ vault_id: string }>>`
       UPDATE funding_finalizations
-      SET status = 'confirmed', confirmed_at = now()
+      SET status = 'confirmed', confirmed_at = now(),
+          confirmed_height = ${input.confirmedHeight},
+          confirmed_block_hash = ${Buffer.from(input.confirmedBlockHash, 'hex')}
       WHERE vault_id = ${input.vaultId}::uuid
         AND finalization_digest = ${Buffer.from(approvedFinalization.finalizationDigest, 'hex')}
         AND status = 'broadcast'
@@ -1662,7 +1932,7 @@ export async function recordConfirmedFundingCoin(input: {
       throw new Error('vault has not passed the live Sigbash mainnet readiness gate');
     }
     return {
-      id: inserted[0]!.id,
+      id: coinId,
       snapshotDigest,
       fundingProposalDigest: approvedProposal.digest,
       fundingFinalizationDigest: approvedFinalization.finalizationDigest,
@@ -1681,11 +1951,22 @@ export async function recordConfirmedVaultProposal(input: {
   vaultId: string;
   txid: string;
   confirmedHeight: number;
+  confirmedBlockHash: string;
   confirmations: number;
+  confirmedTransaction: RpcTransaction;
 }): Promise<{ nextCoin: VaultCoinSnapshot | null; closed: boolean }> {
   if (!/^[0-9a-f]{64}$/u.test(input.txid)) throw new Error('confirmed transaction id is invalid');
+  if (!/^[0-9a-f]{64}$/u.test(input.confirmedBlockHash)) {
+    throw new Error('confirmed transaction block hash is invalid');
+  }
   if (!Number.isSafeInteger(input.confirmedHeight) || input.confirmedHeight <= 0) {
     throw new Error('confirmed transaction height must be a positive integer');
+  }
+  if (input.confirmedTransaction.txid !== input.txid ||
+      confirmedBlockHash(input.confirmedTransaction) !== input.confirmedBlockHash ||
+      confirmedBlockHeight(input.confirmedTransaction) !== input.confirmedHeight ||
+      input.confirmedTransaction.confirmations !== input.confirmations) {
+    throw new Error('vault confirmation anchor differs from the observed transaction');
   }
   if (!Number.isSafeInteger(input.confirmations) ||
       input.confirmations < chainConfirmationsRequired()) {
@@ -1707,6 +1988,14 @@ export async function recordConfirmedVaultProposal(input: {
       throw new Error('confirmed transaction is not the vault’s single broadcast proposal');
     }
     const proposal = proposals[0]!;
+    assertExactBroadcastTransaction({
+      finalizedTxHex: proposal.finalized_tx_hex,
+      finalTxid: input.txid,
+      observedTxid: input.confirmedTransaction.txid,
+      ...(input.confirmedTransaction.hex
+        ? { observedTxHex: input.confirmedTransaction.hex }
+        : {}),
+    });
     if (proposal.roster_digest.toString('hex') !== confirmed.digest) {
       throw new Error('broadcast proposal belongs to a different confirmed roster');
     }
@@ -1759,17 +2048,41 @@ export async function recordConfirmedVaultProposal(input: {
     `;
     if (spent.length !== 1) throw new Error('current vault coin changed during confirmation');
     if (nextCoin) {
-      await sql`
-        INSERT INTO vault_coins (
-          vault_id, roster_digest, kind, round_id, owner_participant_id,
-          txid, vout, value_sats, script_pubkey, confirmed_height
-        ) VALUES (
-          ${input.vaultId}::uuid, ${Buffer.from(confirmed.digest, 'hex')},
-          ${nextCoin.kind}, ${nextCoin.roundId}, ${nextCoin.ownerParticipantId},
-          ${Buffer.from(nextCoin.txid, 'hex')}, ${nextCoin.vout}, ${nextCoin.valueSats},
-          ${Buffer.from(nextCoin.scriptPubKeyHex, 'hex')}, ${input.confirmedHeight}
-        )
+      const prior = await sql<StoredCoinRow[]>`
+        SELECT id, vault_id, roster_digest, kind, round_id, owner_participant_id,
+               txid, vout::text, value_sats::text, script_pubkey, status,
+               confirmed_height::text
+        FROM vault_coins
+        WHERE vault_id = ${input.vaultId}::uuid
+          AND txid = ${Buffer.from(nextCoin.txid, 'hex')} AND vout = ${nextCoin.vout}
+        FOR UPDATE
       `;
+      if (prior.length) {
+        const stored = storedCoinSnapshot(prior[0]!);
+        if (prior.length !== 1 || prior[0]!.status !== 'orphaned' ||
+            vaultCoinSnapshotDigest(stored) !== vaultCoinSnapshotDigest(nextCoin)) {
+          throw new Error('previously orphaned successor differs from the reconfirmed transaction');
+        }
+        const reactivated = await sql<Array<{ id: string }>>`
+          UPDATE vault_coins
+          SET status = 'current', confirmed_height = ${input.confirmedHeight}, updated_at = now()
+          WHERE id = ${stored.id}::uuid AND status = 'orphaned'
+          RETURNING id
+        `;
+        if (reactivated.length !== 1) throw new Error('orphaned successor changed during reconfirmation');
+      } else {
+        await sql`
+          INSERT INTO vault_coins (
+            vault_id, roster_digest, kind, round_id, owner_participant_id,
+            txid, vout, value_sats, script_pubkey, confirmed_height
+          ) VALUES (
+            ${input.vaultId}::uuid, ${Buffer.from(confirmed.digest, 'hex')},
+            ${nextCoin.kind}, ${nextCoin.roundId}, ${nextCoin.ownerParticipantId},
+            ${Buffer.from(nextCoin.txid, 'hex')}, ${nextCoin.vout}, ${nextCoin.valueSats},
+            ${Buffer.from(nextCoin.scriptPubKeyHex, 'hex')}, ${input.confirmedHeight}
+          )
+        `;
+      }
     } else {
       const closed = await sql<Array<{ id: string }>>`
         UPDATE vaults SET status = 'closed'
@@ -1779,7 +2092,9 @@ export async function recordConfirmedVaultProposal(input: {
       if (closed.length !== 1) throw new Error('active vault status changed during terminal confirmation');
     }
     const advanced = await sql<Array<{ id: string }>>`
-      UPDATE vault_transaction_proposals SET status = 'confirmed', updated_at = now()
+      UPDATE vault_transaction_proposals
+      SET status = 'confirmed', confirmed_height = ${input.confirmedHeight},
+          confirmed_block_hash = ${Buffer.from(input.confirmedBlockHash, 'hex')}, updated_at = now()
       WHERE id = ${proposal.id}::uuid AND status = 'broadcast'
       RETURNING id
     `;
