@@ -36,10 +36,13 @@ import {
 } from './sigbash-recovery-journal.js';
 import {
   normalizeSigbashSigningResult,
+  disposeSigbashLiveClient,
   resolveSigbashCredentials,
   sigbashVerificationExplicitlyRejected,
   sigbashVerificationPassed,
   validateWasmSha384,
+  useSigbashAdapter,
+  type SigbashAdapter,
   type SigbashKeyListItem,
   type SigbashRecoveryKit,
   type SigbashVerifyResult,
@@ -100,12 +103,55 @@ export async function runSigbashOfflineChecks(): Promise<{
     ...sdkContractChecks(sdk),
     ...verificationGateChecks(),
     ...signingNormalizationChecks(),
+    ...(await adapterLifecycleChecks()),
     ...credentialChecks(),
     ...(await credentialFileChecks()),
     ...recoveryJournalChecks(),
     ...wasmHashChecks(),
   ];
   return { passed: checks.every((item) => item.ok), checks };
+}
+
+async function adapterLifecycleChecks(): Promise<ContractCheck[]> {
+  let disposedAfterActionFailure = false;
+  let actionFailure = '';
+  const adapter: SigbashAdapter = {
+    async verifyPSBT() { return { passed: false }; },
+    async signPSBT() { return { success: false }; },
+    dispose() { disposedAfterActionFailure = true; },
+  };
+  try {
+    await useSigbashAdapter(adapter, async () => {
+      throw new Error('controlled adapter action failure');
+    });
+  } catch (error) {
+    actionFailure = error instanceof Error ? error.message : String(error);
+  }
+
+  const calls: string[] = [];
+  let disconnectFailure = '';
+  try {
+    disposeSigbashLiveClient({
+      disconnect() {
+        calls.push('disconnect');
+        throw new Error('controlled disconnect failure');
+      },
+      dispose() { calls.push('dispose'); },
+    });
+  } catch (error) {
+    disconnectFailure = error instanceof Error ? error.message : String(error);
+  }
+
+  return [
+    check(
+      'adapter ownership disposes copied key material after an action failure',
+      disposedAfterActionFailure && actionFailure === 'controlled adapter action failure',
+    ),
+    check(
+      'live-client disposal overwrites key material even when socket shutdown fails',
+      calls.join(',') === 'disconnect,dispose' && disconnectFailure === 'controlled disconnect failure',
+    ),
+  ];
 }
 
 function recoveryJournalChecks(): ContractCheck[] {

@@ -178,6 +178,7 @@ export type AdapterTx = PolicyTx | { psbtBase64: string };
 export interface SigbashAdapter {
   verifyPSBT(tx: AdapterTx, policy: SoloPolicy): Promise<SigbashVerifyResult>;
   signPSBT(tx: AdapterTx, policy: SoloPolicy): Promise<SigbashSignResult>;
+  dispose(): void;
 }
 
 /**
@@ -193,6 +194,38 @@ export async function createSigbashAdapter(
     return LiveSigbashAdapter.create({ participantId });
   }
   return new LocalSigbashAdapter();
+}
+
+/** Own one adapter for exactly one action and always release copied key material. */
+export async function withSigbashAdapter<T>(
+  options: { participantId?: string },
+  action: (adapter: SigbashAdapter) => Promise<T>,
+): Promise<T> {
+  const adapter = await createSigbashAdapter(options);
+  return useSigbashAdapter(adapter, action);
+}
+
+/** Exported separately so failure-path disposal can be exercised without a live service. */
+export async function useSigbashAdapter<T>(
+  adapter: SigbashAdapter,
+  action: (adapter: SigbashAdapter) => Promise<T>,
+): Promise<T> {
+  try {
+    return await action(adapter);
+  } finally {
+    adapter.dispose();
+  }
+}
+
+/** Close transport state and then overwrite any SDK-owned private-key copy. */
+export function disposeSigbashLiveClient(
+  client: Pick<SigbashLiveClient, 'disconnect' | 'dispose'>,
+): void {
+  try {
+    client.disconnect?.();
+  } finally {
+    client.dispose?.();
+  }
 }
 
 export class LocalSigbashAdapter implements SigbashAdapter {
@@ -226,6 +259,8 @@ export class LocalSigbashAdapter implements SigbashAdapter {
       mode: 'local',
     };
   }
+
+  dispose(): void {}
 }
 
 function isPolicyTx(tx: AdapterTx): tx is PolicyTx {
@@ -282,6 +317,10 @@ class LiveSigbashAdapter implements SigbashAdapter {
       kmcJSON,
       network: BITCOIN_NETWORK_NAME,
     });
+  }
+
+  dispose(): void {
+    disposeSigbashLiveClient(this.client);
   }
 }
 

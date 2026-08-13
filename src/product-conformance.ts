@@ -203,6 +203,20 @@ record('every browser Sigbash flow disposes the SDK copy of private-key material
   }
 });
 
+record('every command-line Sigbash adapter action owns and disposes its live client', () => {
+  const adapter = readFileSync(resolve(root, 'src/sigbash.ts'), 'utf8');
+  const cli = readFileSync(resolve(root, 'src/cli-main.ts'), 'utf8');
+  assert.match(adapter, /export async function withSigbashAdapter/u);
+  assert.match(adapter, /finally \{\s*adapter\.dispose\(\);/u);
+  assert.match(adapter, /export function disposeSigbashLiveClient/u);
+  assert.match(adapter, /client\.disconnect\?\.\(\)/u);
+  assert.match(adapter, /client\.dispose\?\.\(\)/u);
+  assert.doesNotMatch(cli, /createSigbashAdapter/u, 'CLI bypasses one-action adapter ownership');
+  assert.doesNotMatch(cli, /client\.disconnect\?\.\(\)/u, 'CLI bypasses shared live-client disposal');
+  assert.match(cli, /withSigbashAdapter/u);
+  assert.match(cli, /disposeSigbashLiveClient\(client\)/u);
+});
+
 record('every required PostgreSQL product-state migration is present', () => {
   const actual = readdirSync(resolve(root, 'db/migrations'))
     .filter((name) => name.endsWith('.sql'))

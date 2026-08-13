@@ -91,13 +91,14 @@ import {
 import {
   LocalSigbashAdapter,
   createLiveSigbashClient,
-  createSigbashAdapter,
+  disposeSigbashLiveClient,
   evaluatePolicy,
   normalizeSigbashSigningResult,
   resolveSigbashCredentials,
   sigbashVerificationExplicitlyRejected,
   sigbashVerificationPassed,
   toPoetPolicy,
+  withSigbashAdapter,
 } from './sigbash.js';
 import { runSigbashOfflineChecks } from './sigbash-contract.js';
 import {
@@ -291,47 +292,52 @@ async function cooperative() {
 }
 
 async function solo() {
-  const adapter = await createSigbashAdapter({ participantId: 'alice' });
-  const state = createDemoState();
-  const ledger = new Ledger();
-  createDeposits(ledger, state);
-  const vaultUtxo = consolidateDeposits(ledger, state);
-  const currentIds = state.participants.map((p) => p.id);
-  const tx = buildSoloWithdrawal({ state, currentUtxo: vaultUtxo, currentIds, leaverId: 'alice' });
-  const policy = requirePolicy(state, currentIds, 'alice');
-  const verified = await adapter.verifyPSBT(tx, policy);
-  assert(verified.success, `valid solo withdrawal rejected: ${verified.failures?.join('; ')}`);
-  const signed = await adapter.signPSBT(tx, policy);
-  assert(signed.success, signed.error || 'solo signing failed');
+  return withSigbashAdapter({ participantId: 'alice' }, async (adapter) => {
+    const state = createDemoState();
+    const ledger = new Ledger();
+    createDeposits(ledger, state);
+    const vaultUtxo = consolidateDeposits(ledger, state);
+    const currentIds = state.participants.map((p) => p.id);
+    const tx = buildSoloWithdrawal({ state, currentUtxo: vaultUtxo, currentIds, leaverId: 'alice' });
+    const policy = requirePolicy(state, currentIds, 'alice');
+    const verified = await adapter.verifyPSBT(tx, policy);
+    assert(verified.success, `valid solo withdrawal rejected: ${verified.failures?.join('; ')}`);
+    const signed = await adapter.signPSBT(tx, policy);
+    assert(signed.success, signed.error || 'solo signing failed');
 
-  const wrongAmount = structuredClone(tx);
-  wrongAmount.outputs[0]!.value = asSats(wrongAmount.outputs[0]!.value + 1);
-  const wrongAddress = structuredClone(tx);
-  wrongAddress.outputs[0]!.address = participantById(state, 'bob').payoutAddress;
-  const extraOutput = structuredClone(tx);
-  extraOutput.outputs.push({ address: tx.outputs[0]!.address, value: asSats(1), label: 'forbidden extra output' });
+    const wrongAmount = structuredClone(tx);
+    wrongAmount.outputs[0]!.value = asSats(wrongAmount.outputs[0]!.value + 1);
+    const wrongAddress = structuredClone(tx);
+    wrongAddress.outputs[0]!.address = participantById(state, 'bob').payoutAddress;
+    const extraOutput = structuredClone(tx);
+    extraOutput.outputs.push({
+      address: tx.outputs[0]!.address,
+      value: asSats(1),
+      label: 'forbidden extra output',
+    });
 
-  const tampered = {
-    wrongAmount: await adapter.verifyPSBT(wrongAmount, policy),
-    wrongAddress: await adapter.verifyPSBT(wrongAddress, policy),
-    extraOutput: await adapter.verifyPSBT(extraOutput, policy),
-  };
-  for (const [name, result] of Object.entries(tampered)) {
-    assert(!result.success, `${name} tampered PSBT unexpectedly passed`);
-  }
+    const tampered = {
+      wrongAmount: await adapter.verifyPSBT(wrongAmount, policy),
+      wrongAddress: await adapter.verifyPSBT(wrongAddress, policy),
+      extraOutput: await adapter.verifyPSBT(extraOutput, policy),
+    };
+    for (const [name, result] of Object.entries(tampered)) {
+      assert(!result.success, `${name} tampered PSBT unexpectedly passed`);
+    }
 
-  const committed = ledger.spend(vaultUtxo.outpoint, {
-    ...tx,
-    sigbashSignature: signed.psbt?.sigbashSignature,
-  });
-  printResult('solo withdrawal policy enforcement', {
-    mode: signed.mode,
-    txid: committed.txid,
-    payout: committed.outputs[0],
-    leftover: committed.outputs[1],
-    tamperedRejected: Object.fromEntries(
-      Object.entries(tampered).map(([name, result]) => [name, result.failures]),
-    ),
+    const committed = ledger.spend(vaultUtxo.outpoint, {
+      ...tx,
+      sigbashSignature: signed.psbt?.sigbashSignature,
+    });
+    printResult('solo withdrawal policy enforcement', {
+      mode: signed.mode,
+      txid: committed.txid,
+      payout: committed.outputs[0],
+      leftover: committed.outputs[1],
+      tamperedRejected: Object.fromEntries(
+        Object.entries(tampered).map(([name, result]) => [name, result.failures]),
+      ),
+    });
   });
 }
 
@@ -356,7 +362,10 @@ async function fullRun() {
   let policy = requirePolicy(state, currentIds, 'alice');
   // Per-leaver adapters: each signing request runs under the leaver's own
   // Sigbash credential scope.
-  let signed = await (await createSigbashAdapter({ participantId: 'alice' })).signPSBT(first, policy);
+  let signed = await withSigbashAdapter(
+    { participantId: 'alice' },
+    (adapter) => adapter.signPSBT(first, policy),
+  );
   assert(signed.success, signed.error || 'first withdrawal rejected');
   let committed = ledger.spend(currentUtxo.outpoint, first);
   events.push({
@@ -380,7 +389,10 @@ async function fullRun() {
   currentIds = ['bob', 'carol'];
   const second = buildSoloWithdrawal({ state, currentUtxo, currentIds, leaverId: 'bob' });
   policy = requirePolicy(state, currentIds, 'bob');
-  signed = await (await createSigbashAdapter({ participantId: 'bob' })).signPSBT(second, policy);
+  signed = await withSigbashAdapter(
+    { participantId: 'bob' },
+    (adapter) => adapter.signPSBT(second, policy),
+  );
   assert(signed.success, signed.error || 'second withdrawal rejected');
   committed = ledger.spend(currentUtxo.outpoint, second);
   events.push({
@@ -896,30 +908,31 @@ async function sigbashSignPsbt() {
     keyId,
   };
   assert(policy.conditions, `unknown policy for ${participantId} in round ${vault.id}`);
-  const adapter = await createSigbashAdapter({ participantId });
-  const tx = { psbtBase64 };
-  const verification = await adapter.verifyPSBT(tx, policy);
-  if (!sigbashVerificationPassed(verification)) {
-    printResult('Sigbash PSBT verification failed', verification);
-    throw new Error('Sigbash rejected PSBT in dry-run');
-  }
-  const signed = await adapter.signPSBT(tx, policy);
-  const signedArtifacts = normalizeSigbashSigningResult(signed);
-  assert(
-    signedArtifacts.success && (signedArtifacts.txHex || signedArtifacts.signedPsbtBase64),
-    'Sigbash signing succeeded but returned no txHex or signedPSBT artifact',
-  );
-  const authorization = authorizeSoloSigningArtifacts(state, vault.participantIds, participantId, psbtBase64, {
-    txHex: signedArtifacts.txHex,
-    signedPsbtBase64: signedArtifacts.signedPsbtBase64,
-  });
-  printResult('Sigbash signed PSBT', {
-    keyId,
-    participantId,
-    verification,
-    ...signedArtifacts,
-    authorization,
-    nextCommands: sigbashSignedNextCommands(signedArtifacts),
+  return withSigbashAdapter({ participantId }, async (adapter) => {
+    const tx = { psbtBase64 };
+    const verification = await adapter.verifyPSBT(tx, policy);
+    if (!sigbashVerificationPassed(verification)) {
+      printResult('Sigbash PSBT verification failed', verification);
+      throw new Error('Sigbash rejected PSBT in dry-run');
+    }
+    const signed = await adapter.signPSBT(tx, policy);
+    const signedArtifacts = normalizeSigbashSigningResult(signed);
+    assert(
+      signedArtifacts.success && (signedArtifacts.txHex || signedArtifacts.signedPsbtBase64),
+      'Sigbash signing succeeded but returned no txHex or signedPSBT artifact',
+    );
+    const authorization = authorizeSoloSigningArtifacts(state, vault.participantIds, participantId, psbtBase64, {
+      txHex: signedArtifacts.txHex,
+      signedPsbtBase64: signedArtifacts.signedPsbtBase64,
+    });
+    printResult('Sigbash signed PSBT', {
+      keyId,
+      participantId,
+      verification,
+      ...signedArtifacts,
+      authorization,
+      nextCommands: sigbashSignedNextCommands(signedArtifacts),
+    });
   });
 }
 
@@ -2479,51 +2492,52 @@ async function liveSoloWithdrawal() {
   let signedArtifacts: ReturnType<typeof normalizeSigbashSigningResult> | null = null;
   let authorization: SoloSigningAuthorization | null = null;
   if (checks.every((item) => item.ok)) {
-    const adapter = await createSigbashAdapter({ participantId: leaverId });
-    const policy = {
-      ...requirePolicy(state, currentIds, leaverId),
-      keyId,
-    };
-    liveVerification = await adapter.verifyPSBT({ psbtBase64: psbt.psbtBase64 }, policy);
-    const verificationPassed = sigbashVerificationPassed(liveVerification);
-    checks.push(check('Sigbash live verifyPSBT passes', verificationPassed, liveVerification));
-    if (verificationPassed && args.sign !== 'false') {
-      liveSignature = await adapter.signPSBT({ psbtBase64: psbt.psbtBase64 }, policy);
-      signedArtifacts = normalizeSigbashSigningResult(liveSignature);
-      const artifactsReturned = Boolean(
-        signedArtifacts.success && (signedArtifacts.txHex || signedArtifacts.signedPsbtBase64),
-      );
-      checks.push(
-        check(
-          'Sigbash live signPSBT returned a broadcast or signed-PSBT artifact',
-          artifactsReturned,
-          signedArtifacts,
-        ),
-      );
-      if (artifactsReturned) {
-        try {
-          authorization = authorizeSoloSigningArtifacts(state, currentIds, leaverId, psbt.psbtBase64, {
-            txHex: signedArtifacts.txHex,
-            signedPsbtBase64: signedArtifacts.signedPsbtBase64,
-          });
-          checks.push(
-            check(
-              'signer artifacts are authorized for broadcast (exact transaction, policy-spend leaf only)',
-              true,
-              authorization,
-            ),
-          );
-        } catch (error) {
-          checks.push(
-            check(
-              'signer artifacts are authorized for broadcast (exact transaction, policy-spend leaf only)',
-              false,
-              { error: errorMessage(error) },
-            ),
-          );
+    await withSigbashAdapter({ participantId: leaverId }, async (adapter) => {
+      const policy = {
+        ...requirePolicy(state, currentIds, leaverId),
+        keyId,
+      };
+      liveVerification = await adapter.verifyPSBT({ psbtBase64: psbt.psbtBase64 }, policy);
+      const verificationPassed = sigbashVerificationPassed(liveVerification);
+      checks.push(check('Sigbash live verifyPSBT passes', verificationPassed, liveVerification));
+      if (verificationPassed && args.sign !== 'false') {
+        liveSignature = await adapter.signPSBT({ psbtBase64: psbt.psbtBase64 }, policy);
+        signedArtifacts = normalizeSigbashSigningResult(liveSignature);
+        const artifactsReturned = Boolean(
+          signedArtifacts.success && (signedArtifacts.txHex || signedArtifacts.signedPsbtBase64),
+        );
+        checks.push(
+          check(
+            'Sigbash live signPSBT returned a broadcast or signed-PSBT artifact',
+            artifactsReturned,
+            signedArtifacts,
+          ),
+        );
+        if (artifactsReturned) {
+          try {
+            authorization = authorizeSoloSigningArtifacts(state, currentIds, leaverId, psbt.psbtBase64, {
+              txHex: signedArtifacts.txHex,
+              signedPsbtBase64: signedArtifacts.signedPsbtBase64,
+            });
+            checks.push(
+              check(
+                'signer artifacts are authorized for broadcast (exact transaction, policy-spend leaf only)',
+                true,
+                authorization,
+              ),
+            );
+          } catch (error) {
+            checks.push(
+              check(
+                'signer artifacts are authorized for broadcast (exact transaction, policy-spend leaf only)',
+                false,
+                { error: errorMessage(error) },
+              ),
+            );
+          }
         }
       }
-    }
+    });
   }
 
   printResult('live solo withdrawal', {
@@ -2592,105 +2606,106 @@ async function livePolicyDryRun() {
   const policy = { ...requirePolicy(state, currentIds, leaverId), keyId };
 
   const variants = buildSoloWithdrawalTamperPsbts({ state, currentIds, leaverId, txid, vout, valueSats });
-  const adapter = await createSigbashAdapter({ participantId: leaverId });
-  const liveValid = await adapter.verifyPSBT({ psbtBase64: variants.valid.psbtBase64 }, policy);
-  const liveTampered: Record<string, SigbashVerifyResult> = {};
-  for (const [name, psbt] of Object.entries(variants.tampered)) {
-    liveTampered[name] = await adapter.verifyPSBT({ psbtBase64: psbt.psbtBase64 }, policy);
-  }
-  const checks = [
-    check('Sigbash verifyPSBT accepts the valid solo PSBT (REQKEY leaf-key assumption holds)', sigbashVerificationPassed(liveValid), liveValid),
-    ...Object.entries(liveTampered).map(([name, result]) =>
-      check(
-        `Sigbash verifyPSBT explicitly rejects tampered ${name} PSBT`,
-        sigbashVerificationExplicitlyRejected(result),
-        result,
+  return withSigbashAdapter({ participantId: leaverId }, async (adapter) => {
+    const liveValid = await adapter.verifyPSBT({ psbtBase64: variants.valid.psbtBase64 }, policy);
+    const liveTampered: Record<string, SigbashVerifyResult> = {};
+    for (const [name, psbt] of Object.entries(variants.tampered)) {
+      liveTampered[name] = await adapter.verifyPSBT({ psbtBase64: psbt.psbtBase64 }, policy);
+    }
+    const checks = [
+      check('Sigbash verifyPSBT accepts the valid solo PSBT (REQKEY leaf-key assumption holds)', sigbashVerificationPassed(liveValid), liveValid),
+      ...Object.entries(liveTampered).map(([name, result]) =>
+        check(
+          `Sigbash verifyPSBT explicitly rejects tampered ${name} PSBT`,
+          sigbashVerificationExplicitlyRejected(result),
+          result,
+        ),
       ),
-    ),
-  ];
-  let liveSignature: SigbashSignResult | null = null;
-  let signedArtifacts: ReturnType<typeof normalizeSigbashSigningResult> | null = null;
-  let authorization: SoloSigningAuthorization | null = null;
-  let proofReceipt: LiveSigbashProofReceipt | null = null;
-  let proofReceiptFile: { path: string; reused: boolean } | null = null;
-  if (requestSignature && checks.every((item) => item.ok)) {
-    liveSignature = await adapter.signPSBT({ psbtBase64: variants.valid.psbtBase64 }, policy);
-    signedArtifacts = normalizeSigbashSigningResult(liveSignature);
-    const artifactsReturned = Boolean(
-      signedArtifacts.success && (signedArtifacts.txHex || signedArtifacts.signedPsbtBase64),
-    );
-    checks.push(check(
-      'Sigbash live signPSBT returns a transaction or signed PSBT artifact',
-      artifactsReturned,
-      signedArtifacts,
-    ));
-    if (artifactsReturned) {
-      try {
-        authorization = authorizeSoloSigningArtifacts(
-          state,
-          currentIds,
-          leaverId,
-          variants.valid.psbtBase64,
-          {
-            txHex: signedArtifacts.txHex,
-            signedPsbtBase64: signedArtifacts.signedPsbtBase64,
-          },
-        );
-        checks.push(check(
-          'live Sigbash artifact is the exact consensus-valid policy-leaf transaction',
-          Boolean(authorization.finalTxid && authorization.consensus),
-          authorization,
-        ));
-      } catch (error) {
-        checks.push(check(
-          'live Sigbash artifact is the exact consensus-valid policy-leaf transaction',
-          false,
-          { error: errorMessage(error) },
-        ));
+    ];
+    let liveSignature: SigbashSignResult | null = null;
+    let signedArtifacts: ReturnType<typeof normalizeSigbashSigningResult> | null = null;
+    let authorization: SoloSigningAuthorization | null = null;
+    let proofReceipt: LiveSigbashProofReceipt | null = null;
+    let proofReceiptFile: { path: string; reused: boolean } | null = null;
+    if (requestSignature && checks.every((item) => item.ok)) {
+      liveSignature = await adapter.signPSBT({ psbtBase64: variants.valid.psbtBase64 }, policy);
+      signedArtifacts = normalizeSigbashSigningResult(liveSignature);
+      const artifactsReturned = Boolean(
+        signedArtifacts.success && (signedArtifacts.txHex || signedArtifacts.signedPsbtBase64),
+      );
+      checks.push(check(
+        'Sigbash live signPSBT returns a transaction or signed PSBT artifact',
+        artifactsReturned,
+        signedArtifacts,
+      ));
+      if (artifactsReturned) {
+        try {
+          authorization = authorizeSoloSigningArtifacts(
+            state,
+            currentIds,
+            leaverId,
+            variants.valid.psbtBase64,
+            {
+              txHex: signedArtifacts.txHex,
+              signedPsbtBase64: signedArtifacts.signedPsbtBase64,
+            },
+          );
+          checks.push(check(
+            'live Sigbash artifact is the exact consensus-valid policy-leaf transaction',
+            Boolean(authorization.finalTxid && authorization.consensus),
+            authorization,
+          ));
+        } catch (error) {
+          checks.push(check(
+            'live Sigbash artifact is the exact consensus-valid policy-leaf transaction',
+            false,
+            { error: errorMessage(error) },
+          ));
+        }
       }
     }
-  }
-  if (requestSignature && checks.every((item) => item.ok) && signedArtifacts && authorization) {
-    proofReceipt = createLiveSigbashProofReceipt({
-      createdAt: new Date().toISOString(),
+    if (requestSignature && checks.every((item) => item.ok) && signedArtifacts && authorization) {
+      proofReceipt = createLiveSigbashProofReceipt({
+        createdAt: new Date().toISOString(),
+        round,
+        leaverId,
+        keyId,
+        placeholderOutpoint,
+        psbtBase64: variants.valid.psbtBase64,
+        signedArtifacts,
+        authorization,
+        checks,
+      });
+      proofReceiptFile = writeProtectedFile(
+        proofReceiptPath!,
+        `${JSON.stringify(proofReceipt, null, 2)}\n`,
+      );
+    }
+    printResult(requestSignature
+      ? 'live predeployment Sigbash mainnet signing proof'
+      : 'live policy dry-run (no chain lookup, no nullifier consumed)', {
       round,
       leaverId,
       keyId,
+      outpoint: `${txid}:${vout}`,
+      valueSats,
       placeholderOutpoint,
-      psbtBase64: variants.valid.psbtBase64,
+      signatureRequested: requestSignature,
+      liveSignature,
       signedArtifacts,
       authorization,
+      proofReceipt: proofReceipt ? {
+        proofDigest: proofReceipt.proofDigest,
+        finalTxid: proofReceipt.finalTxid,
+        file: proofReceiptFile,
+      } : null,
       checks,
+      passed: checks.every((item) => item.ok),
     });
-    proofReceiptFile = writeProtectedFile(
-      proofReceiptPath!,
-      `${JSON.stringify(proofReceipt, null, 2)}\n`,
-    );
-  }
-  printResult(requestSignature
-    ? 'live predeployment Sigbash mainnet signing proof'
-    : 'live policy dry-run (no chain lookup, no nullifier consumed)', {
-    round,
-    leaverId,
-    keyId,
-    outpoint: `${txid}:${vout}`,
-    valueSats,
-    placeholderOutpoint,
-    signatureRequested: requestSignature,
-    liveSignature,
-    signedArtifacts,
-    authorization,
-    proofReceipt: proofReceipt ? {
-      proofDigest: proofReceipt.proofDigest,
-      finalTxid: proofReceipt.finalTxid,
-      file: proofReceiptFile,
-    } : null,
-    checks,
-    passed: checks.every((item) => item.ok),
+    assert(checks.every((item) => item.ok), requestSignature
+      ? 'live predeployment Sigbash mainnet signing proof failed'
+      : 'live policy dry-run failed');
   });
-  assert(checks.every((item) => item.ok), requestSignature
-    ? 'live predeployment Sigbash mainnet signing proof failed'
-    : 'live policy dry-run failed');
 }
 
 async function liveSoloTamperCheck() {
@@ -2727,48 +2742,49 @@ async function liveSoloTamperCheck() {
     valueSats: btcToSats(actual.value),
   });
   const localChecks = soloTamperLocalChecks({ state, currentIds, leaverId, variants });
-  const adapter = await createSigbashAdapter({ participantId: leaverId });
-  const liveValid = await adapter.verifyPSBT({ psbtBase64: variants.valid.psbtBase64 }, policy);
-  const liveTampered: Record<string, SigbashVerifyResult> = {};
-  for (const [name, psbt] of Object.entries(variants.tampered)) {
-    liveTampered[name] = await adapter.verifyPSBT({ psbtBase64: psbt.psbtBase64 }, policy);
-  }
-  const checks = [
-    ...utxoChecks,
-    check('local model accepts the valid solo PSBT', localChecks.valid.passed, localChecks.valid),
-    ...Object.entries(localChecks.tampered).map(([name, result]) =>
-      check(`local model rejects tampered ${name} PSBT`, !result.passed, result),
-    ),
-    check('Sigbash verifyPSBT accepts the valid solo PSBT', sigbashVerificationPassed(liveValid), liveValid),
-    ...Object.entries(liveTampered).map(([name, result]) =>
-      check(
-        `Sigbash verifyPSBT explicitly rejects tampered ${name} PSBT`,
-        sigbashVerificationExplicitlyRejected(result),
-        result,
+  return withSigbashAdapter({ participantId: leaverId }, async (adapter) => {
+    const liveValid = await adapter.verifyPSBT({ psbtBase64: variants.valid.psbtBase64 }, policy);
+    const liveTampered: Record<string, SigbashVerifyResult> = {};
+    for (const [name, psbt] of Object.entries(variants.tampered)) {
+      liveTampered[name] = await adapter.verifyPSBT({ psbtBase64: psbt.psbtBase64 }, policy);
+    }
+    const checks = [
+      ...utxoChecks,
+      check('local model accepts the valid solo PSBT', localChecks.valid.passed, localChecks.valid),
+      ...Object.entries(localChecks.tampered).map(([name, result]) =>
+        check(`local model rejects tampered ${name} PSBT`, !result.passed, result),
       ),
-    ),
-  ];
+      check('Sigbash verifyPSBT accepts the valid solo PSBT', sigbashVerificationPassed(liveValid), liveValid),
+      ...Object.entries(liveTampered).map(([name, result]) =>
+        check(
+          `Sigbash verifyPSBT explicitly rejects tampered ${name} PSBT`,
+          sigbashVerificationExplicitlyRejected(result),
+          result,
+        ),
+      ),
+    ];
 
-  printResult('live solo tamper check', {
-    round: roundId(currentIds),
-    leaverId,
-    outpoint: `${txid}:${vout}`,
-    keyId,
-    localChecks,
-    liveVerification: {
-      valid: liveValid,
-      tampered: liveTampered,
-    },
-    psbts: {
-      valid: variants.valid.psbtBase64,
-      tampered: Object.fromEntries(
-        Object.entries(variants.tampered).map(([name, psbt]) => [name, psbt.psbtBase64]),
-      ),
-    },
-    checks,
-    passed: checks.every((item) => item.ok),
+    printResult('live solo tamper check', {
+      round: roundId(currentIds),
+      leaverId,
+      outpoint: `${txid}:${vout}`,
+      keyId,
+      localChecks,
+      liveVerification: {
+        valid: liveValid,
+        tampered: liveTampered,
+      },
+      psbts: {
+        valid: variants.valid.psbtBase64,
+        tampered: Object.fromEntries(
+          Object.entries(variants.tampered).map(([name, psbt]) => [name, psbt.psbtBase64]),
+        ),
+      },
+      checks,
+      passed: checks.every((item) => item.ok),
+    });
+    assert(checks.every((item) => item.ok), 'live solo tamper check failed');
   });
-  assert(checks.every((item) => item.ok), 'live solo tamper check failed');
 }
 
 async function liveSoloAudit() {
@@ -3626,11 +3642,7 @@ async function sigbashLiveSetup() {
         `(${doneKeys.size}/${proofRound ? 2 : 9})${matching ? ' (resumed live key)' : ''}`,
       );
     } finally {
-      try {
-        client.disconnect?.();
-      } finally {
-        client.dispose?.();
-      }
+      disposeSigbashLiveClient(client);
     }
   };
 

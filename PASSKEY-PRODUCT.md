@@ -30,7 +30,9 @@ participant-only MuSig2 path, or the timelocked recovery path.
   same-origin route and checked against an operator-pinned SHA-384 digest, and
   the WASM is independently pinned before execution. Every browser Sigbash
   operation then disconnects its sockets and invokes the SDK disposal boundary
-  that overwrites its copied MuSig2 private-key buffer.
+  that overwrites its copied MuSig2 private-key buffer. The command-line live
+  proof and audit paths use the same one-action ownership rule, including when
+  verification, signing, authorization, or socket shutdown fails.
 - A recovery-passkey ceremony that first unlocks with an existing credential,
   registers a distinct credential, and encrypts the exact same participant
   secret under a credential-specific PRF salt and authenticated envelope. Either
