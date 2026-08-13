@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Isolated production-bundle acceptance only. The application remains
-# mainnet-only; synthetic public registrations and coin observations used by
-# the browser tests are explicit prerequisites, never live Sigbash or funding
-# evidence.
+# mainnet-only; synthetic public registrations/readiness, coin observations,
+# chain responses, and ephemeral wallet signers used by the browser tests are
+# explicit prerequisites, never live Sigbash, real-wallet, or funding evidence.
 
 readonly DEFAULT_POSTGRES_BIN='/home/codex/.cache/btc-multiplayer-vault/postgresql-16.14/usr/lib/postgresql/16/bin'
 readonly DEFAULT_POSTGRES_LIB='/home/codex/.cache/btc-multiplayer-vault/postgresql-16.14/usr/lib/x86_64-linux-gnu'
@@ -71,6 +71,11 @@ free_port() {
 
 postgres_port=$(free_port)
 web_port=$(free_port)
+while [ "$web_port" = "$postgres_port" ]; do web_port=$(free_port); done
+chain_fixture_port=$(free_port)
+while [ "$chain_fixture_port" = "$postgres_port" ] || [ "$chain_fixture_port" = "$web_port" ]; do
+  chain_fixture_port=$(free_port)
+done
 "$postgres_bin/initdb" -D "$work_dir/postgres" --auth=trust --no-locale --encoding=UTF8 >/dev/null
 postgres_started=true
 "$postgres_bin/pg_ctl" -D "$work_dir/postgres" \
@@ -84,6 +89,10 @@ export WEBAUTHN_RP_ID=localhost
 export WEBAUTHN_ORIGIN="http://localhost:${web_port}"
 export APP_ORIGIN="$WEBAUTHN_ORIGIN"
 export CHAIN_OBSERVATION_ORIGINS=https://chain.example
+export BITCOIN_BACKEND=core
+unset BITCOIN_ESPLORA_URL
+export BITCOIN_RPC_URL="http://127.0.0.1:${chain_fixture_port}"
+export BROWSER_CHAIN_FIXTURE_PORT="$chain_fixture_port"
 export VAULT_CONFIRMATIONS_REQUIRED=1
 export VAULT_DEPOSIT_SATS=10000
 export PRIVATE_BETA_MAX_DEPOSIT_SATS=10000
@@ -126,7 +135,8 @@ fi
 npx playwright test \
   web/browser-tests/passkey-prf.spec.ts \
   web/browser-tests/cooperative-musig2.spec.ts \
-  web/browser-tests/recovery-final-sweep.spec.ts
+  web/browser-tests/recovery-final-sweep.spec.ts \
+  web/browser-tests/funding-wallet.spec.ts
 
 acceptance_passed=true
 printf 'Optimized standalone bundle, PostgreSQL %s, and all browser acceptance checks passed.\n' \

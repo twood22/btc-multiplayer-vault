@@ -51,11 +51,14 @@ npm run web:test:browser:production
 
 This command creates disposable PostgreSQL state, builds the production bundle,
 and runs the full Chromium passkey, three-participant cooperative MuSig2,
-distributed recovery, and owner-only final-sweep suite. It contacts neither
-Sigbash nor Bitcoin and never broadcasts. A passing result proves the optimized
-local bundle renders and executes; it does not prove the later immutable
-container digest, HTTPS proxy, physical authenticators, live Sigbash service,
-production database, or mainnet backend.
+distributed recovery, owner-only final-sweep, and three-wallet funding suite.
+The funding acceptance imports independently produced, consensus-valid
+wallet-format signatures into the real user flow, but its wallet coins, mainnet
+responses, and Sigbash readiness rows are explicit isolated fixtures. It
+contacts neither Sigbash nor Bitcoin and never broadcasts. A passing result
+proves the optimized local bundle renders and executes; it does not prove the
+later immutable container digest, HTTPS proxy, physical authenticators, live
+Sigbash service, real wallets, production database, or mainnet backend.
 
 ## Required runtime configuration
 

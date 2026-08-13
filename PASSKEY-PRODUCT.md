@@ -162,13 +162,19 @@ secrets; send each one only to its intended friend and let it expire quickly.
 npm run web:typecheck
 npm run web:test
 npm run web:test:db # requires a disposable or dedicated empty PostgreSQL database
-npm run web:test:browser # requires the migrated database, running web app, and Playwright Chromium
+npm run web:test:browser # advanced: also requires the isolated chain-fixture port and matching app RPC URL
 npm run web:test:browser:production # builds and exercises the optimized standalone bundle in isolation
 npm run web:build
 npm run web:release-status # read-only; exits nonzero until every automated gate passes
 npm test
 npm audit
 ```
+
+Use `web:test:browser:production` for the repeatable complete browser gate. The
+lower-level `web:test:browser` command assumes its already-running application
+was started with `BITCOIN_RPC_URL` aimed at the unused loopback port named by
+`BROWSER_CHAIN_FIXTURE_PORT`; the funding test owns that isolated listener for
+the duration of its run.
 
 The production container exposes `/api/health/live` and
 `/api/health/ready`. Readiness proves only that the web process can reach the
@@ -215,16 +221,21 @@ persists only public contributions, and independently verifies the final
 consensus transaction. The recovery ceremony makes two survivors independently
 observe a mature coin, bind it with their passkeys, and produce separate public
 shares while excluding the vanished participant. The final-sweep ceremony lets
-only the payout owner observe, propose, and sign the exact one-output spend.
-None broadcasts. `web:test:browser:production` creates a fresh PostgreSQL 16
-cluster, builds the optimized standalone application, copies the exact static
-assets used by the container, starts that bundle with production settings, and
-runs the entire suite against it. This catches missing production JavaScript or
+only the payout owner observe, propose, and sign the exact one-output spend. The
+funding ceremony makes each browser approve one wallet coin, imports one
+independently generated P2WPKH/P2TR signature per participant, reproduces the
+exact finalized transaction in all three browsers, and records three final
+passkey approvals while keeping the operator submission gate closed. None
+broadcasts. `web:test:browser:production` creates a fresh PostgreSQL 16 cluster,
+builds the optimized standalone application, copies the exact static assets
+used by the container, starts that bundle with production settings, and runs
+the entire suite against it. This catches missing production JavaScript or
 static assets that development-server acceptance cannot expose. Synthetic
-public Sigbash registrations, current coins, and mainnet-shaped chain responses
-are explicit test prerequisites; no Sigbash runtime or Bitcoin backend is
-contacted, and virtual authenticators do not satisfy the live-service,
-physical-passkey, container-image, deployment, or funding gates.
+public Sigbash registrations/readiness rows, wallet and vault coins, ephemeral
+test-wallet keys, and mainnet-shaped chain/Core responses are explicit test
+prerequisites; no external Sigbash runtime or Bitcoin backend is contacted, and
+virtual authenticators do not satisfy the live-service, physical-passkey,
+real-wallet, container-image, deployment, or funding gates.
 
 `web:release-status` is the post-deployment funding audit and prints only
 non-secret gate summaries plus a non-authorizing `statusDigest`. It verifies the
@@ -285,9 +296,10 @@ deployed, the following gates remain mandatory before funding:
    not yet been run end to end.
 6. Expand the seeded database and virtual-authenticator browser acceptance
    beyond the now-covered unanimous roster, cooperative MuSig2, distributed
-   recovery, and owner-only final sweep to the funding-wallet and live-Sigbash
-   solo surfaces without presenting local fixtures as external evidence; retain
-   rate-limit, secret-free audit, backup/restore, and operational drills.
+   recovery, owner-only final sweep, and three-wallet funding lifecycle to the
+   live-Sigbash solo surface without presenting local fixtures as external
+   evidence; retain rate-limit, secret-free audit, backup/restore, and
+   operational drills.
 7. Exercise the implemented passkey-approved broadcast and private chain
    watcher against the selected production Bitcoin backend. Verify rejection,
    duplicate submission, interrupted submission, mempool, confirmation, and

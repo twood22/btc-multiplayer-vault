@@ -143,8 +143,9 @@ record('the release surface exercises the optimized standalone browser product',
   assert.match(runner, /\.next\/standalone\/server\.js/u);
   assert.match(runner, /cooperative-musig2\.spec\.ts/u);
   assert.match(runner, /recovery-final-sweep\.spec\.ts/u);
+  assert.match(runner, /funding-wallet\.spec\.ts/u);
   assert.match(runner, /passkey-prf\.spec\.ts/u);
-  assert.match(runner, /never live Sigbash or funding/u);
+  assert.match(runner, /never live Sigbash, real-wallet, or funding evidence/u);
 });
 
 record('every required PostgreSQL product-state migration is present', () => {

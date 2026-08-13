@@ -1,30 +1,15 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { expect, test, type Browser } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import * as bitcoin from 'bitcoinjs-lib';
 import postgres from 'postgres';
 import { verifyVaultTransaction } from '../../src/consensus.js';
 import { sha256Hex } from '../../src/crypto.js';
 import { MAINNET_GENESIS_HASH } from '../../src/network.js';
-import {
-  publishedRosterDigest,
-  type PublishedRosterArtifact,
-} from '../../src/roster-ceremony.js';
 import type { VaultCoinSnapshot } from '../../src/vault-runtime.js';
 import {
-  createParticipantBrowser,
-  participants,
-  seedPublicSigbashRegistrations,
+  createConfirmedParticipantFixture,
+  disposeParticipantFixture,
   type ParticipantBrowser,
-  type ParticipantId,
 } from './participant-fixture';
-
-interface ConfirmedFixture {
-  vaultId: string;
-  browsers: ParticipantBrowser[];
-  userIds: string[];
-  artifact: PublishedRosterArtifact;
-  rosterDigest: string;
-}
 
 test('two passkey-held survivors finalize mature recovery without the vanished participant', async ({
   browser,
@@ -36,7 +21,7 @@ test('two passkey-held survivors finalize mature recovery without the vanished p
   if (!databaseUrl) throw new Error('DATABASE_URL is required for recovery browser acceptance');
   const sql = postgres(databaseUrl, { max: 4 });
   const forbiddenSigbashRequests: string[] = [];
-  const fixture = await createConfirmedFixture({
+  const fixture = await createConfirmedParticipantFixture({
     browser,
     baseURL,
     sql,
@@ -165,7 +150,7 @@ test('two passkey-held survivors finalize mature recovery without the vanished p
     expect(unexpectedChainRequests).toEqual([]);
     expect(forbiddenSigbashRequests).toEqual([]);
   } finally {
-    await disposeFixture(sql, fixture);
+    await disposeParticipantFixture(sql, fixture);
   }
 });
 
@@ -179,7 +164,7 @@ test('only the final payout owner passkey-signs the exact final sweep', async ({
   if (!databaseUrl) throw new Error('DATABASE_URL is required for final-sweep browser acceptance');
   const sql = postgres(databaseUrl, { max: 4 });
   const forbiddenSigbashRequests: string[] = [];
-  const fixture = await createConfirmedFixture({
+  const fixture = await createConfirmedParticipantFixture({
     browser,
     baseURL,
     sql,
@@ -292,124 +277,9 @@ test('only the final payout owner passkey-signs the exact final sweep', async ({
     expect(unexpectedChainRequests).toEqual([]);
     expect(forbiddenSigbashRequests).toEqual([]);
   } finally {
-    await disposeFixture(sql, fixture);
+    await disposeParticipantFixture(sql, fixture);
   }
 });
-
-async function createConfirmedFixture(input: {
-  browser: Browser;
-  baseURL: string;
-  sql: ReturnType<typeof postgres>;
-  name: string;
-  onRequest: (requestUrl: string) => void;
-}): Promise<ConfirmedFixture> {
-  const vaultId = randomUUID();
-  const invitationTokens = Object.fromEntries(participants.map((id) => [
-    id,
-    randomBytes(32).toString('base64url'),
-  ])) as Record<ParticipantId, string>;
-  const browsers: ParticipantBrowser[] = [];
-  let userIds: string[] = [];
-  try {
-    await input.sql`INSERT INTO vaults (id, name) VALUES (${vaultId}::uuid, ${input.name})`;
-    for (const id of participants) {
-      await input.sql`
-        INSERT INTO invites (vault_id, participant_id, token_hash, expires_at)
-        VALUES (
-          ${vaultId}::uuid, ${id},
-          ${createHash('sha256').update(invitationTokens[id]).digest()},
-          now() + interval '1 hour'
-        )
-      `;
-      browsers.push(await createParticipantBrowser({
-        browser: input.browser,
-        baseURL: input.baseURL,
-        id,
-        invitationToken: invitationTokens[id],
-        onRequest: input.onRequest,
-      }));
-    }
-    const members = await input.sql<Array<{
-      user_id: string;
-      participant_id: ParticipantId;
-    }>>`
-      SELECT user_id, participant_id FROM vault_members
-      WHERE vault_id = ${vaultId}::uuid ORDER BY participant_id
-    `;
-    expect(members.map((member) => member.participant_id)).toEqual(participants);
-    userIds = members.map((member) => member.user_id);
-    const custody = await input.sql<Array<{
-      participant_id: ParticipantId;
-      credentials: number;
-      envelopes: number;
-    }>>`
-      SELECT m.participant_id,
-        count(DISTINCT c.credential_id)::integer AS credentials,
-        count(DISTINCT e.credential_id)::integer AS envelopes
-      FROM vault_members m
-      JOIN webauthn_credentials c ON c.user_id = m.user_id AND c.prf_enabled = true
-      JOIN passkey_envelopes e ON e.credential_id = c.credential_id
-      WHERE m.vault_id = ${vaultId}::uuid
-      GROUP BY m.participant_id ORDER BY m.participant_id
-    `;
-    expect(custody).toEqual(participants.map((participantId) => ({
-      participant_id: participantId,
-      credentials: 2,
-      envelopes: 2,
-    })));
-    await seedPublicSigbashRegistrations(input.sql, vaultId, members);
-
-    const digests: string[] = [];
-    for (const participant of browsers) {
-      await participant.page.goto('/vault');
-      await expect(participant.page.getByRole('heading', {
-        name: 'Review the same vault together',
-      })).toBeVisible();
-      const digest = await participant.page.locator('.digest-line code').textContent();
-      expect(digest).toMatch(/^[0-9a-f]{64}$/u);
-      digests.push(digest!);
-      await participant.page.getByRole('button', { name: 'Confirm this exact roster' }).click();
-      await expect(participant.page.getByRole('button', {
-        name: 'Confirm this exact roster',
-      })).toHaveCount(0);
-    }
-    expect(new Set(digests).size).toBe(1);
-    for (const participant of browsers) {
-      await participant.page.goto('/vault');
-      await expect(participant.page.getByRole('heading', {
-        name: 'All three friends confirmed',
-      })).toBeVisible();
-    }
-    const rosterRows = await input.sql<Array<{
-      artifact_json: PublishedRosterArtifact;
-      digest: Buffer;
-      status: string;
-    }>>`
-      SELECT artifact_json, digest, status FROM vault_rosters
-      WHERE vault_id = ${vaultId}::uuid
-    `;
-    const roster = rosterRows[0]!;
-    const rosterDigest = roster.digest.toString('hex');
-    expect(roster.status).toBe('confirmed');
-    expect(publishedRosterDigest(roster.artifact_json)).toBe(rosterDigest);
-    return {
-      vaultId,
-      browsers,
-      userIds,
-      artifact: roster.artifact_json,
-      rosterDigest,
-    };
-  } catch (error) {
-    await disposeFixture(input.sql, {
-      vaultId,
-      browsers,
-      userIds,
-      artifact: {} as PublishedRosterArtifact,
-      rosterDigest: '',
-    });
-    throw error;
-  }
-}
 
 async function seedCurrentCoin(
   sql: ReturnType<typeof postgres>,
@@ -488,31 +358,4 @@ function forbiddenSigbashRecorder(target: string[]): (requestUrl: string) => voi
       target.push(requestUrl);
     }
   };
-}
-
-async function disposeFixture(
-  sql: ReturnType<typeof postgres>,
-  fixture: ConfirmedFixture,
-): Promise<void> {
-  for (const participant of fixture.browsers) {
-    await participant.cdp.send('WebAuthn.removeVirtualAuthenticator', {
-      authenticatorId: participant.recoveryAuthenticatorId,
-    }).catch(() => undefined);
-    await participant.cdp.send('WebAuthn.removeVirtualAuthenticator', {
-      authenticatorId: participant.primaryAuthenticatorId,
-    }).catch(() => undefined);
-    await participant.context.close().catch(() => undefined);
-  }
-  const linkedUsers = await sql<Array<{ user_id: string }>>`
-    SELECT user_id FROM vault_members WHERE vault_id = ${fixture.vaultId}::uuid
-  `.catch(() => []);
-  const userIds = [...new Set([
-    ...fixture.userIds,
-    ...linkedUsers.map((item) => item.user_id),
-  ])];
-  await sql`DELETE FROM vaults WHERE id = ${fixture.vaultId}::uuid`.catch(() => undefined);
-  if (userIds.length) {
-    await sql`DELETE FROM users WHERE id = ANY(${userIds}::uuid[])`.catch(() => undefined);
-  }
-  await sql.end();
 }
