@@ -26,7 +26,7 @@ COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
 COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
 COPY --from=build --chown=node:node /app/.node-version ./.node-version
-COPY --from=build --chown=node:node /app/scripts/check-runtime.mjs /app/scripts/start-production.mjs ./scripts/
+COPY --from=build --chown=node:node /app/scripts/check-runtime.mjs /app/scripts/check-operator-runtime.mjs /app/scripts/start-production.mjs ./scripts/
 COPY --from=build --chown=node:node /app/db ./db
 COPY --from=build --chown=node:node /app/src ./src
 COPY --from=build --chown=node:node /app/web/lib ./web/lib

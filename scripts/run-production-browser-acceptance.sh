@@ -128,6 +128,9 @@ if [ "$container_acceptance" = true ]; then
     echo 'Container engine returned an invalid local image ID' >&2
     exit 1
   fi
+  "$container_engine" run --rm --network none --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,size=16m --entrypoint node \
+    "$container_image_tag" scripts/check-operator-runtime.mjs
   "$container_engine" run --rm --name "$container_name" --network host \
     --env NODE_ENV --env NEXT_TELEMETRY_DISABLED \
     --env DATABASE_URL --env WEBAUTHN_RP_ID --env WEBAUTHN_ORIGIN --env APP_ORIGIN \

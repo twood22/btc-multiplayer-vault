@@ -252,6 +252,9 @@ real-wallet, container-image, deployment, or funding gates.
 
 `web:test:browser:container` runs that same isolated suite against the exact
 Dockerfile image as its unprivileged runtime user and prints its local image ID.
+Before starting the service, it also proves that the image's packaged private
+operator TypeScript runtime loads and fails at a deliberately missing required
+argument in a read-only, network-disabled container.
 It requires a Linux container engine and has not passed merely because the
 standalone command passed; a registry manifest digest is still separate
 deployment evidence.

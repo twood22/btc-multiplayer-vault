@@ -36,6 +36,7 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Recoverable passkey custody + encrypted Sigbash credentials/kits | ✅ implemented; real authenticator run still required |
 | Browser PRF setup/recovery/sign-in/unlock | ✅ Chromium + two virtual authenticators; physical devices still required |
 | Optimized standalone user-facing bundle | ✅ passkey + cooperative/recovery/final-sweep/three-wallet-funding Chromium gate; exact container image still requires digest review |
+| Packaged private operator runtime | ✅ non-mutating fail-closed probe; exact image execution requires a container engine |
 | Immediate session revocation and vault-tab cleanup | ✅ browser + PostgreSQL verified |
 | Immutable three-passkey roster gate | ✅ implemented; PostgreSQL 16 migrations verified, real authenticator run still required |
 | User-facing solo/cooperative/recovery/final signing | ✅ implemented and server re-authorized |

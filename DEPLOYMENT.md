@@ -65,6 +65,11 @@ artifact after CI publishes the image.
 Both commands create disposable PostgreSQL state and run the full Chromium
 passkey, three-participant cooperative MuSig2,
 distributed recovery, owner-only final-sweep, and three-wallet funding suite.
+The exact-container command first runs a non-mutating operator-runtime probe
+inside the image. It requires the packaged private funding command to load its
+production TypeScript runtime and stop at the deliberately missing vault ID,
+inside a read-only container with networking disabled and before any release
+artifact, database, Bitcoin, or external service access.
 The funding acceptance imports independently produced, consensus-valid
 wallet-format signatures into the real user flow, but its wallet coins, mainnet
 responses, and Sigbash readiness rows are explicit isolated fixtures. It
