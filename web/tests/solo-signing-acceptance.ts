@@ -1,51 +1,29 @@
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
-import { Buffer } from 'buffer';
 import type { SigbashClient } from '@sigbash/sdk';
 import * as bitcoin from 'bitcoinjs-lib';
-import * as ecc from 'tiny-secp256k1';
-import {
-  base58CheckEncode,
-  deriveXpubChildPubkey,
-  deterministicKeypair,
-  SECP_ORDER,
-  sha256Hex,
-  tapLeafHash,
-  xpubRootXonly,
-} from '../../src/crypto.js';
-import { BITCOIN_NETWORK } from '../../src/network.js';
 import { psbtUnsignedTxid } from '../../src/psbt.js';
-import {
-  createPublishedRosterArtifact,
-  publishedRosterDigest,
-} from '../../src/roster-ceremony.js';
-import { asSats, type VaultEconomics } from '../../src/types.js';
-import {
-  participantLeaveRounds,
-  rosterEntry,
-  type RosterEntry,
-  type SigbashRosterRegistration,
-} from '../../src/vault.js';
+import type { SigbashRosterRegistration } from '../../src/vault.js';
 import type { SigbashCustodyKey } from '../lib/client/sigbash-custody.js';
 import {
   signAuthorizedSoloWithdrawal,
   unlockPublishedVault,
 } from '../lib/client/vault-signing.js';
+import {
+  createIsolatedSoloFixture,
+  signPolicyLeafPsbt,
+  SOLO_PARTICIPANTS,
+  SOLO_ROUND,
+} from './solo-signing-fixture.js';
 
-bitcoin.initEccLib(ecc);
-
-const IDS = ['alice', 'bob', 'carol'];
+const IDS = [...SOLO_PARTICIPANTS];
 const VAULT_ID = 'f1248f25-7d25-4774-9ad0-5ce5c87ddf5d';
-const ROUND = 'alicebobcarol';
-const ALICE_SECRET = participantSecret('alice');
-const fixture = liveRosterFixture();
-const economics = tinyEconomics();
-const artifact = createPublishedRosterArtifact(VAULT_ID, fixture.roster, economics);
-const digest = publishedRosterDigest(artifact);
+const ROUND = SOLO_ROUND;
+const fixture = createIsolatedSoloFixture(VAULT_ID);
+const { artifact, digest } = fixture;
 const unlocked = unlockPublishedVault({
   artifact,
   expectedDigest: digest,
-  participantSecret: ALICE_SECRET,
+  participantSecret: fixture.participantSecrets.alice,
 });
 const registration = artifact.participants.find((entry) => entry.id === 'alice')!
   .sigbashRegistrationByRound![ROUND]!;
@@ -160,7 +138,7 @@ function signerClient(options: {
   mutateTransaction?: boolean;
   onSign?: () => void;
 } = {}): SigbashClient {
-  const keyMaterial = fixture.policyKeys.get(`alice:${ROUND}`)!;
+  const privateKey = fixture.policyPrivateKeys.get(`alice:${ROUND}`)!;
   let verifiedPsbtBase64: string | undefined;
   return {
     async getKey(keyId: string) {
@@ -204,7 +182,7 @@ function signerClient(options: {
       assert.equal(input.network, 'mainnet');
       assert.equal(input.require2FA, false);
       assert.equal(input.finalizePsbt, true);
-      const signed = signPolicyLeafPsbt(input.psbtBase64, keyMaterial.childPrivateKey);
+      const signed = signPolicyLeafPsbt(input.psbtBase64, privateKey);
       let txHex = signed.txHex;
       if (options.mutateTransaction) {
         const transaction = bitcoin.Transaction.fromHex(txHex);
@@ -221,107 +199,6 @@ function signerClient(options: {
       };
     },
   } as unknown as SigbashClient;
-}
-
-function signPolicyLeafPsbt(
-  psbtBase64: string,
-  privateKey: Buffer,
-): { txHex: string; psbtBase64: string } {
-  const psbt = bitcoin.Psbt.fromBase64(psbtBase64, { network: BITCOIN_NETWORK });
-  const publicKey = Buffer.from(ecc.pointFromScalar(privateKey, true)!);
-  const xonly = publicKey.subarray(1);
-  const leaf = psbt.data.inputs[0]?.tapLeafScript?.find((item) =>
-    Buffer.from(item.script).toString('hex') === `20${xonly.toString('hex')}ac`,
-  );
-  if (!leaf) throw new Error('isolated signer could not find its policy leaf');
-  psbt.signTaprootInput(0, {
-    publicKey: xonly,
-    sign(): Buffer { throw new Error('isolated signer is Schnorr-only'); },
-    signSchnorr(hash: Buffer): Buffer {
-      return Buffer.from(ecc.signSchnorr(hash, privateKey));
-    },
-  });
-  assert.equal(psbt.validateSignaturesOfInput(0, (pubkey, hash, signature) =>
-    ecc.verifySchnorr(hash, pubkey, signature)), true);
-  psbt.finalizeTaprootInput(0, tapLeafHash(Buffer.from(leaf.script)));
-  return { txHex: psbt.extractTransaction().toHex(), psbtBase64: psbt.toBase64() };
-}
-
-function liveRosterFixture(): {
-  roster: RosterEntry[];
-  policyKeys: Map<string, { childPrivateKey: Buffer }>;
-} {
-  const policyKeys = new Map<string, { childPrivateKey: Buffer }>();
-  const roster = IDS.map((id) => {
-    const base = rosterEntry(id, participantSecret(id), IDS);
-    const registrations = Object.fromEntries(participantLeaveRounds(id, IDS).map((round) => {
-      const key = syntheticBip328Key(`${id}:${round}`);
-      policyKeys.set(`${id}:${round}`, { childPrivateKey: key.childPrivateKey });
-      return [round, {
-        network: 'mainnet',
-        keyId: String(participantLeaveRounds(id, IDS).indexOf(round)),
-        keyIndex: participantLeaveRounds(id, IDS).indexOf(round),
-        bip328Xpub: key.xpub,
-        policyLeafXonlyPubkey: key.policyLeafXonly,
-        identificationLeafXonlyPubkey: xpubRootXonly(key.xpub),
-        policyRoot: sha256Hex(`solo-client-policy-root:${id}:${round}`),
-        policyId: `${round}:${id}`,
-      } satisfies SigbashRosterRegistration];
-    }));
-    return {
-      ...base,
-      sigbashLeafByRound: Object.fromEntries(
-        Object.entries(registrations).map(([round, item]) => [round, item.policyLeafXonlyPubkey]),
-      ),
-      sigbashIdentificationLeafByRound: Object.fromEntries(
-        Object.entries(registrations).map(([round, item]) => [round, item.identificationLeafXonlyPubkey]),
-      ),
-      sigbashRegistrationByRound: registrations,
-    };
-  });
-  return { roster, policyKeys };
-}
-
-function syntheticBip328Key(label: string): {
-  xpub: string;
-  policyLeafXonly: string;
-  childPrivateKey: Buffer;
-} {
-  const root = deterministicKeypair('solo-signing-acceptance', `${label}:root`);
-  const rootPrivateKey = Buffer.from(root.privateKeyHex, 'hex');
-  const chainCode = Buffer.from(sha256Hex(`solo-signing-chain:${label}`), 'hex');
-  const xpub = base58CheckEncode(Buffer.concat([
-    Buffer.from('0488b21e', 'hex'),
-    Buffer.from([0]),
-    Buffer.alloc(4),
-    Buffer.alloc(4),
-    chainCode,
-    Buffer.from(root.publicKeyHex, 'hex'),
-  ]));
-  const first = derivePrivateChild(rootPrivateKey, chainCode, 0);
-  const second = derivePrivateChild(first.privateKey, first.chainCode, 0);
-  const policyLeafXonly = Buffer.from(ecc.pointFromScalar(second.privateKey, true)!).subarray(1).toString('hex');
-  assert.equal(deriveXpubChildPubkey(xpub, [0, 0]).xonlyPubKeyHex, policyLeafXonly);
-  return { xpub, policyLeafXonly, childPrivateKey: second.privateKey };
-}
-
-function derivePrivateChild(
-  privateKey: Buffer,
-  chainCode: Buffer,
-  index: number,
-): { privateKey: Buffer; chainCode: Buffer } {
-  const publicKey = Buffer.from(ecc.pointFromScalar(privateKey, true)!);
-  const serializedIndex = Buffer.alloc(4);
-  serializedIndex.writeUInt32BE(index);
-  const digest = createHmac('sha512', chainCode)
-    .update(Buffer.concat([publicKey, serializedIndex]))
-    .digest();
-  const tweak = digest.subarray(0, 32);
-  const tweakNumber = BigInt(`0x${tweak.toString('hex')}`);
-  if (tweakNumber === 0n || tweakNumber >= SECP_ORDER) throw new Error('invalid isolated BIP32 tweak');
-  const child = ecc.privateAdd(privateKey, tweak);
-  if (!child) throw new Error('invalid isolated BIP32 child');
-  return { privateKey: Buffer.from(child), chainCode: digest.subarray(32) };
 }
 
 function custodyKeyFor(item: SigbashRosterRegistration): SigbashCustodyKey {
@@ -342,23 +219,5 @@ function custodyKeyFor(item: SigbashRosterRegistration): SigbashCustodyKey {
       network: 'mainnet',
       createdAt: 1_786_000_000,
     },
-  };
-}
-
-function participantSecret(id: string): string {
-  return `participant-${id}-solo-signing-acceptance-secret-material`;
-}
-
-function tinyEconomics(): VaultEconomics {
-  return {
-    depositSatsPerParticipant: asSats(10_000),
-    firstWithdrawalSats: asSats(9_500),
-    secondWithdrawalSats: asSats(10_250),
-    soloFeeBudgetSats: asSats(2_000),
-    soloWithdrawalFeeSats: asSats(300),
-    cooperativeFeeSats: asSats(300),
-    recoveryFeeSats: asSats(500),
-    finalSweepFeeSats: asSats(300),
-    recoveryDelayBlocks: 12,
   };
 }

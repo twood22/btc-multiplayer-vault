@@ -205,8 +205,10 @@ test proves one-winner concurrent approval creation and submission claims,
 required passkey-consumed state, globally unique funding outpoints, one
 immutable funding approval and signature per seat, finalization/submission
 state consistency, unanimous restart audit preservation, auditable retry after
-failure, proposal-digest foreign-key binding, and atomic concurrent rate-limit
-counting/reset without raw subjects. It also proves one-winner watcher leasing
+failure, proposal-digest foreign-key binding, server-side solo reauthorization,
+owner-only finalization, tamper rejection without state change, finalization
+replay rejection, and atomic concurrent rate-limit counting/reset without raw
+subjects. It also proves one-winner watcher leasing
 and release after failure, an exact PostgreSQL schema-and-row restore copy,
 paired confirmation anchors,
 atomic funding and transition rollback, exact prior-coin restoration,

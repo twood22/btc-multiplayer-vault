@@ -165,17 +165,26 @@ record('the release surface exercises the optimized standalone browser product',
   assert.match(runner, /never live Sigbash, real-wallet, or funding evidence/u);
 });
 
-record('the production Sigbash solo-signing client has explicit isolated acceptance coverage', () => {
+record('the production Sigbash solo-signing and persistence boundaries have isolated acceptance coverage', () => {
   const packageJson = readFileSync(resolve(root, 'package.json'), 'utf8');
   const acceptance = readFileSync(
     resolve(root, 'web/tests/solo-signing-acceptance.ts'),
     'utf8',
   );
+  const databaseAcceptance = readFileSync(
+    resolve(root, 'web/tests/solo-finalization-db-acceptance.ts'),
+    'utf8',
+  );
   assert.match(packageJson, /tsx web\/tests\/solo-signing-acceptance\.ts/u);
+  assert.match(packageJson, /tsx web\/tests\/solo-finalization-db-acceptance\.ts/u);
   assert.match(acceptance, /signAuthorizedSoloWithdrawal/u);
   assert.match(acceptance, /externalSigbashContacted: false/u);
   assert.match(acceptance, /liveMainnetEvidence: false/u);
   assert.match(acceptance, /rejects a signer response that mutates the committed transaction/u);
+  assert.match(databaseAcceptance, /finalizeStoredSoloProposal/u);
+  assert.match(databaseAcceptance, /externalSigbashContacted: false/u);
+  assert.match(databaseAcceptance, /liveMainnetEvidence: false/u);
+  assert.match(databaseAcceptance, /cannot be replayed through the finalization boundary/u);
 });
 
 record('every required PostgreSQL product-state migration is present', () => {
