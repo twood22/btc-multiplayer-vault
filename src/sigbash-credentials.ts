@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import {
-  chmodSync,
   closeSync,
   constants as fsConstants,
+  fchmodSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -10,10 +11,12 @@ import {
 } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { getAuthHash } from '@sigbash/sdk';
+import { fsyncDirectory } from './operator-environment.js';
 
 export interface CreatedSigbashCredentialFile {
   credentialFile: string;
   fileMode: '0600';
+  durablySynced: true;
   apikeyHash: string;
   secretValuesPrinted: false;
 }
@@ -57,17 +60,23 @@ export async function createSigbashCredentialFile(
   try {
     descriptor = openSync(
       credentialFile,
-      fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY,
+      fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_WRONLY |
+        fsConstants.O_NOFOLLOW,
       0o600,
     );
     writeFileSync(descriptor, content, { encoding: 'utf8' });
+    fchmodSync(descriptor, 0o600);
+    fsyncSync(descriptor);
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
   }
-  chmodSync(credentialFile, 0o600);
+  fsyncDirectory(credentialParent);
   return {
     credentialFile,
     fileMode: '0600',
+    durablySynced: true,
     apikeyHash,
     secretValuesPrinted: false,
   };

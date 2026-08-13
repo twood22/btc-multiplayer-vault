@@ -25,6 +25,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -318,10 +319,21 @@ async function credentialFileChecks(): Promise<ContractCheck[]> {
       permissiveParentRejected = error instanceof Error &&
         error.message.includes('credential parent must not be accessible');
     }
+    const linkedCredentialFile = join(directory, 'linked-credentials.env');
+    const linkedTarget = join(directory, 'linked-target.env');
+    writeFileSync(linkedTarget, 'unchanged\n', { mode: 0o600 });
+    symlinkSync(linkedTarget, linkedCredentialFile);
+    let linkedPathRejected = false;
+    try {
+      await createSigbashCredentialFile(linkedCredentialFile);
+    } catch {
+      linkedPathRejected = true;
+    }
     return [
       check(
-        'credential bootstrap exclusively creates a triplet and vault seed as distinct 256-bit values with mode 0600',
+        'credential bootstrap durably creates a triplet and vault seed as distinct 256-bit values with mode 0600',
         (statSync(credentialFile).mode & 0o777) === 0o600 &&
+          created.durablySynced === true &&
           secrets.every((value) => /^[0-9a-f]{64}$/u.test(value ?? '')) &&
           new Set(secrets).size === 4,
       ),
@@ -335,8 +347,9 @@ async function credentialFileChecks(): Promise<ContractCheck[]> {
         overwriteRejected && contentAfter === contentBefore && exampleRejected,
       ),
       check(
-        'credential bootstrap rejects an unsafe parent before creating a file',
-        permissiveParentRejected && !existsSync(unsafeCredentialFile),
+        'credential bootstrap rejects an unsafe parent and linked final path before creating a file',
+        permissiveParentRejected && !existsSync(unsafeCredentialFile) &&
+          linkedPathRejected && readFileSync(linkedTarget, 'utf8') === 'unchanged\n',
       ),
     ];
   } finally {

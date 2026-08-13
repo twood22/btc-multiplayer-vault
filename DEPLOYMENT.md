@@ -142,8 +142,10 @@ rejected by the release report.
    owner-only `live-run/predeployment-recovery-kits.jsonl`. On retry it lists
    the live organization keys and resumes only one whose mainnet network and
    canonical immutable policy match; ambiguity, a conflicting kit, or a public
-   checkpoint without its protected kit aborts the run. Back up the recovery
-   journal separately with owner-only `live-run/proof-credentials.env`. The
+   checkpoint without its protected kit aborts the run. The bootstrap refuses
+   linked or existing credential targets and durably syncs its owner-only file
+   and directory before reporting success. Back up the recovery journal
+   separately with owner-only `live-run/proof-credentials.env`. The
    derived non-secret key configuration is written to
    `live-run/predeployment.env`; the proof command loads the credential and
    configuration files automatically, never the recovery journal. The whole

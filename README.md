@@ -302,9 +302,10 @@ input scriptPubKey, so you only pass `--participant`.
    This exclusively creates `live-run/proof-credentials.env` inside an
    owner-only directory, including a fresh proof vault seed and the reviewed
    Sigbash runtime pins, and prints only its non-secret `apikeyHash`. It refuses
-   to overwrite an existing file. `live-run` is excluded from both Git and the
-   container build context. Back up that credential file before asking Sigbash
-   to enable the hash for mainnet.
+   to follow a linked target or overwrite an existing file, and durably syncs
+   the owner-only file and directory before reporting success. `live-run` is
+   excluded from both Git and the container build context. Back up that
+   credential file before asking Sigbash to enable the hash for mainnet.
 
    Every CLI command loads its selected protected environment before importing
    vault configuration and refuses linked or group/other-readable files or a
