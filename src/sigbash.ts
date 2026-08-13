@@ -28,6 +28,29 @@ export interface PoetPolicy {
   policy?: { operator?: string; children?: unknown[] };
 }
 
+export interface SigbashKeyListItem {
+  keyId: string;
+  network: string;
+  policyRoot: string;
+  require2FA: boolean;
+  createdAt: string | null;
+  bip328Xpub: string;
+  poetJSON: object;
+}
+
+export interface SigbashRecoveryKit {
+  version: 'sdk-recovery-v1';
+  keyId: string;
+  recoveryKEK: string;
+  cekCiphertext: string;
+  cekNonce: string;
+  network: string;
+  createdAt: number;
+  apiKey?: string;
+  userKey?: string;
+  popSeed?: string;
+}
+
 export interface SigbashLiveClient {
   createKey(options: {
     policy: PoetPolicy;
@@ -44,6 +67,11 @@ export interface SigbashLiveClient {
     aggregatePubKeyHex?: string;
     p2trAddress?: string;
   }>;
+  listKeys(): Promise<SigbashKeyListItem[]>;
+  exportRecoveryKit(
+    keyId: string,
+    opts?: { keyIndex?: number },
+  ): Promise<SigbashRecoveryKit>;
   getKey(keyId: string, opts?: { verbose?: boolean; keyIndex?: number }): Promise<{ kmcJSON: string }>;
   verifyPSBT(options: {
     psbtBase64: string;

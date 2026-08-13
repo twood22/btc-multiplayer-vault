@@ -9,6 +9,8 @@
  * at signing time.
  */
 import type {
+  KeyListItem,
+  SigbashClient,
   SigbashClientOptions,
   SignPSBTResult,
   VerifyPSBTResult,
@@ -22,18 +24,38 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSigbashCredentialFile } from './sigbash-credentials.js';
+import {
+  appendSigbashRecoveryRecord,
+  findMatchingSigbashKey,
+  readSigbashRecoveryJournal,
+} from './sigbash-recovery-journal.js';
 import {
   normalizeSigbashSigningResult,
   resolveSigbashCredentials,
   sigbashVerificationExplicitlyRejected,
   sigbashVerificationPassed,
   validateWasmSha384,
+  type SigbashKeyListItem,
+  type SigbashRecoveryKit,
   type SigbashVerifyResult,
 } from './sigbash.js';
+
+type SdkRecoveryKitContract = Awaited<ReturnType<SigbashClient['exportRecoveryKit']>>;
+type SdkKeyListContract = Awaited<ReturnType<SigbashClient['listKeys']>>;
+
+// Compile-time compatibility checks for the dynamically imported SDK surface.
+function sdkRecoveryKitToLocal(kit: SdkRecoveryKitContract): SigbashRecoveryKit {
+  return kit;
+}
+
+function sdkKeyListToLocal(keys: SdkKeyListContract): SigbashKeyListItem[] {
+  return keys;
+}
 
 export interface ContractCheck {
   name: string;
@@ -80,9 +102,134 @@ export async function runSigbashOfflineChecks(): Promise<{
     ...signingNormalizationChecks(),
     ...credentialChecks(),
     ...(await credentialFileChecks()),
+    ...recoveryJournalChecks(),
     ...wasmHashChecks(),
   ];
   return { passed: checks.every((item) => item.ok), checks };
+}
+
+function recoveryJournalChecks(): ContractCheck[] {
+  const directory = mkdtempSync(join(tmpdir(), 'btc-vault-sigbash-recovery-'));
+  const journalPath = join(directory, 'recovery-kits.jsonl');
+  const recoveryKEK = '11'.repeat(32);
+  const kit = {
+    version: 'sdk-recovery-v1' as const,
+    keyId: '7',
+    recoveryKEK,
+    cekCiphertext: '22'.repeat(48),
+    cekNonce: '33'.repeat(12),
+    network: 'mainnet',
+    createdAt: 1_786_000_000,
+    apiKey: '44'.repeat(32),
+    userKey: '55'.repeat(32),
+    popSeed: '66'.repeat(32),
+  } satisfies SdkRecoveryKitContract;
+  const input = {
+    participantId: 'alice',
+    round: 'alicebob',
+    keyId: '7',
+    keyIndex: 7,
+    network: 'mainnet',
+    recoveryKit: kit,
+  };
+  try {
+    const created = appendSigbashRecoveryRecord(journalPath, input);
+    const contentBefore = readFileSync(journalPath, 'utf8');
+    const reused = appendSigbashRecoveryRecord(journalPath, input);
+    const contentAfterReuse = readFileSync(journalPath, 'utf8');
+    let conflictRejected = false;
+    try {
+      appendSigbashRecoveryRecord(journalPath, {
+        ...input,
+        recoveryKit: { ...kit, recoveryKEK: '77'.repeat(32) },
+      });
+    } catch (error) {
+      conflictRejected = error instanceof Error && error.message.includes('conflicting entry');
+    }
+
+    const invalidNetworkPath = join(directory, 'invalid-network.jsonl');
+    let invalidNetworkRejected = false;
+    try {
+      appendSigbashRecoveryRecord(invalidNetworkPath, {
+        ...input,
+        network: 'signet',
+        recoveryKit: { ...kit, network: 'signet' },
+      });
+    } catch (error) {
+      invalidNetworkRejected = error instanceof Error && error.message.includes('not mainnet');
+    }
+
+    const invalidRoundPath = join(directory, 'invalid-round.jsonl');
+    let noncanonicalRoundRejected = false;
+    try {
+      appendSigbashRecoveryRecord(invalidRoundPath, { ...input, round: 'alice,bob' });
+    } catch (error) {
+      noncanonicalRoundRejected = error instanceof Error && error.message.includes('canonical product round id');
+    }
+
+    const permissiveParent = join(directory, 'permissive');
+    mkdirSync(permissiveParent, { mode: 0o700 });
+    chmodSync(permissiveParent, 0o750);
+    const permissivePath = join(permissiveParent, 'journal.jsonl');
+    let permissiveRejected = false;
+    try {
+      appendSigbashRecoveryRecord(permissivePath, input);
+    } catch (error) {
+      permissiveRejected = error instanceof Error && error.message.includes('parent must not be accessible');
+    }
+
+    const symlinkPath = join(directory, 'recovery-link.jsonl');
+    symlinkSync(journalPath, symlinkPath);
+    let symlinkRejected = false;
+    try {
+      appendSigbashRecoveryRecord(symlinkPath, input);
+    } catch (error) {
+      symlinkRejected = error instanceof Error && error.message.includes('regular file, not a link');
+    }
+
+    const poetPolicy = { version: '1', policy: { operator: 'AND', children: [{ b: 2, a: 1 }] } };
+    const listed = [{
+      keyId: '7',
+      network: 'mainnet',
+      policyRoot: 'aa'.repeat(32),
+      require2FA: false,
+      createdAt: null,
+      bip328Xpub: 'synthetic-xpub',
+      poetJSON: { policy: { children: [{ a: 1, b: 2 }], operator: 'AND' }, version: '1' },
+    }] satisfies KeyListItem[];
+    const match = findMatchingSigbashKey(listed, poetPolicy, 'mainnet');
+    let ambiguityRejected = false;
+    try {
+      findMatchingSigbashKey([...listed, { ...listed[0]!, keyId: '8' }], poetPolicy, 'mainnet');
+    } catch (error) {
+      ambiguityRejected = error instanceof Error && error.message.includes('ambiguous resume');
+    }
+
+    return [
+      check(
+        'recovery journal exclusively creates a validated mainnet kit with mode 0600',
+        created.reused === false && (statSync(journalPath).mode & 0o777) === 0o600 &&
+          readSigbashRecoveryJournal(journalPath).length === 1,
+      ),
+      check(
+        'recovery journal exact retry is idempotent and returns no recovery secret',
+        reused.reused === true && contentAfterReuse === contentBefore &&
+          !JSON.stringify(created).includes(recoveryKEK) && !JSON.stringify(reused).includes(recoveryKEK),
+      ),
+      check(
+        'recovery journal refuses conflicts, non-mainnet kits, unsafe parents, and symlinks without mutation',
+        conflictRejected && invalidNetworkRejected && noncanonicalRoundRejected &&
+          permissiveRejected && symlinkRejected &&
+          readFileSync(journalPath, 'utf8') === contentBefore && !existsSync(permissivePath),
+      ),
+      check(
+        'live key resume matches canonical policy JSON and refuses multiple matches',
+        match?.keyId === '7' && match.keyIndex === 7 && ambiguityRejected,
+      ),
+    ];
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 async function credentialFileChecks(): Promise<ContractCheck[]> {
@@ -166,6 +313,10 @@ function sdkContractChecks(sdk: typeof import('@sigbash/sdk')): ContractCheck[] 
       clientOptionKeys: Object.keys(CONTRACT_CLIENT_OPTIONS),
       wasmOptionKeys: Object.keys(CONTRACT_WASM_OPTIONS),
     }),
+    check(
+      'listKeys and exportRecoveryKit results typecheck against the local live-client boundary',
+      typeof sdkRecoveryKitToLocal === 'function' && typeof sdkKeyListToLocal === 'function',
+    ),
   ];
 }
 

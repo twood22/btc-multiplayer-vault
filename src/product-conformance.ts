@@ -86,6 +86,23 @@ record('the private funding command is bound to protected live-proof and funding
   assert.match(source, /submitPasskeyApprovedFunding/u);
 });
 
+record('live Sigbash setup stores a protected recovery kit before its public checkpoint', () => {
+  const source = readFileSync(resolve(root, 'src/cli-main.ts'), 'utf8');
+  const sdkSurface = readFileSync(resolve(root, 'src/sigbash.ts'), 'utf8');
+  const journal = readFileSync(resolve(root, 'src/sigbash-recovery-journal.ts'), 'utf8');
+  const exportAt = source.indexOf('const recoveryKit = await client.exportRecoveryKit');
+  const recoveryAt = source.indexOf('appendSigbashRecoveryRecord(recoveryJournalPath');
+  const checkpointAt = source.indexOf('appendProtectedFile(checkpointPath');
+  assert.match(sdkSurface, /listKeys\(\)/u);
+  assert.match(sdkSurface, /exportRecoveryKit/u);
+  assert.match(source, /findMatchingSigbashKey\(listed, poetPolicy, NETWORK\)/u);
+  assert.match(source, /has no matching protected recovery kit/u);
+  assert.equal(exportAt >= 0 && recoveryAt > exportAt && checkpointAt > recoveryAt, true);
+  assert.match(journal, /O_NOFOLLOW/u);
+  assert.match(journal, /fsyncSync/u);
+  assert.match(journal, /input\.network !== 'mainnet'/u);
+});
+
 record('the funding release requires executable production database restore evidence', () => {
   const packageJson = readFileSync(resolve(root, 'package.json'), 'utf8');
   const verifier = readFileSync(resolve(root, 'web/scripts/verify-database-restore.ts'), 'utf8');

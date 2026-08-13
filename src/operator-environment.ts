@@ -80,7 +80,51 @@ export function writeProtectedFile(
     if (descriptor !== undefined) closeSync(descriptor);
   }
   chmodSync(environmentPath, 0o600);
+  fsyncDirectory(parent);
   return { path: environmentPath, reused: false };
+}
+
+export function appendProtectedFile(rawPath: string, content: string): { path: string } {
+  const protectedPath = resolve(rawPath);
+  const parent = dirname(protectedPath);
+  mkdirSync(parent, { recursive: true, mode: 0o700 });
+  const parentStat = lstatSync(parent);
+  if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
+    throw new Error('protected file parent must be a real directory, not a link');
+  }
+  if ((parentStat.mode & 0o077) !== 0) {
+    throw new Error('protected file parent must not be accessible by group or other users');
+  }
+  if (existsSync(protectedPath)) assertProtectedRegularFile(protectedPath, 'protected file');
+
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(
+      protectedPath,
+      fsConstants.O_APPEND |
+        fsConstants.O_CREAT |
+        fsConstants.O_WRONLY |
+        fsConstants.O_NOFOLLOW,
+      0o600,
+    );
+    writeFileSync(descriptor, content, { encoding: 'utf8' });
+    fsyncSync(descriptor);
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+  chmodSync(protectedPath, 0o600);
+  fsyncDirectory(parent);
+  return { path: protectedPath };
+}
+
+export function fsyncDirectory(path: string): void {
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(path, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY);
+    fsyncSync(descriptor);
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
 }
 
 export function assertProtectedRegularFile(path: string, label: string): void {

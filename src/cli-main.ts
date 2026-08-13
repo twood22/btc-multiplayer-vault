@@ -1,7 +1,5 @@
 // Loaded by cli.ts only after the protected operator environment is present.
 import {
-  appendFileSync,
-  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -10,8 +8,18 @@ import {
 import { dirname } from 'node:path';
 import { assertReviewedNodeRuntime } from './runtime-version.js';
 import { createSigbashCredentialFile } from './sigbash-credentials.js';
-import { writeProtectedEnvironmentFile, writeProtectedFile } from './operator-environment.js';
+import {
+  appendProtectedFile,
+  writeProtectedEnvironmentFile,
+  writeProtectedFile,
+} from './operator-environment.js';
 import { createLiveSigbashProofReceipt, type LiveSigbashProofReceipt } from './live-proof-receipt.js';
+import {
+  appendSigbashRecoveryRecord,
+  findMatchingSigbashKey,
+  findRecoveryRecord,
+  readSigbashRecoveryJournal,
+} from './sigbash-recovery-journal.js';
 import {
   AMOUNTS,
   DEFAULT_DEMO_SEED,
@@ -3312,11 +3320,56 @@ async function sdkPolicyCheck() {
 // no credentials, no WASM loading — safe to run inside `npm test`.
 async function sigbashSdkContract() {
   const { passed, checks } = await runSigbashOfflineChecks();
-  printResult('sigbash sdk contract (offline)', { checks, passed });
+  const unknownResponseResume = await unknownCreateResponseResumeCheck();
+  checks.push(unknownResponseResume);
+  const allPassed = passed && unknownResponseResume.ok;
+  printResult('sigbash sdk contract (offline)', { checks, passed: allPassed });
   assert(
-    passed,
+    allPassed,
     `sigbash sdk contract checks failed: ${JSON.stringify(checks.filter((item) => !item.ok))}`,
   );
+}
+
+async function unknownCreateResponseResumeCheck(): Promise<{
+  name: string;
+  ok: boolean;
+  details?: unknown;
+}> {
+  const policy = {
+    version: '1.1',
+    policy: { operator: 'AND', children: [{ type: 'condition', value: 1 }] },
+  };
+  let createCalls = 0;
+  let listCalls = 0;
+  const client = {
+    async createKey() {
+      createCalls += 1;
+      throw new Error('request timed out after the server committed');
+    },
+    async listKeys() {
+      listCalls += 1;
+      return [{
+        keyId: '3',
+        network: NETWORK,
+        policyRoot: 'aa'.repeat(32),
+        require2FA: false,
+        createdAt: null,
+        bip328Xpub: 'synthetic-contract-xpub',
+        poetJSON: policy,
+      }];
+    },
+  } as unknown as SigbashLiveClient;
+  const result = await createKeyWithAutoIndex(client, {
+    policy,
+    network: NETWORK,
+    require2FA: false,
+    verbose: true,
+  });
+  return {
+    name: 'an unknown create response resumes the committed policy key without creating another',
+    ok: createCalls === 1 && listCalls === 1 && result.keyId === '3' && result.keyIndex === 3,
+    details: { createCalls, listCalls, resumedKeyId: result.keyId },
+  };
 }
 
 interface LiveKeyRegistration {
@@ -3438,6 +3491,9 @@ async function sigbashLiveSetup() {
   const checkpointPath = process.env.SIGBASH_SETUP_CHECKPOINT || (proofRound
     ? 'live-run/predeployment-setup-checkpoint.jsonl'
     : 'live-run/setup-checkpoint.jsonl');
+  const recoveryJournalPath = process.env.SIGBASH_RECOVERY_JOURNAL || (proofRound
+    ? 'live-run/predeployment-recovery-kits.jsonl'
+    : 'live-run/recovery-kits.jsonl');
   const checkpointParent = dirname(checkpointPath);
   mkdirSync(checkpointParent, { recursive: true, mode: 0o700 });
   const checkpointParentStat = lstatSync(checkpointParent);
@@ -3454,6 +3510,15 @@ async function sigbashLiveSetup() {
   }
   const registrations: LiveKeyRegistration[] = [];
   const doneKeys = new Set<string>();
+  const recoveryRecords = readSigbashRecoveryJournal(recoveryJournalPath);
+  if (proofRound) {
+    assert(
+      recoveryRecords.every((record) =>
+        record.round === proofRound && proofRoundIds!.includes(record.participantId),
+      ),
+      'predeployment recovery journal contains a key outside the selected pair round',
+    );
+  }
   if (existsSync(checkpointPath)) {
     for (const line of readFileSync(checkpointPath, 'utf8').split('\n')) {
       if (!line.trim()) continue;
@@ -3463,8 +3528,21 @@ async function sigbashLiveSetup() {
       )) {
         throw new Error('predeployment checkpoint contains a key outside the selected pair round');
       }
+      const registrationIdentity = `${registration.participantId}:${registration.round}`;
+      assert(!doneKeys.has(registrationIdentity),
+        `duplicate setup checkpoint entry for ${registrationIdentity}`);
+      const recoveryRecord = findRecoveryRecord(
+        recoveryRecords,
+        registration.participantId,
+        registration.round,
+      );
+      assert(
+        recoveryRecord?.keyId === registration.keyId &&
+          recoveryRecord.keyIndex === registration.keyIndex,
+        `setup checkpoint ${registration.participantId}:${registration.round} has no matching protected recovery kit`,
+      );
       registrations.push(registration);
-      doneKeys.add(`${registration.participantId}:${registration.round}`);
+      doneKeys.add(registrationIdentity);
       leafOverrides[registration.participantId]![registration.round] =
         checkpointRegistrationToOverride(registration);
     }
@@ -3481,47 +3559,75 @@ async function sigbashLiveSetup() {
       participantId,
       musig2PrivateKey: sigbashRoundKey(participant, round).privateKeyHex,
     });
-    const created = await createKeyWithAutoIndex(client, {
-      policy: toPoetPolicy(sdk, policy),
-      network: NETWORK,
-      require2FA: false,
-      verbose: true,
-    });
-    assert(created.bip328Xpub, `Sigbash did not return bip328Xpub for ${participantId}:${round}`);
-    // Dual-leaf structure, live-verified (see REVIEW.md "Input identification
-    // — solved"): the xpub child 0/0 is the policy-spend leaf key that
-    // satisfies the descriptor-mode REQKEY clause; the xpub's internal root
-    // is the identification leaf key that satisfies input identification.
-    // Both are persisted as separate canonical checkpoint fields.
-    const policyLeafXonlyPubkey = deriveXpubChildPubkey(created.bip328Xpub, [0, 0]).xonlyPubKeyHex;
-    const identificationLeafXonlyPubkey = xpubRootXonly(created.bip328Xpub);
-    const registration: LiveKeyRegistration = {
-      participantId,
-      round,
-      keyId: created.keyId,
-      keyIndex: created.keyIndex,
-      keyIdEnvName: sigbashKeyIdEnvName(participantId, round),
-      bip328Xpub: created.bip328Xpub,
-      policyLeafXonlyPubkey,
-      identificationLeafXonlyPubkey,
-      helperP2trAddressDoNotFund: created.p2trAddress,
-      policyRoot: created.policyRoot,
-      policyId: policy.id,
-    };
-    leafOverrides[participantId]![round] = checkpointRegistrationToOverride(registration);
-    registrations.push(registration);
-    doneKeys.add(`${participantId}:${round}`);
-    appendFileSync(checkpointPath, `${JSON.stringify(registration)}\n`, {
-      encoding: 'utf8',
-      flag: 'a',
-      mode: 0o600,
-    });
-    chmodSync(checkpointPath, 0o600);
-    console.error(
-      `  registered ${participantId}:${round} as keyId ${created.keyId} ` +
-      `(${doneKeys.size}/${proofRound ? 2 : 9})`,
-    );
-    client.disconnect?.();
+    try {
+      const poetPolicy = toPoetPolicy(sdk, policy);
+      const listed = await client.listKeys();
+      const matching = findMatchingSigbashKey(listed, poetPolicy, NETWORK);
+      const priorRecovery = findRecoveryRecord(recoveryRecords, participantId, round);
+      if (priorRecovery && matching?.keyId !== priorRecovery.keyId) {
+        throw new Error(
+          `protected recovery kit for ${participantId}:${round} does not match the live immutable policy key`,
+        );
+      }
+      const created = matching ?? await createKeyWithAutoIndex(client, {
+        policy: poetPolicy,
+        network: NETWORK,
+        require2FA: false,
+        verbose: true,
+      });
+      assert(created.bip328Xpub, `Sigbash did not return bip328Xpub for ${participantId}:${round}`);
+
+      if (!priorRecovery) {
+        const recoveryKit = await client.exportRecoveryKit(created.keyId, {
+          keyIndex: created.keyIndex,
+        });
+        const recoveryArtifact = appendSigbashRecoveryRecord(recoveryJournalPath, {
+          participantId,
+          round,
+          keyId: created.keyId,
+          keyIndex: created.keyIndex,
+          network: NETWORK,
+          recoveryKit,
+        });
+        recoveryRecords.push(...readSigbashRecoveryJournal(recoveryJournalPath).filter((record) =>
+          record.participantId === participantId && record.round === round,
+        ));
+        console.error(
+          `  protected recovery kit ${recoveryArtifact.reused ? 'reused' : 'stored'} for ${participantId}:${round}`,
+        );
+      }
+
+      // Dual-leaf structure, live-verified (see REVIEW.md "Input identification
+      // — solved"): the xpub child 0/0 is the policy-spend leaf key that
+      // satisfies the descriptor-mode REQKEY clause; the xpub's internal root
+      // is the identification leaf key that satisfies input identification.
+      // Both are persisted as separate canonical checkpoint fields.
+      const policyLeafXonlyPubkey = deriveXpubChildPubkey(created.bip328Xpub, [0, 0]).xonlyPubKeyHex;
+      const identificationLeafXonlyPubkey = xpubRootXonly(created.bip328Xpub);
+      const registration: LiveKeyRegistration = {
+        participantId,
+        round,
+        keyId: created.keyId,
+        keyIndex: created.keyIndex,
+        keyIdEnvName: sigbashKeyIdEnvName(participantId, round),
+        bip328Xpub: created.bip328Xpub,
+        policyLeafXonlyPubkey,
+        identificationLeafXonlyPubkey,
+        helperP2trAddressDoNotFund: 'p2trAddress' in created ? created.p2trAddress : undefined,
+        policyRoot: created.policyRoot,
+        policyId: policy.id,
+      };
+      leafOverrides[participantId]![round] = checkpointRegistrationToOverride(registration);
+      registrations.push(registration);
+      doneKeys.add(`${participantId}:${round}`);
+      appendProtectedFile(checkpointPath, `${JSON.stringify(registration)}\n`);
+      console.error(
+        `  registered ${participantId}:${round} as keyId ${created.keyId} ` +
+        `(${doneKeys.size}/${proofRound ? 2 : 9})${matching ? ' (resumed live key)' : ''}`,
+      );
+    } finally {
+      client.disconnect?.();
+    }
   };
 
   if (proofRound && proofRoundIds) {
@@ -3554,6 +3660,12 @@ async function sigbashLiveSetup() {
       round: proofRound,
       participants: proofRoundIds,
       registrations: proofRegistrations,
+      recoveryJournal: {
+        path: recoveryJournalPath,
+        records: proofRegistrations.length,
+        containsSecrets: true,
+        printed: false,
+      },
       proofEnvironment,
       envExports,
       vault: {
@@ -3650,6 +3762,15 @@ async function createKeyWithAutoIndex(
     try {
       return await client.createKey({ ...options, keyIndex });
     } catch (error) {
+      // A timed-out create may still have committed remotely. Re-list before
+      // advancing or retrying so an unknown response can never strand one
+      // immutable key and silently create another for the same policy.
+      const committed = findMatchingSigbashKey(
+        await client.listKeys(),
+        options.policy,
+        options.network,
+      );
+      if (committed) return committed;
       const nextIndex = (error as { nextAvailableIndex?: number })?.nextAvailableIndex;
       if (nextIndex !== undefined) {
         keyIndex = nextIndex;

@@ -111,12 +111,18 @@ rejected by the release report.
 
    Setup creates only the two immutable mainnet keys needed for one real
    pair-round vault, rather than creating all nine product keys before the
-   product participants exist. It is resumable, journals each remote key, and
-   keeps the credential triplet in owner-only
-   `live-run/proof-credentials.env` while writing the derived non-secret key
-   configuration to `live-run/predeployment.env`; the proof command loads both
-   automatically. The whole `live-run` directory is excluded from Git and the
-   container build context. Its address must never be funded. The proof command
+   product participants exist. Before publishing a non-secret setup checkpoint,
+   it immediately exports each key's private-key-equivalent recovery kit to
+   owner-only `live-run/predeployment-recovery-kits.jsonl`. On retry it lists
+   the live organization keys and resumes only one whose mainnet network and
+   canonical immutable policy match; ambiguity, a conflicting kit, or a public
+   checkpoint without its protected kit aborts the run. Back up the recovery
+   journal separately with owner-only `live-run/proof-credentials.env`. The
+   derived non-secret key configuration is written to
+   `live-run/predeployment.env`; the proof command loads the credential and
+   configuration files automatically, never the recovery journal. The whole
+   `live-run` directory is excluded from Git and the container build context.
+   Its address must never be funded. The proof command
    must end with `passed: true`, a non-null consensus authorization, and a new
    owner-only `live-run/predeployment-proof-receipt.json`. Independently review
    its public evidence and `proofDigest`. The current external service result

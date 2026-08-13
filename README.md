@@ -328,13 +328,23 @@ input scriptPubKey, so you only pass `--participant`.
    then creates the three round-one keys with those addresses pinned, and
    prints `envExports`: a `SIGBASH_LEAF_KEYS_JSON` value plus one
    `SIGBASH_KEY_ID_<PARTICIPANT>_<ROUND>` per key. Export all of them before
-   running any other command. Never fund a printed helper `p2trAddress`.
+   running any other command. Before a created or crash-resumed key is added
+   to the non-secret setup checkpoint, the command immediately exports its
+   recovery kit to owner-only `live-run/recovery-kits.jsonl`. It refuses to
+   resume a checkpoint without the matching kit. This journal contains
+   private-key-equivalent recovery material: never print it, copy it into an
+   environment variable, or commit it. Back it up separately with the
+   credential file. Never fund a printed helper `p2trAddress`.
 
    The smaller deployment gate uses `live-predeployment-setup`. It creates
    only one real pair's two keys and writes their non-secret derived
    configuration to owner-only `live-run/predeployment.env`; the corresponding
    `live-predeployment-proof` package command loads it together with the
-   separately protected credential file automatically. Never fund the proof
+   separately protected credential file automatically. Each key's recovery
+   kit is durably written first to owner-only
+   `live-run/predeployment-recovery-kits.jsonl`; a retry lists the live keys
+   and resumes only the single key whose mainnet network and canonical policy
+   match. Back up both secret files before continuing. Never fund the proof
    address. A successful real signing run exclusively writes an owner-only
    `live-run/predeployment-proof-receipt.json`; review its consensus evidence
    and bind its `proofDigest` into the later funding release environment.

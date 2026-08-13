@@ -13,7 +13,11 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
-import { writeProtectedEnvironmentFile, writeProtectedFile } from './operator-environment.js';
+import {
+  appendProtectedFile,
+  writeProtectedEnvironmentFile,
+  writeProtectedFile,
+} from './operator-environment.js';
 import {
   createLiveSigbashProofReceipt,
   readProtectedLiveSigbashProofReceipt,
@@ -84,6 +88,19 @@ try {
   assert.match(withProof.stdout, /"relativeBlocks": 321/u);
   checks.push({
     name: 'the proof environment is owner-only, exact-content resumable, and loaded before configuration',
+    ok: true,
+  });
+
+  const checkpointPath = join(proofDirectory, 'checkpoint.jsonl');
+  appendProtectedFile(checkpointPath, '{"keyId":"0"}\n');
+  appendProtectedFile(checkpointPath, '{"keyId":"1"}\n');
+  assert.equal(lstatSync(checkpointPath).mode & 0o777, 0o600);
+  assert.equal(readFileSync(checkpointPath, 'utf8'), '{"keyId":"0"}\n{"keyId":"1"}\n');
+  const checkpointLink = join(proofDirectory, 'checkpoint-link.jsonl');
+  symlinkSync(checkpointPath, checkpointLink);
+  assert.throws(() => appendProtectedFile(checkpointLink, '{}\n'), /regular file, not a link/u);
+  checks.push({
+    name: 'protected checkpoints append durably and refuse symlink targets',
     ok: true,
   });
 
