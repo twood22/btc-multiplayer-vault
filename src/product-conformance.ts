@@ -165,6 +165,19 @@ record('the release surface exercises the optimized standalone browser product',
   assert.match(runner, /never live Sigbash, real-wallet, or funding evidence/u);
 });
 
+record('the production Sigbash solo-signing client has explicit isolated acceptance coverage', () => {
+  const packageJson = readFileSync(resolve(root, 'package.json'), 'utf8');
+  const acceptance = readFileSync(
+    resolve(root, 'web/tests/solo-signing-acceptance.ts'),
+    'utf8',
+  );
+  assert.match(packageJson, /tsx web\/tests\/solo-signing-acceptance\.ts/u);
+  assert.match(acceptance, /signAuthorizedSoloWithdrawal/u);
+  assert.match(acceptance, /externalSigbashContacted: false/u);
+  assert.match(acceptance, /liveMainnetEvidence: false/u);
+  assert.match(acceptance, /rejects a signer response that mutates the committed transaction/u);
+});
+
 record('every required PostgreSQL product-state migration is present', () => {
   const actual = readdirSync(resolve(root, 'db/migrations'))
     .filter((name) => name.endsWith('.sql'))

@@ -188,6 +188,10 @@ participant identity, passkey-shared Sigbash custody, SDK-exact credential
 hashes, corrupt-revision rollback, recovery-kit/key binding, PRF-output
 stripping, exact public key and BYO Sigbash-share compatibility,
 offline-roster rejection, xpub/leaf binding, deterministic roster digests,
+the production solo-signing client's key/policy binding, explicit Sigbash
+verification gate, real Schnorr/Taproot finalization, locally authorized
+transaction response, and signer-mutation rejection using an isolated
+service-shaped signer,
 proposal replay resistance, exact confirmed-state advancement, fresh recovery
 observations, no funding address or output-script disclosure before unanimity,
 database-enforced one-time broadcast approvals, passkey-bound registration of
@@ -213,7 +217,9 @@ replacement re-inclusion, and a controlled transport failure;
 that is not a substitute for the selected production database and a complete
 real-authenticator/backend run.
 
-The Playwright suite runs the HTTP and PostgreSQL paths in Chromium. It covers
+That isolated solo-signing acceptance does not contact Sigbash and is not live
+mainnet evidence. The Playwright suite runs the HTTP and PostgreSQL paths in
+Chromium. It covers
 the inert pre-hydration surface, independent primary and recovery PRF passkeys,
 and three-browser runtime ceremonies with six encrypted passkey envelopes. The
 cooperative ceremony survives a reload between nonce and partial rounds,
@@ -297,9 +303,11 @@ deployed, the following gates remain mandatory before funding:
 6. Expand the seeded database and virtual-authenticator browser acceptance
    beyond the now-covered unanimous roster, cooperative MuSig2, distributed
    recovery, owner-only final sweep, and three-wallet funding lifecycle to the
-   live-Sigbash solo surface without presenting local fixtures as external
-   evidence; retain rate-limit, secret-free audit, backup/restore, and
-   operational drills.
+   complete solo ceremony in the browser against live Sigbash. The isolated
+   `web:test` now covers the production solo-signing client boundary and its
+   transaction authorization, but not the complete browser UI or external
+   mainnet service. Never present those local fixtures as external evidence;
+   retain rate-limit, secret-free audit, backup/restore, and operational drills.
 7. Exercise the implemented passkey-approved broadcast and private chain
    watcher against the selected production Bitcoin backend. Verify rejection,
    duplicate submission, interrupted submission, mempool, confirmation, and
