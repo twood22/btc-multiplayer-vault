@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { getBlockStatus, getRawTransaction } from '../../src/bitcoin-rpc.js';
+import { BitcoinTransactionNotFoundError } from '../../src/bitcoin-backend-errors.js';
+import { getBlockStatus, getBlockchainInfo, getRawTransaction } from '../../src/bitcoin-rpc.js';
 
 const originalFetch = globalThis.fetch;
 const previous = {
@@ -24,7 +25,9 @@ try {
     const request = JSON.parse(String(init?.body)) as { method: string; params: unknown[] };
     methods.push(request.method);
     const result = request.method === 'getblockchaininfo'
-      ? { chain: 'main', blocks: 900_002, headers: 900_002 }
+      ? { chain: 'main', blocks: 900_002, headers: 900_002, pruned: false, initialblockdownload: false }
+      : request.method === 'getindexinfo'
+        ? { txindex: { synced: true, best_block_height: 900_002 } }
       : request.method === 'getrawtransaction'
         ? {
             txid: '11'.repeat(32),
@@ -56,13 +59,101 @@ try {
   });
   assert.equal(orphaned.inBestChain, false);
   assert.equal(orphaned.confirmations, -1);
-  assert.deepEqual(methods, [
-    'getblockchaininfo',
-    'getrawtransaction',
-    'getblockheader',
-    'getblockheader',
-    'getblockheader',
-  ]);
+  assert.equal(methods.filter((method) => method === 'getblockchaininfo').length, 4);
+  assert.equal(methods.filter((method) => method === 'getindexinfo').length, 4);
+  assert.equal(methods.filter((method) => method === 'getrawtransaction').length, 1);
+  assert.equal(methods.filter((method) => method === 'getblockheader').length, 3);
+
+  globalThis.fetch = (async (_resource, init) => {
+    const request = JSON.parse(String(init?.body)) as { method: string };
+    if (request.method === 'getblockchaininfo') {
+      return Response.json({
+        result: {
+          chain: 'regtest', blocks: 103, headers: 103,
+          pruned: false, initialblockdownload: false,
+        },
+        error: null,
+      });
+    }
+    throw new Error(`unexpected RPC method ${request.method}`);
+  }) as typeof fetch;
+  await assert.rejects(
+    () => getBlockStatus('22'.repeat(32)),
+    /not mainnet/u,
+  );
+
+  process.env.BITCOIN_RPC_URL = 'https://bitcoin-rpc-pruned.test';
+  globalThis.fetch = (async (_resource, init) => {
+    const request = JSON.parse(String(init?.body)) as { method: string };
+    if (request.method === 'getblockchaininfo') {
+      return Response.json({
+        result: {
+          chain: 'main', blocks: 900_002, headers: 900_002,
+          pruned: true, initialblockdownload: false,
+        },
+        error: null,
+      });
+    }
+    throw new Error(`unexpected RPC method ${request.method}`);
+  }) as typeof fetch;
+  await assert.rejects(
+    () => getBlockchainInfo(),
+    /non-pruned/u,
+  );
+
+  process.env.BITCOIN_RPC_URL = 'https://bitcoin-rpc-no-index.test';
+  globalThis.fetch = (async (_resource, init) => {
+    const request = JSON.parse(String(init?.body)) as { method: string };
+    if (request.method === 'getblockchaininfo') {
+      return Response.json({
+        result: {
+          chain: 'main', blocks: 900_002, headers: 900_002,
+          pruned: false, initialblockdownload: false,
+        },
+        error: null,
+      });
+    }
+    if (request.method === 'getindexinfo') {
+      return Response.json({ result: {}, error: null });
+    }
+    throw new Error(`unexpected RPC method ${request.method}`);
+  }) as typeof fetch;
+  await assert.rejects(
+    () => getBlockStatus('22'.repeat(32)),
+    /transaction index/u,
+  );
+
+  process.env.BITCOIN_RPC_URL = 'https://bitcoin-rpc-not-found.test';
+  globalThis.fetch = (async (_resource, init) => {
+    const request = JSON.parse(String(init?.body)) as { method: string };
+    if (request.method === 'getblockchaininfo') {
+      return Response.json({
+        result: {
+          chain: 'main', blocks: 900_002, headers: 900_002,
+          pruned: false, initialblockdownload: false,
+        },
+        error: null,
+      });
+    }
+    if (request.method === 'getindexinfo') {
+      return Response.json({ result: { txindex: { synced: true } }, error: null });
+    }
+    return Response.json({ result: null, error: { code: -5, message: 'No such mempool or blockchain transaction' } });
+  }) as typeof fetch;
+  await assert.rejects(
+    () => getRawTransaction('55'.repeat(32), true),
+    (error) => error instanceof BitcoinTransactionNotFoundError,
+  );
+
+  process.env.BITCOIN_RPC_URL = 'https://bitcoin-rpc-offline.test';
+  globalThis.fetch = (async () => {
+    throw new Error('backend offline');
+  }) as typeof fetch;
+  await assert.rejects(
+    () => getRawTransaction('55'.repeat(32), true),
+    (error) => error instanceof Error && !(error instanceof BitcoinTransactionNotFoundError) &&
+      /could not reach/u.test(error.message),
+  );
 
   process.env.BITCOIN_BACKEND = 'esplora';
   process.env.BITCOIN_ESPLORA_URL = 'https://esplora-block-status.test';
@@ -84,6 +175,40 @@ try {
     confirmations: 2,
     inBestChain: true,
   });
+  globalThis.fetch = (async (resource) => {
+    const url = String(resource);
+    if (url.endsWith('/block-height/0')) return new Response('regtest-genesis');
+    throw new Error(`unexpected Esplora URL ${url}`);
+  }) as typeof fetch;
+  await assert.rejects(
+    () => getBlockStatus('44'.repeat(32)),
+    /not Bitcoin mainnet/u,
+  );
+
+  process.env.BITCOIN_ESPLORA_URL = 'https://esplora-not-found.test';
+  globalThis.fetch = (async (resource) => {
+    const url = String(resource);
+    if (url.endsWith('/block-height/0')) return new Response('000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f');
+    if (url.includes(`/tx/${'66'.repeat(32)}`)) return new Response('not found', { status: 404 });
+    throw new Error(`unexpected Esplora URL ${url}`);
+  }) as typeof fetch;
+  await assert.rejects(
+    () => getRawTransaction('66'.repeat(32), true),
+    (error) => error instanceof BitcoinTransactionNotFoundError,
+  );
+
+  process.env.BITCOIN_ESPLORA_URL = 'https://esplora-failed.test';
+  globalThis.fetch = (async (resource) => {
+    const url = String(resource);
+    if (url.endsWith('/block-height/0')) return new Response('000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f');
+    if (url.includes(`/tx/${'77'.repeat(32)}`)) return new Response('failed', { status: 503 });
+    throw new Error(`unexpected Esplora URL ${url}`);
+  }) as typeof fetch;
+  await assert.rejects(
+    () => getRawTransaction('77'.repeat(32), true),
+    (error) => error instanceof Error && !(error instanceof BitcoinTransactionNotFoundError) &&
+      /failed \(503\)/u.test(error.message),
+  );
 } finally {
   globalThis.fetch = originalFetch;
   restore('BITCOIN_BACKEND', previous.backend);
@@ -97,7 +222,7 @@ try {
 console.log(JSON.stringify({
   passed: true,
   checks: [{
-    name: 'Core and Esplora expose exact active-chain block anchors and orphan status',
+    name: 'Core and Esplora distinguish authoritative absence from operational failure while exposing exact block status',
     ok: true,
   }],
 }, null, 2));

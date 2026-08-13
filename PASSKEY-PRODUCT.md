@@ -109,6 +109,10 @@ participant-only MuSig2 path, or the timelocked recovery path.
   re-included exact transaction is reanchored. Unsigned descendants and old
   observations are invalidated, already-broadcast exact descendants remain
   tracked, and backend unavailability never triggers rollback.
+- The isolated `web:test:core-reorg` release drill drives that same
+  reconciliation and PostgreSQL boundary through real Bitcoin Core block
+  invalidation, replacement-block re-inclusion, backend outage, and rollback.
+  It adds no regtest product mode and satisfies no live-mainnet gate.
 - Initial activation accepts only a confirmed transaction with three unique
   P2WPKH or P2TR inputs, each covering one committed participant deposit, and
   exactly one committed round-one output. It also bounds change/output count
@@ -191,7 +195,9 @@ failure, proposal-digest foreign-key binding, and atomic concurrent rate-limit
 counting/reset without raw subjects. It also proves paired confirmation anchors,
 atomic funding and transition rollback, exact prior-coin restoration,
 observation invalidation, broadcast-descendant preservation, and immutable
-public-fingerprint reorganization events;
+public-fingerprint reorganization events. The separate Bitcoin Core 31.1 drill
+also proves the exact database boundary against real block invalidation,
+replacement re-inclusion, and a controlled transport failure;
 that is not a substitute for the selected production database and a complete
 real-authenticator/backend run.
 

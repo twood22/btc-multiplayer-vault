@@ -6,6 +6,7 @@ import {
   esploraGetTxOut,
   esploraSendRawTransaction,
 } from './esplora.js';
+import { BitcoinTransactionNotFoundError } from './bitcoin-backend-errors.js';
 import { assertMainnetChain, DEFAULT_BITCOIN_RPC_URL } from './network.js';
 
 // Thin JSON-RPC client for Bitcoin Core on mainnet. RPC results are inherently
@@ -75,9 +76,27 @@ export interface RpcBlockStatus {
   inBestChain: boolean;
 }
 
+export interface RpcBlockchainInfo {
+  chain: string;
+  blocks: number;
+  headers: number;
+  pruned?: boolean;
+  initialblockdownload?: boolean;
+}
+
 interface RpcEnvelope {
   result?: unknown;
   error?: { code?: number; message?: string } | null;
+}
+
+class BitcoinRpcError extends Error {
+  readonly code: number | undefined;
+
+  constructor(method: string, code: number | undefined, message: string) {
+    super(`Bitcoin RPC ${method} failed: ${message}`);
+    this.name = 'BitcoinRpcError';
+    this.code = code;
+  }
 }
 
 function rpcConfig(): { url: string; headers: Record<string, string> } {
@@ -91,28 +110,25 @@ function rpcConfig(): { url: string; headers: Record<string, string> } {
   return { url, headers };
 }
 
-let validatedRpcUrl = '';
-let rpcValidation: Promise<void> | undefined;
-
-async function assertMainnetRpc(url: string, headers: Record<string, string>): Promise<void> {
-  if (validatedRpcUrl !== url) {
-    validatedRpcUrl = url;
-    rpcValidation = (async () => {
-      const info = await rawBitcoinRpc<{ chain: string }>('getblockchaininfo', [], url, headers);
-      assertMainnetChain(info.chain);
-    })();
+async function assertMainnetRpc(
+  url: string,
+  headers: Record<string, string>,
+): Promise<RpcBlockchainInfo> {
+  const info = await rawBitcoinRpc<RpcBlockchainInfo>('getblockchaininfo', [], url, headers);
+  assertMainnetChain(info.chain);
+  if (info.pruned !== false || info.initialblockdownload !== false) {
+    throw new Error('Bitcoin Core must be fully synchronized and non-pruned');
   }
-  try {
-    await rpcValidation;
-  } catch (error) {
-    // A transient connection failure must not poison this process forever.
-    // Keep the operation fail-closed, but make the next call revalidate.
-    if (validatedRpcUrl === url) {
-      validatedRpcUrl = '';
-      rpcValidation = undefined;
-    }
-    throw error;
+  const indexes = await rawBitcoinRpc<Record<string, { synced?: boolean }>>(
+    'getindexinfo',
+    [],
+    url,
+    headers,
+  );
+  if (indexes.txindex?.synced !== true) {
+    throw new Error('Bitcoin Core requires a fully synchronized transaction index');
   }
+  return info;
 }
 
 async function rawBitcoinRpc<T>(
@@ -141,8 +157,10 @@ async function rawBitcoinRpc<T>(
   }
   const body = (await response.json()) as RpcEnvelope;
   if (!response.ok || body.error) {
-    throw new Error(
-      `Bitcoin RPC ${method} failed: ${body.error?.message || response.statusText}`,
+    throw new BitcoinRpcError(
+      method,
+      body.error?.code,
+      body.error?.message || response.statusText,
     );
   }
   return body.result as T;
@@ -150,7 +168,9 @@ async function rawBitcoinRpc<T>(
 
 export async function bitcoinRpc<T = unknown>(method: string, params: unknown[] = []): Promise<T> {
   const { url, headers } = rpcConfig();
-  if (method !== 'getblockchaininfo') await assertMainnetRpc(url, headers);
+  if (method !== 'getblockchaininfo' && method !== 'getindexinfo') {
+    await assertMainnetRpc(url, headers);
+  }
   return rawBitcoinRpc<T>(method, params, url, headers);
 }
 
@@ -159,10 +179,14 @@ export async function getTxOut(txid: string, vout: number): Promise<RpcTxOut | n
   return bitcoinRpc<RpcTxOut | null>('gettxout', [txid, vout, true]);
 }
 
-export async function getBlockchainInfo(): Promise<{ chain: string; blocks: number; headers: number }> {
-  const info = esploraEnabled()
-    ? await esploraGetBlockchainInfo()
-    : await bitcoinRpc<{ chain: string; blocks: number; headers: number }>('getblockchaininfo');
+export async function getBlockchainInfo(): Promise<RpcBlockchainInfo> {
+  let info: RpcBlockchainInfo;
+  if (esploraEnabled()) {
+    info = await esploraGetBlockchainInfo();
+  } else {
+    const { url, headers } = rpcConfig();
+    info = await assertMainnetRpc(url, headers);
+  }
   assertMainnetChain(info.chain);
   return info;
 }
@@ -207,7 +231,15 @@ export async function getRawTransaction(
   verbose: boolean | number = true,
 ): Promise<RpcTransaction> {
   if (esploraEnabled()) return esploraGetRawTransaction(txid);
-  const transaction = await bitcoinRpc<RpcTransaction>('getrawtransaction', [txid, verbose]);
+  let transaction: RpcTransaction;
+  try {
+    transaction = await bitcoinRpc<RpcTransaction>('getrawtransaction', [txid, verbose]);
+  } catch (error) {
+    if (error instanceof BitcoinRpcError && error.code === -5) {
+      throw new BitcoinTransactionNotFoundError(txid);
+    }
+    throw error;
+  }
   if (transaction.blockheight === undefined &&
       (transaction.confirmations || 0) > 0 &&
       transaction.blockhash) {

@@ -38,7 +38,6 @@ import {
   validateCooperativePubnonce,
 } from '../../../src/ceremony';
 import { sha256Hex } from '../../../src/crypto';
-import { decideConfirmationReconciliation } from '../../../src/chain-reorganization';
 import {
   buildVaultProposal,
   deriveNextVaultCoin,
@@ -55,12 +54,7 @@ import { getConfirmedVaultArtifactForVault } from './roster-store';
 import type { StoredCredential } from './webauthn-store';
 import { getApprovedFundingProposalForVault } from './funding-ceremony-store';
 import { getPasskeyApprovedFinalizedFundingForVault } from './funding-signature-store';
-import {
-  reanchorConfirmedFunding,
-  reanchorConfirmedVaultTransition,
-  rollbackConfirmedFunding,
-  rollbackConfirmedVaultTransition,
-} from './chain-reorganization-store';
+import { reconcileConfirmedChainState } from './chain-reconciliation';
 
 const PROPOSAL_LIFETIME_MS = 15 * 60 * 1000;
 
@@ -602,7 +596,10 @@ export async function pollVaultChain(): Promise<{
   confirmedFundingTransactions: string[];
   confirmedTransactions: string[];
 }> {
-  const reconciled = await reconcileConfirmedChainState();
+  const reconciled = await reconcileConfirmedChainState({
+    backend: { getBlockStatus, getRawTransaction },
+    requiredConfirmations: chainConfirmationsRequired(),
+  });
   const interrupted = await db()<Array<{ id: string }>>`
     SELECT id FROM vault_broadcast_approvals
     WHERE status = 'submitting' AND updated_at < now() - interval '30 seconds'
@@ -710,151 +707,6 @@ export async function pollVaultChain(): Promise<{
   };
 }
 
-async function reconcileConfirmedChainState(): Promise<{
-  reanchoredFundingTransactions: string[];
-  reanchoredTransactions: string[];
-  rolledBackFundingTransactions: string[];
-  rolledBackTransactions: string[];
-}> {
-  const requiredConfirmations = chainConfirmationsRequired();
-  const transitions = await db()<Array<{
-    id: string;
-    vault_id: string;
-    final_txid: Buffer;
-    finalized_tx_hex: string;
-    confirmed_height: string | null;
-    confirmed_block_hash: Buffer | null;
-  }>>`
-    SELECT id, vault_id, final_txid, finalized_tx_hex,
-           confirmed_height::text, confirmed_block_hash
-    FROM vault_transaction_proposals
-    WHERE status = 'confirmed'
-    ORDER BY confirmed_height DESC NULLS LAST, updated_at DESC
-  `;
-  const reanchoredTransactions: string[] = [];
-  const rolledBackTransactions: string[] = [];
-  for (const transition of transitions) {
-    const anchor = storedConfirmationAnchor(transition, 'confirmed vault transition');
-    const txid = transition.final_txid.toString('hex');
-    const status = await getBlockStatus(anchor.blockHash);
-    const replacement = status.inBestChain && status.confirmations >= requiredConfirmations
-      ? null
-      : await currentlyConfirmedTransaction(
-          txid,
-          transition.finalized_tx_hex,
-          requiredConfirmations,
-        );
-    const decision = decideConfirmationReconciliation({
-      stored: anchor,
-      status,
-      replacement,
-      requiredConfirmations,
-    });
-    if (decision.action === 'stable') continue;
-    if (decision.action === 'reanchor') {
-      await reanchorConfirmedVaultTransition({
-        proposalId: transition.id,
-        vaultId: transition.vault_id,
-        txid,
-        priorBlockHash: anchor.blockHash,
-        replacementBlockHash: decision.replacement.blockHash,
-        replacementConfirmedHeight: decision.replacement.height,
-      });
-      reanchoredTransactions.push(txid);
-    } else {
-      await rollbackConfirmedVaultTransition({
-        proposalId: transition.id,
-        vaultId: transition.vault_id,
-        txid,
-        priorBlockHash: anchor.blockHash,
-      });
-      rolledBackTransactions.push(txid);
-    }
-  }
-
-  const fundingRows = await db()<Array<{
-    vault_id: string;
-    final_txid: Buffer;
-    transaction_hex: string;
-    confirmed_height: string | null;
-    confirmed_block_hash: Buffer | null;
-  }>>`
-    SELECT vault_id, final_txid, transaction_hex,
-           confirmed_height::text, confirmed_block_hash
-    FROM funding_finalizations
-    WHERE status = 'confirmed'
-    ORDER BY confirmed_height DESC NULLS LAST
-  `;
-  const reanchoredFundingTransactions: string[] = [];
-  const rolledBackFundingTransactions: string[] = [];
-  for (const funding of fundingRows) {
-    const anchor = storedConfirmationAnchor(funding, 'confirmed funding transaction');
-    const txid = funding.final_txid.toString('hex');
-    const status = await getBlockStatus(anchor.blockHash);
-    const replacement = status.inBestChain && status.confirmations >= requiredConfirmations
-      ? null
-      : await currentlyConfirmedTransaction(
-          txid,
-          funding.transaction_hex,
-          requiredConfirmations,
-        );
-    const decision = decideConfirmationReconciliation({
-      stored: anchor,
-      status,
-      replacement,
-      requiredConfirmations,
-    });
-    if (decision.action === 'stable') continue;
-    if (decision.action === 'reanchor') {
-      await reanchorConfirmedFunding({
-        vaultId: funding.vault_id,
-        txid,
-        priorBlockHash: anchor.blockHash,
-        replacementBlockHash: decision.replacement.blockHash,
-        replacementConfirmedHeight: decision.replacement.height,
-      });
-      reanchoredFundingTransactions.push(txid);
-    } else {
-      await rollbackConfirmedFunding({
-        vaultId: funding.vault_id,
-        txid,
-        priorBlockHash: anchor.blockHash,
-      });
-      rolledBackFundingTransactions.push(txid);
-    }
-  }
-  return {
-    reanchoredFundingTransactions,
-    reanchoredTransactions,
-    rolledBackFundingTransactions,
-    rolledBackTransactions,
-  };
-}
-
-async function currentlyConfirmedTransaction(
-  txid: string,
-  exactTransactionHex: string,
-  requiredConfirmations: number,
-): Promise<{ blockHash: string; height: number } | null> {
-  let observed: RpcTransaction;
-  try {
-    observed = await getRawTransaction(txid, true);
-  } catch {
-    return null;
-  }
-  assertExactBroadcastTransaction({
-    finalizedTxHex: exactTransactionHex,
-    finalTxid: txid,
-    observedTxid: observed.txid,
-    ...(observed.hex ? { observedTxHex: observed.hex } : {}),
-  });
-  if ((observed.confirmations || 0) < requiredConfirmations) return null;
-  return {
-    blockHash: confirmedBlockHash(observed),
-    height: confirmedBlockHeight(observed)!,
-  };
-}
-
 async function observeOrResubmitExactTransaction(
   txid: string,
   exactTransactionHex: string,
@@ -886,18 +738,6 @@ async function observeOrResubmitExactTransaction(
       }
     }
   }
-}
-
-function storedConfirmationAnchor(
-  row: { confirmed_height: string | null; confirmed_block_hash: Buffer | null },
-  label: string,
-): { height: number; blockHash: string } {
-  const height = Number(row.confirmed_height);
-  const blockHash = row.confirmed_block_hash?.toString('hex') || '';
-  if (!Number.isSafeInteger(height) || height <= 0 || !/^[0-9a-f]{64}$/u.test(blockHash)) {
-    throw new Error(`${label} lacks an active-chain block anchor; manual reconciliation is required`);
-  }
-  return { height, blockHash };
 }
 
 function confirmedBlockHash(transaction: RpcTransaction): string {

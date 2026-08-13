@@ -203,6 +203,10 @@ After deployment but before funding, every item in `DEPLOYMENT.md` and
 nine live browser readiness proofs, three real wallet signing drills,
 PostgreSQL backup/restore, private Bitcoin Core rejection/retry/confirmation/
 reorganization exercises, HTTPS/RP validation, and a fresh release report.
+The isolated checksum-pinned Bitcoin Core reorganization drill must first pass
+against the exact reconciliation and database boundary. That regtest drill is
+test infrastructure only and does not replace the private mainnet-backend
+exercise or the live Sigbash mainnet proof.
 Funding is a later, separate, explicit decision.
 
 ## 9. Acceptance standard

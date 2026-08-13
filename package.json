@@ -12,6 +12,7 @@
     "web:typecheck": "tsc --noEmit -p tsconfig.web.json",
     "web:test": "tsx web/tests/passkey-acceptance.ts && tsx web/tests/sigbash-custody-acceptance.ts && tsx web/tests/roster-acceptance.ts && tsx web/tests/funding-acceptance.ts && tsx web/tests/funding-ceremony-acceptance.ts && tsx web/tests/vault-runtime-acceptance.ts && tsx web/tests/broadcast-lifecycle-acceptance.ts && tsx web/tests/bitcoin-rpc-acceptance.ts && tsx web/tests/chain-reorganization-acceptance.ts && tsx web/tests/funding-release-report-acceptance.ts && NODE_OPTIONS=--conditions=react-server tsx web/tests/server-config-acceptance.ts",
     "web:test:db": "tsx web/tests/broadcast-db-acceptance.ts && tsx web/tests/funding-signature-db-acceptance.ts && NODE_OPTIONS=--conditions=react-server tsx web/tests/chain-reorganization-db-acceptance.ts",
+    "web:test:core-reorg": "scripts/run-bitcoin-core-reorganization-drill.sh",
     "web:test:browser": "playwright test web/browser-tests/passkey-prf.spec.ts",
     "web:migrate": "tsx web/scripts/migrate.ts",
     "web:create-invite": "NODE_OPTIONS=--conditions=react-server tsx web/scripts/create-invite.ts",

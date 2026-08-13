@@ -48,7 +48,8 @@ Set the variables documented in `.env.example`, including:
 - a PostgreSQL 16+ `DATABASE_URL` on a non-local host with
   `sslmode=verify-full`;
 - one or more independent HTTPS `CHAIN_OBSERVATION_ORIGINS`;
-- a mainnet Bitcoin Core or Esplora backend;
+- a fully synchronized, non-pruned mainnet Bitcoin Core backend with a
+  synchronized `txindex`, or a mainnet-identity-checked Esplora backend;
 - reviewed Sigbash runtime URLs and SHA-384 pins;
 - explicit tiny-mainnet economics, recovery delay, and confirmation depth.
 
@@ -118,6 +119,11 @@ rejected by the release report.
    Sigbash and confirming all three organizations are mainnet-enabled.
 8. Exercise backup/restore and mainnet-backend rejection, retry, mempool,
    confirmation, and reorganization behavior without a funded vault.
+   First run `npm run web:test:core-reorg` to prove the exact reconciliation
+   and PostgreSQL boundary with a checksum-pinned disposable Bitcoin Core
+   31.1 node. Its regtest chain is isolated test infrastructure only; repeat
+   the operational checks against the selected private mainnet node before
+   funding.
 9. Place the independently reviewed protected receipt's `proofDigest` in
    `LIVE_SIGBASH_MAINNET_PROOF_DIGEST` and keep
    `LIVE_SIGBASH_MAINNET_PROOF_RECEIPT` pointed at that owner-only receipt.
@@ -176,6 +182,9 @@ rejected by the release report.
   evidence, and must leave coordinator state unchanged. Drill both paths: an
   orphaned block rolls back the exact successor atomically, while a transaction
   re-included at the required depth is reanchored to its replacement block.
+- A removed block followed by a transaction-lookup outage is also an
+  operational failure. Only authoritative transaction absence, or the exact
+  transaction observed below the required depth, permits rollback.
 - Keep the service private to the three invited participants. No health probe,
   invite, operator command, or deployment platform setting may make the funding
   recorder or watcher publicly callable.

@@ -1,4 +1,5 @@
 import type { RpcBlockStatus, RpcTransaction, RpcTxOut } from './bitcoin-rpc.js';
+import { BitcoinTransactionNotFoundError } from './bitcoin-backend-errors.js';
 import {
   BITCOIN_CORE_CHAIN,
   DEFAULT_ESPLORA_URL,
@@ -19,31 +20,12 @@ function baseUrl(): string {
   return (process.env.BITCOIN_ESPLORA_URL || DEFAULT_ESPLORA_URL).replace(/\/$/, '');
 }
 
-let validatedUrl = '';
-let validation: Promise<void> | undefined;
-
 async function assertMainnetEsplora(): Promise<void> {
   const url = baseUrl();
-  if (validatedUrl !== url) {
-    validatedUrl = url;
-    validation = (async () => {
-      const response = await fetch(`${url}/block-height/0`);
-      const genesisHash = (await response.text()).trim();
-      if (!response.ok || genesisHash !== MAINNET_GENESIS_HASH) {
-        throw new Error('configured Esplora backend is not Bitcoin mainnet');
-      }
-    })();
-  }
-  try {
-    await validation;
-  } catch (error) {
-    // Retry the identity check on the next operation after transient failures.
-    // No chain read or broadcast proceeds unless a fresh check succeeds.
-    if (validatedUrl === url) {
-      validatedUrl = '';
-      validation = undefined;
-    }
-    throw error;
+  const response = await fetch(`${url}/block-height/0`);
+  const genesisHash = (await response.text()).trim();
+  if (!response.ok || genesisHash !== MAINNET_GENESIS_HASH) {
+    throw new Error('configured Esplora backend is not Bitcoin mainnet');
   }
 }
 
@@ -88,7 +70,8 @@ async function tipHeight(): Promise<number> {
 
 async function fetchTx(txid: string): Promise<EsploraTx> {
   const response = await esploraGet(`/tx/${txid}`);
-  if (!response.ok) throw new Error(`Esplora tx ${txid} not found (${response.status})`);
+  if (response.status === 404) throw new BitcoinTransactionNotFoundError(txid);
+  if (!response.ok) throw new Error(`Esplora tx ${txid} failed (${response.status})`);
   return (await response.json()) as EsploraTx;
 }
 
@@ -119,8 +102,8 @@ export async function esploraGetTxOut(txid: string, vout: number): Promise<RpcTx
 }
 
 export async function esploraGetRawTransaction(txid: string): Promise<RpcTransaction> {
-  const [tx, tip, hexResponse] = await Promise.all([
-    fetchTx(txid),
+  const tx = await fetchTx(txid);
+  const [tip, hexResponse] = await Promise.all([
     tipHeight(),
     esploraGet(`/tx/${txid}/hex`),
   ]);

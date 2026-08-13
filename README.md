@@ -41,6 +41,7 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Passkey-bound three-wallet funding, external signatures, final approval, and unanimous restart | ✅ implemented; real wallets/authenticators still required |
 | Operator-gated initial funding broadcast + private confirmation watcher | ✅ implemented; real Bitcoin Core execution still required |
 | PostgreSQL funding/broadcast replay, concurrency, and restart checks | ✅ verified on disposable PostgreSQL 16 |
+| Disposable Core reorganization drill against PostgreSQL state | ✅ Bitcoin Core 31.1 runner exercised locally; not live-mainnet proof |
 | Database-atomic sensitive-operation rate limits | ✅ implemented and concurrency-verified |
 | Predeployment live Sigbash signing proof | ✅ command implemented; external mainnet execution still unproven |
 | Read-only post-deployment funding report | ✅ implemented; currently fails closed on missing external gates |
@@ -54,6 +55,9 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
   mainnet access and a mainnet backend. Chain reads can use configured Esplora,
   but the private initial-funding release deliberately requires Bitcoin Core's
   `testmempoolaccept`. Those external gates are not currently proven.
+- A Bitcoin Core backend must be fully synchronized, non-pruned, and started
+  with `txindex=1`; the service rechecks mainnet identity and synchronized
+  transaction-index capability before every sensitive RPC operation.
 
 ## Run
 
@@ -228,6 +232,24 @@ state: an orphaned anchor causes an atomic rollback to the exact prior coin,
 while the same transaction re-included deeply enough is reanchored without
 changing product state. RPC unavailability never counts as reorganization
 evidence. Initial funding itself has no HTTP broadcast route.
+
+Before a funded release, exercise the identical reconciliation and database
+boundary against an actual disposable Core node:
+
+```bash
+npm run web:test:core-reorg
+```
+
+The runner downloads the official x86-64 Bitcoin Core 31.1 archive only when
+needed and verifies its pinned SHA-256 checksum. It creates isolated Core and
+PostgreSQL data directories, mines a throwaway transaction, invalidates its
+block, proves an RPC outage leaves state untouched, re-includes it in a
+replacement block, and invalidates that block again to prove rollback. It then
+stops both services and trashes the temporary wallet, chain, database, and test
+keys. Set `BITCOIN_CORE_BIN`, `POSTGRES_BIN`, and, when necessary,
+`POSTGRES_LIB` to use reviewed local installations. This is a real backend
+failure drill, not permission to use regtest in the product and not evidence of
+Sigbash or Bitcoin mainnet readiness.
 
 `policy-check-psbt` and `sigbash-sign-psbt` infer the round from the PSBT's
 input scriptPubKey, so you only pass `--participant`.
