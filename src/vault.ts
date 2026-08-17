@@ -1,19 +1,22 @@
+import { Buffer } from 'buffer';
 import {
-  AMOUNTS,
   DEMO_SEED,
   NETWORK,
   PARTICIPANTS,
-  POLICY_FLOORS,
-  RECOVERY_DELAY_BLOCKS,
+  VAULT_ECONOMICS,
+  validateVaultEconomics,
+  vaultPolicyFloors,
 } from './config.js';
 import {
   keyAgg,
   keySort,
   buildVaultTaproot,
+  deriveXpubChildPubkey,
   deterministicKeypair,
   hmacHex,
   sha256Hex,
   taprootAddress,
+  xpubRootXonly,
 } from './crypto.js';
 import {
   asSats,
@@ -25,16 +28,72 @@ import {
   type SigbashRoundKey,
   type SoloPolicy,
   type VaultRound,
+  type VaultEconomics,
   type VaultState,
 } from './types.js';
 
 /**
- * Nested overrides: participantId -> roundId -> live leaf key. Either the
- * bare x-only pubkey hex, or an object carrying the key plus its BIP-328
- * xpub (as printed by sigbash-live-setup).
+ * Nested overrides: participantId -> roundId -> live leaf keys, as printed
+ * by sigbash-live-setup. `key` is the policy-spend leaf key (the xpub's
+ * child 0/0); `identificationKey` is the identification leaf key (the
+ * xpub's internal root). Legacy bare-string overrides and objects missing
+ * the identification material are rejected: silently falling back would
+ * derive a different vault address than the canonical dual-leaf tree.
  */
-export type SigbashLeafOverride = string | { key: string; xpub?: string };
+export type SigbashLeafOverride =
+  | string
+  | { key: string; xpub?: string; identificationKey?: string };
 export type SigbashLeafOverrides = Record<string, Record<string, SigbashLeafOverride> | undefined>;
+
+interface ResolvedLiveLeafKeys {
+  key: string;
+  xpub?: string;
+  identificationKey: string;
+}
+
+function resolveSigbashLeafOverride(
+  participantId: string,
+  round: string,
+  override: SigbashLeafOverride,
+): ResolvedLiveLeafKeys {
+  const where = `${participantId}:${round}`;
+  if (typeof override === 'string') {
+    throw new Error(
+      `legacy single-key Sigbash leaf override for ${where}: the dual-leaf vault needs ` +
+        `{ key, xpub, identificationKey }. Regenerate SIGBASH_LEAF_KEYS_JSON with sigbash-live-setup.`,
+    );
+  }
+  if (!override.key) {
+    throw new Error(`Sigbash leaf override for ${where} is missing the policy leaf key`);
+  }
+  if (override.xpub) {
+    const derivedChild = deriveXpubChildPubkey(override.xpub, [0, 0]).xonlyPubKeyHex;
+    if (override.key !== derivedChild) {
+      throw new Error(
+        `Sigbash leaf override for ${where} is inconsistent: key is not the xpub's child 0/0`,
+      );
+    }
+    const derivedRoot = xpubRootXonly(override.xpub);
+    if (override.identificationKey && override.identificationKey !== derivedRoot) {
+      throw new Error(
+        `Sigbash leaf override for ${where} is inconsistent: identificationKey is not the xpub's internal root`,
+      );
+    }
+    return { key: override.key, xpub: override.xpub, identificationKey: derivedRoot };
+  }
+  if (!override.identificationKey) {
+    throw new Error(
+      `incomplete Sigbash leaf override for ${where}: provide xpub or identificationKey ` +
+        `so the identification leaf matches the live-registered key`,
+    );
+  }
+  if (override.identificationKey === override.key) {
+    throw new Error(
+      `Sigbash leaf override for ${where} reuses the policy leaf key as the identification key`,
+    );
+  }
+  return { key: override.key, identificationKey: override.identificationKey };
+}
 
 // Every participant has one Sigbash key *per round in which they could be the
 // leaver*: round one ({A,B,C}) plus each pair round they belong to. Keys are
@@ -54,7 +113,12 @@ export function participantLeaveRounds(participantId: string, allIds: string[]):
 
 export function createDemoState({
   sigbashLeafOverrides = {},
-}: { sigbashLeafOverrides?: SigbashLeafOverrides } = {}): VaultState {
+  economics = VAULT_ECONOMICS,
+}: {
+  sigbashLeafOverrides?: SigbashLeafOverrides;
+  economics?: VaultEconomics;
+} = {}): VaultState {
+  const validatedEconomics = validateVaultEconomics(economics);
   const allIds = PARTICIPANTS.map((participant) => participant.id);
   const participants: Participant[] = PARTICIPANTS.map((participant) => {
     const personal = deterministicKeypair(DEMO_SEED, `${participant.id}:personal`);
@@ -66,13 +130,17 @@ export function createDemoState({
         `${participant.id}:sigbash-client-share:${round}`,
       );
       const override = sigbashLeafOverrides[participant.id]?.[round];
-      const overrideKey = typeof override === 'string' ? override : override?.key;
-      const overrideXpub = typeof override === 'object' ? override.xpub : undefined;
+      const resolved = override
+        ? resolveSigbashLeafOverride(participant.id, round, override)
+        : null;
       sigbashByRound[round] = {
         ...localShare,
-        xonlyPubKeyHex: overrideKey || localShare.xonlyPubKeyHex,
-        isLiveKey: Boolean(overrideKey),
-        ...(overrideXpub ? { xpub: overrideXpub } : {}),
+        xonlyPubKeyHex: resolved?.key || localShare.xonlyPubKeyHex,
+        isLiveKey: Boolean(resolved),
+        ...(resolved?.xpub ? { xpub: resolved.xpub } : {}),
+        identificationXonlyPubKeyHex:
+          resolved?.identificationKey ??
+          localIdentificationKey(DEMO_SEED, participant.id, round),
       };
     }
     return {
@@ -84,18 +152,19 @@ export function createDemoState({
     };
   });
 
-  const vaults = buildVaultTree(participants);
-  const policies = buildPolicies(participants, vaults);
-  return { participants, vaults, policies };
+  const vaults = buildVaultTree(participants, validatedEconomics);
+  const policies = buildPolicies(participants, vaults, validatedEconomics);
+  return { participants, vaults, policies, economics: validatedEconomics };
 }
 
 // ── Per-participant key custody ────────────────────────────────────────────
 // The demo derives every key from one shared seed. For real use each friend
 // runs vault-keygen on their own device with their own secret, generating
-// their personal key, payout key, and one Sigbash client share per round they
-// could leave in. They publish only public material (a "roster entry"); no one
-// ever sees another participant's secret. Everyone assembles the same roster,
-// derives the identical vault addresses, and confirms agreement before funding.
+// their personal and payout keys. The roster also carries the public Sigbash
+// leaf material for every round, but live Sigbash controls those signing
+// shares independently of the participant secret. No one ever sees another
+// participant's secret. Everyone assembles the same public roster, derives
+// identical vault addresses, and confirms agreement before funding.
 
 export interface RosterEntry {
   id: string;
@@ -103,7 +172,35 @@ export interface RosterEntry {
   personalPublicKeyHex: string;
   payoutAddress: string;
   payoutXonlyPubkeyHex: string;
+  /** Policy-spend leaf key per round (the key solo signing uses). */
   sigbashLeafByRound: Record<string, string>;
+  /** Identification-only leaf key per round; never a spend key. */
+  sigbashIdentificationLeafByRound: Record<string, string>;
+  /**
+   * Service-created public registration data. Offline acceptance rosters omit
+   * this field; a user-facing/fundable roster must contain one validated entry
+   * for every round in which this participant can leave.
+   */
+  sigbashRegistrationByRound?: Record<string, SigbashRosterRegistration>;
+}
+
+export interface SigbashRosterRegistration {
+  network: 'mainnet';
+  keyId: string;
+  keyIndex: number;
+  bip328Xpub: string;
+  policyLeafXonlyPubkey: string;
+  identificationLeafXonlyPubkey: string;
+  policyRoot: string;
+  policyId: string;
+}
+
+// Local stand-in for the live xpub internal root: keeps local and live tap
+// trees structurally identical (dual leaves per participant/round). Only the
+// public key is ever retained, so the local model cannot sign this leaf.
+function localIdentificationKey(secret: string, participantId: string, round: string): string {
+  return deterministicKeypair(secret, `${participantId}:sigbash-identification:${round}`)
+    .xonlyPubKeyHex;
 }
 
 export function deriveParticipantKeys(participantId: string, secret: string, allIds: string[]) {
@@ -116,6 +213,7 @@ export function deriveParticipantKeys(participantId: string, secret: string, all
     sigbashByRound[round] = {
       ...deterministicKeypair(secret, `${participantId}:sigbash-client-share:${round}`),
       isLiveKey: false,
+      identificationXonlyPubKeyHex: localIdentificationKey(secret, participantId, round),
     };
   }
   return { config, personal, payout, sigbashByRound };
@@ -132,18 +230,27 @@ export function rosterEntry(participantId: string, secret: string, allIds: strin
     sigbashLeafByRound: Object.fromEntries(
       Object.entries(keys.sigbashByRound).map(([round, key]) => [round, key.xonlyPubKeyHex]),
     ),
+    sigbashIdentificationLeafByRound: Object.fromEntries(
+      Object.entries(keys.sigbashByRound).map(([round, key]) => [
+        round,
+        key.identificationXonlyPubKeyHex,
+      ]),
+    ),
   };
 }
 
 // Build vault state from a roster of public keys, optionally filling in one
-// participant's private keys (from their own secret) so that participant can
-// sign locally. With no secret, the state is public-only: enough to derive and
-// verify every vault address and policy, which is all a participant needs to
-// confirm the vault before funding.
+// participant's personal and payout private keys so that participant can sign
+// cooperative exits, recovery shares, and their final sweep locally. Sigbash
+// leaf keys are always public-only here: live leaf keys are created and held by
+// Sigbash, not derived from (or recoverable through) the participant secret.
+// With no secret, the entire state is public-only.
 export function createRosterState(
   roster: RosterEntry[],
   localSecret?: { participantId: string; secret: string },
+  economics: VaultEconomics = VAULT_ECONOMICS,
 ): VaultState {
+  const validatedEconomics = validateVaultEconomics(economics);
   const allIds = roster.map((entry) => entry.id);
   const participants: Participant[] = roster.map((entry) => {
     const isLocal = localSecret?.participantId === entry.id;
@@ -153,14 +260,30 @@ export function createRosterState(
     if (localKeys && localKeys.personal.publicKeyHex !== entry.personalPublicKeyHex) {
       throw new Error(`local secret for ${entry.id} does not match the roster's public key`);
     }
+    if (
+      localKeys &&
+      (localKeys.payout.xonlyPubKeyHex !== entry.payoutXonlyPubkeyHex ||
+        taprootAddress(localKeys.payout.xonlyPubKeyHex) !== entry.payoutAddress)
+    ) {
+      throw new Error(`local secret for ${entry.id} does not match the roster's payout key`);
+    }
     const sigbashByRound: Record<string, SigbashRoundKey> = {};
     for (const [round, leafKey] of Object.entries(entry.sigbashLeafByRound)) {
-      const local = localKeys?.sigbashByRound[round];
+      const identificationKey = entry.sigbashIdentificationLeafByRound?.[round];
+      if (!identificationKey) {
+        throw new Error(
+          `roster entry for ${entry.id} is missing the ${round} identification leaf key; ` +
+            `regenerate the entry with vault-keygen`,
+        );
+      }
+      const registration = entry.sigbashRegistrationByRound?.[round];
       sigbashByRound[round] = {
-        privateKeyHex: local?.privateKeyHex ?? '',
-        publicKeyHex: local?.publicKeyHex ?? `02${leafKey}`,
+        privateKeyHex: '',
+        publicKeyHex: `02${leafKey}`,
         xonlyPubKeyHex: leafKey,
-        isLiveKey: false,
+        isLiveKey: Boolean(registration),
+        ...(registration ? { xpub: registration.bip328Xpub } : {}),
+        identificationXonlyPubKeyHex: identificationKey,
       };
     }
     return {
@@ -180,12 +303,23 @@ export function createRosterState(
       sigbashByRound,
     };
   });
-  const vaults = buildVaultTree(participants);
-  const policies = buildPolicies(participants, vaults);
-  return { participants, vaults, policies };
+  const vaults = buildVaultTree(participants, validatedEconomics);
+  const policies = buildPolicies(participants, vaults, validatedEconomics);
+  for (const entry of roster) {
+    for (const [round, registration] of Object.entries(entry.sigbashRegistrationByRound || {})) {
+      const expectedPolicy = policies.get(`${round}:${entry.id}`);
+      if (!expectedPolicy) throw new Error(`no policy for live Sigbash registration ${entry.id}:${round}`);
+      expectedPolicy.keyId = registration.keyId;
+    }
+  }
+  return { participants, vaults, policies, economics: validatedEconomics };
 }
 
-export function buildVaultTree(participants: Participant[]): Map<string, VaultRound> {
+export function buildVaultTree(
+  participants: Participant[],
+  economics: VaultEconomics = VAULT_ECONOMICS,
+): Map<string, VaultRound> {
+  const validatedEconomics = validateVaultEconomics(economics);
   const byIds = new Map(participants.map((p) => [p.id, p]));
   const allIds = participants.map((p) => p.id);
   const rounds = new Map<string, VaultRound>();
@@ -208,8 +342,9 @@ export function buildVaultTree(participants: Participant[]): Map<string, VaultRo
       soloLeafPubkeys: current.map((p) => ({
         participantId: p.id,
         xonlyPubkey: sigbashRoundKey(p, round).xonlyPubKeyHex,
+        identificationXonlyPubkey: sigbashRoundKey(p, round).identificationXonlyPubKeyHex,
       })),
-      recoveryDelayBlocks: RECOVERY_DELAY_BLOCKS,
+      recoveryDelayBlocks: validatedEconomics.recoveryDelayBlocks,
       recoveryXonlyPubkeys: current.map((p) => p.personal.xonlyPubKeyHex),
     });
     rounds.set(round, {
@@ -218,11 +353,16 @@ export function buildVaultTree(participants: Participant[]): Map<string, VaultRo
       address: taproot.address,
       outputScriptHex: taproot.outputScriptHex,
       tapMerkleRoot: taproot.tapMerkleRoot,
+      // Leaf order mirrors the tree: per participant the policy-spend leaf
+      // pk(child 0/0) followed by the identification leaf pk(internal root).
       descriptor: `tr(musig(${current
         .map((p) => p.personal.publicKeyHex)
         .join(',')}),{${current
-        .map((p) => `pk(${sigbashRoundKey(p, round).xonlyPubKeyHex})`)
-        .join(',')},and_v(v:older(${RECOVERY_DELAY_BLOCKS}),multi_a(${Math.max(1, current.length - 1)},${current
+        .flatMap((p) => [
+          `pk(${sigbashRoundKey(p, round).xonlyPubKeyHex})`,
+          `pk(${sigbashRoundKey(p, round).identificationXonlyPubKeyHex})`,
+        ])
+        .join(',')},and_v(v:older(${validatedEconomics.recoveryDelayBlocks}),multi_a(${Math.max(1, current.length - 1)},${current
         .map((p) => p.personal.xonlyPubKeyHex)
         .join(',')}))})`,
       keyPath: {
@@ -250,7 +390,10 @@ export function sigbashRoundKey(participant: Participant, round: string): Sigbas
 export function buildPolicies(
   participants: Participant[],
   vaults: Map<string, VaultRound>,
+  economics: VaultEconomics = VAULT_ECONOMICS,
 ): Map<string, SoloPolicy> {
+  const validatedEconomics = validateVaultEconomics(economics);
+  const policyFloors = vaultPolicyFloors(validatedEconomics);
   const byId = new Map(participants.map((p) => [p.id, p]));
   const policies = new Map<string, SoloPolicy>();
   const requireParticipant = (id: string): Participant => {
@@ -268,9 +411,9 @@ export function buildPolicies(
     policies.set(policyId(roundOneIds, leaverId), soloPolicy({
       roundIds: roundOneIds,
       leaver,
-      payoutSats: AMOUNTS.firstWithdrawal,
+      payoutSats: validatedEconomics.firstWithdrawalSats,
       nextAddress: nextVault.address,
-      leftoverFloor: POLICY_FLOORS.roundOneLeftover,
+      leftoverFloor: policyFloors.roundOneLeftover,
     }));
   }
 
@@ -283,9 +426,9 @@ export function buildPolicies(
       policies.set(policyId(ids, leaverId), soloPolicy({
         roundIds: ids,
         leaver,
-        payoutSats: AMOUNTS.secondWithdrawal,
+        payoutSats: validatedEconomics.secondWithdrawalSats,
         nextAddress: remaining.payoutAddress,
-        leftoverFloor: POLICY_FLOORS.roundTwoLeftover,
+        leftoverFloor: policyFloors.roundTwoLeftover,
       }));
     }
   }
@@ -352,11 +495,13 @@ export function soloPolicy({
       { type: 'TX_OUTPUT_COUNT', operator: 'EQ', value: 2 },
       { type: 'TX_INPUT_COUNT', operator: 'EQ', value: 1 },
       {
-        // Descriptor-mode REQKEY: proven on live Sigbash signet to satisfy the
+        // Descriptor-mode REQKEY: previous live service testing proved this satisfies the
         // "signer key in required signer universe" clause when the tapscript
         // leaf contains the xpub's child 0/0 key. The local model checks the
         // equivalent round-scoped leaf key via local_key_identifier, which is
-        // stripped before the policy is sent to Sigbash.
+        // stripped before the policy is sent to Sigbash. This always refers to
+        // the policy-spend leaf key; the identification leaf key must never
+        // appear here (the audit suite enforces this).
         type: 'REQKEY',
         key_type: 'TAP_LEAF_XONLY_PUBKEY',
         use_descriptor: true,
@@ -450,8 +595,9 @@ export function buildSoloWithdrawal({
   const payout = payoutCondition.value;
   const nextAddress = nextAddressCondition.addresses[0];
   if (!nextAddress) throw new Error(`policy ${policy.id} pins no next address`);
-  const fee =
-    currentIds.length === 3 ? AMOUNTS.feePerSoloWithdrawal : AMOUNTS.feePerSoloWithdrawal * 2;
+  const fee = currentIds.length === 3
+    ? state.economics.soloWithdrawalFeeSats
+    : state.economics.soloWithdrawalFeeSats * 2;
   const leaver = participantById(state, leaverId);
   return {
     kind: 'solo-withdrawal',
@@ -487,7 +633,7 @@ export function buildCooperativeExit({
 }): LedgerTx {
   const participants = currentIds.map((id) => participantById(state, id));
   const refund = asSats(
-    Math.floor((currentUtxo.value - AMOUNTS.cooperativeFee) / participants.length),
+    Math.floor((currentUtxo.value - state.economics.cooperativeFeeSats) / participants.length),
   );
   const vault = state.vaults.get(roundId(currentIds));
   if (!vault) throw new Error(`missing vault for ${roundId(currentIds)}`);
@@ -549,12 +695,12 @@ export function buildRecovery({
   vanishedId: string;
   blocksWaited: number;
 }): LedgerTx {
-  if (blocksWaited < RECOVERY_DELAY_BLOCKS) {
-    throw new Error(`recovery locked for ${RECOVERY_DELAY_BLOCKS - blocksWaited} more blocks`);
+  if (blocksWaited < state.economics.recoveryDelayBlocks) {
+    throw new Error(`recovery locked for ${state.economics.recoveryDelayBlocks - blocksWaited} more blocks`);
   }
   const recipients = currentIds.map((id) => participantById(state, id));
   const recoverEach = asSats(
-    Math.floor((currentUtxo.value - AMOUNTS.recoveryFee) / recipients.length),
+    Math.floor((currentUtxo.value - state.economics.recoveryFeeSats) / recipients.length),
   );
   const vault = state.vaults.get(roundId(currentIds));
   if (!vault) throw new Error(`missing vault for ${roundId(currentIds)}`);

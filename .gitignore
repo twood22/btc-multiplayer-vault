@@ -1,4 +1,9 @@
 node_modules/
+.next/
+web/.next/
+*.tsbuildinfo
 .env
 *.env.local
 live-run/
+test-results/
+playwright-report/

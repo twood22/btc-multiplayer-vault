@@ -1,6 +1,12 @@
-import { createECDH, createHash, createHmac } from 'node:crypto';
+import { Buffer } from 'buffer';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
+import { hmac } from '@noble/hashes/hmac.js';
+import { ripemd160 } from '@noble/hashes/legacy.js';
+import { sha256, sha512 } from '@noble/hashes/sha2.js';
+import { utf8ToBytes } from '@noble/hashes/utils.js';
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
+import { BITCOIN_NETWORK } from './network.js';
 import type { Hex, KeyAggResult, KeyAggregation, Keypair, TapLeaf } from './types.js';
 
 bitcoin.initEccLib(ecc);
@@ -10,12 +16,12 @@ export const SECP_ORDER = BigInt(
 );
 
 export function sha256Hex(value: string | Buffer): Hex {
-  return createHash('sha256').update(value).digest('hex');
+  return Buffer.from(sha256(bytes(value))).toString('hex');
 }
 
 export function taggedHash(tag: string, value: Buffer): Buffer {
-  const tagHash = createHash('sha256').update(tag).digest();
-  return createHash('sha256').update(tagHash).update(tagHash).update(value).digest();
+  const tagHash = Buffer.from(sha256(utf8ToBytes(tag)));
+  return Buffer.from(sha256(Buffer.concat([tagHash, tagHash, value])));
 }
 
 export function taggedHashHex(tag: string, value: Buffer): Hex {
@@ -23,22 +29,17 @@ export function taggedHashHex(tag: string, value: Buffer): Hex {
 }
 
 export function hmacHex(key: string | Buffer, value: string | Buffer): Hex {
-  return createHmac('sha256', key).update(value).digest('hex');
+  return Buffer.from(hmac(sha256, bytes(key), bytes(value))).toString('hex');
 }
 
 export function deterministicKeypair(seed: string, label: string): Keypair {
   let counter = 0;
   while (true) {
-    const priv = createHash('sha256')
-      .update(`${seed}:${label}:${counter}`)
-      .digest();
+    const priv = Buffer.from(sha256(utf8ToBytes(`${seed}:${label}:${counter}`)));
     const scalar = BigInt(`0x${priv.toString('hex')}`);
     if (scalar > 0n && scalar < SECP_ORDER) {
       try {
-        const ecdh = createECDH('secp256k1');
-        ecdh.setPrivateKey(priv);
-        const compressed = ecdh.getPublicKey(null, 'compressed');
-        if (!compressed) throw new Error('no public key');
+        const compressed = Buffer.from(secp256k1.getPublicKey(priv, true));
         return {
           privateKeyHex: priv.toString('hex'),
           publicKeyHex: compressed.toString('hex'),
@@ -55,7 +56,7 @@ export function deterministicKeypair(seed: string, label: string): Keypair {
 export function taprootAddress(xonlyPubKeyHex: Hex): string {
   const { address } = bitcoin.payments.p2tr({
     internalPubkey: Buffer.from(xonlyPubKeyHex, 'hex'),
-    network: bitcoin.networks.testnet,
+    network: BITCOIN_NETWORK,
   });
   if (!address) throw new Error('failed to derive taproot address');
   return address;
@@ -172,12 +173,25 @@ function base58CheckDecode(value: string): Buffer {
   payload = Buffer.concat([Buffer.alloc(leadingZeros), payload]);
   const checksum = payload.subarray(-4);
   const data = payload.subarray(0, -4);
-  const expected = createHash('sha256')
-    .update(createHash('sha256').update(data).digest())
-    .digest()
-    .subarray(0, 4);
+  const expected = Buffer.from(sha256(sha256(data))).subarray(0, 4);
   if (!checksum.equals(expected)) throw new Error('base58 checksum mismatch');
   return data;
+}
+
+export function base58CheckEncode(data: Buffer): string {
+  const checksum = Buffer.from(sha256(sha256(data))).subarray(0, 4);
+  const payload = Buffer.concat([data, checksum]);
+  let acc = BigInt(`0x${payload.toString('hex')}`);
+  let encoded = '';
+  while (acc > 0n) {
+    encoded = BASE58_ALPHABET[Number(acc % 58n)] + encoded;
+    acc /= 58n;
+  }
+  for (const byte of payload) {
+    if (byte !== 0) break;
+    encoded = `1${encoded}`;
+  }
+  return encoded;
 }
 
 // The xpub's own root public key (x-only). For a Sigbash key this is the
@@ -197,7 +211,7 @@ export function tapLeafHash(script: Buffer, leafVersion = 0xc0): Buffer {
 }
 
 // Master fingerprint for BIP-371 derivation fields: prefer the BIP-380 key
-// origin prefix ([fingerprint]tpub...); otherwise, for a depth-0 xpub, the
+// origin prefix ([fingerprint]xpub...); otherwise, for a depth-0 xpub, the
 // fingerprint is hash160 of its own public key.
 export function xpubMasterFingerprint(xpubBase58: string): Buffer {
   const origin = xpubBase58.match(/^\[([0-9a-fA-F]{8})/);
@@ -208,8 +222,8 @@ export function xpubMasterFingerprint(xpubBase58: string): Buffer {
     throw new Error('xpub has no key origin prefix and is not a master key; cannot derive fingerprint');
   }
   const pubkey = data.subarray(45, 78);
-  const sha = createHash('sha256').update(pubkey).digest();
-  return createHash('ripemd160').update(sha).digest().subarray(0, 4);
+  const hashed = sha256(pubkey);
+  return Buffer.from(ripemd160(hashed)).subarray(0, 4);
 }
 
 // Non-hardened BIP32 public derivation, used to derive the Sigbash tapscript
@@ -219,7 +233,7 @@ export function deriveXpubChildPubkey(
   xpubBase58: string,
   path: number[] = [0, 0],
 ): { publicKeyHex: Hex; xonlyPubKeyHex: Hex } {
-  // Sigbash returns the xpub with a BIP-380 key-origin prefix: [fingerprint]tpub...
+  // Sigbash returns the xpub with a BIP-380 key-origin prefix: [fingerprint]xpub...
   const stripped = xpubBase58.replace(/^\[[0-9a-fA-F/h']*\]/, '');
   const data = base58CheckDecode(stripped);
   if (data.length !== 78) throw new Error('invalid extended public key length');
@@ -229,9 +243,11 @@ export function deriveXpubChildPubkey(
     if (index >= 0x80000000) throw new Error('cannot derive hardened child from xpub');
     const indexBuffer = Buffer.alloc(4);
     indexBuffer.writeUInt32BE(index, 0);
-    const i = createHmac('sha512', chainCode)
-      .update(Buffer.concat([publicKey, indexBuffer]))
-      .digest();
+    const i = Buffer.from(hmac(
+      sha512,
+      chainCode,
+      Buffer.concat([publicKey, indexBuffer]),
+    ));
     const tweak = i.subarray(0, 32);
     const child = ecc.pointAddScalar(publicKey, tweak, true);
     if (!child) throw new Error('invalid BIP32 child derivation');
@@ -242,6 +258,10 @@ export function deriveXpubChildPubkey(
     publicKeyHex: publicKey.toString('hex'),
     xonlyPubKeyHex: publicKey.subarray(1).toString('hex'),
   };
+}
+
+function bytes(value: string | Buffer): Uint8Array {
+  return typeof value === 'string' ? utf8ToBytes(value) : value;
 }
 
 export interface VaultTaproot {
@@ -263,18 +283,47 @@ export function buildVaultTaproot({
   recoveryXonlyPubkeys,
 }: {
   internalXonlyPubkey: Hex;
-  soloLeafPubkeys: Array<{ participantId: string; xonlyPubkey: Hex }>;
+  soloLeafPubkeys: Array<{
+    participantId: string;
+    xonlyPubkey: Hex;
+    identificationXonlyPubkey: Hex;
+  }>;
   recoveryDelayBlocks: number;
   recoveryXonlyPubkeys: Hex[];
 }): VaultTaproot {
-  const soloLeaves = soloLeafPubkeys.map(({ participantId, xonlyPubkey }) => ({
-    type: 'solo-withdrawal' as const,
-    participantId,
-    sigbashXonlyPubkey: xonlyPubkey,
-    scriptHex: Buffer.from(
+  const pkScriptHex = (xonlyPubkey: Hex): Hex =>
+    Buffer.from(
       bitcoin.script.compile([Buffer.from(xonlyPubkey, 'hex'), bitcoin.opcodes.OP_CHECKSIG]),
-    ).toString('hex'),
-  }));
+    ).toString('hex');
+  // Dual-leaf Sigbash structure (live-verified, see REVIEW.md): per
+  // participant/round the tree carries a policy-spend leaf pk(child 0/0)
+  // that solo signing uses, plus an identification-only leaf
+  // pk(internal root) that live Sigbash needs to recognize the input.
+  const soloLeaves = soloLeafPubkeys.flatMap(
+    ({ participantId, xonlyPubkey, identificationXonlyPubkey }) => {
+      if (xonlyPubkey === identificationXonlyPubkey) {
+        throw new Error(
+          `${participantId}: identification leaf key must differ from the policy-spend leaf key`,
+        );
+      }
+      return [
+        {
+          type: 'solo-withdrawal' as const,
+          role: 'policy-spend' as const,
+          participantId,
+          sigbashXonlyPubkey: xonlyPubkey,
+          scriptHex: pkScriptHex(xonlyPubkey),
+        },
+        {
+          type: 'sigbash-identification' as const,
+          role: 'identification-only' as const,
+          participantId,
+          internalRootXonlyPubkey: identificationXonlyPubkey,
+          scriptHex: pkScriptHex(identificationXonlyPubkey),
+        },
+      ];
+    },
+  );
   const recoveryThreshold = Math.max(1, recoveryXonlyPubkeys.length - 1);
   const sortedRecoveryPubkeys = [...recoveryXonlyPubkeys].sort();
   const recoveryScript = bitcoin.script.compile([
@@ -299,7 +348,7 @@ export function buildVaultTaproot({
     // bitcoinjs' Taptree is the same recursive leaf/[left,right] shape our
     // builder produces, but it is typed as a branded tuple.
     scriptTree: scriptTree as P2trScriptTree,
-    network: bitcoin.networks.testnet,
+    network: BITCOIN_NETWORK,
   });
   if (!payment.address || !payment.output || !payment.hash) {
     throw new Error('failed to build vault taproot payment');
@@ -310,7 +359,7 @@ export function buildVaultTaproot({
       internalPubkey: Buffer.from(internalXonlyPubkey, 'hex'),
       scriptTree: scriptTree as P2trScriptTree,
       redeem: { output: Buffer.from(leaf.scriptHex, 'hex') },
-      network: bitcoin.networks.testnet,
+      network: BITCOIN_NETWORK,
     });
     const controlBlock = leafPayment.witness?.at(-1);
     if (!controlBlock) throw new Error('failed to derive tapleaf control block');

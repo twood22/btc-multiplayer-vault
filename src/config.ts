@@ -1,6 +1,7 @@
-import { asSats, type Sats } from './types.js';
+import { asSats, type Sats, type VaultEconomics } from './types.js';
+import { BITCOIN_NETWORK_NAME } from './network.js';
 
-export const NETWORK = 'signet';
+export const NETWORK = BITCOIN_NETWORK_NAME;
 
 export const SATS_PER_BTC = 100_000_000;
 
@@ -15,31 +16,39 @@ export const PARTICIPANTS: ParticipantConfig[] = [
   { id: 'carol', label: 'Carol' },
 ];
 
-// Per-transaction fee budget enforced by the Sigbash policy floors below. A
-// leaver chooses the actual fee, but the policy guarantees the leftover can be
-// short of its ideal value by at most this many sats. Signet solo withdrawals
-// are ~150 vbytes, so 10k sats is a generous ceiling with a tight burn bound.
-export const SOLO_FEE_BUDGET_SATS: Sats = asSats(10_000);
-
-// Amounts are overridable so a live signet run can use faucet-sized deposits.
-// Set VAULT_DEPOSIT_SATS; the schedule scales with haircut = bonus = 5% of the
-// deposit (first = deposit - haircut, second = deposit + haircut/2), which
-// keeps first + second + second == 3 * deposit. The defaults are the spec's
-// 1 BTC / 0.95 / 1.025 schedule.
-const depositSats = Number(process.env.VAULT_DEPOSIT_SATS || 100_000_000);
-if (!Number.isSafeInteger(depositSats) || depositSats < 1_000_000) {
-  throw new Error('VAULT_DEPOSIT_SATS must be an integer >= 1,000,000 (0.01 BTC)');
-}
+// Amounts remain configurable so a deliberately tiny mainnet run can use the
+// exact same game. The immutable roster commits every value below; signers use
+// that committed object, never ambient browser environment variables.
+const depositSats = integerEnv('VAULT_DEPOSIT_SATS', 100_000_000);
 const haircutSats = Math.round(depositSats * 0.05);
+const soloFeeSats = integerEnv('VAULT_SOLO_FEE_SATS', depositSats < 1_000_000 ? 300 : 1_000);
+const soloFeeBudgetSats = integerEnv(
+  'VAULT_SOLO_FEE_BUDGET_SATS',
+  Math.min(10_000, Math.floor(depositSats * 0.2)),
+);
 
+export const VAULT_ECONOMICS: VaultEconomics = validateVaultEconomics({
+  depositSatsPerParticipant: asSats(depositSats),
+  firstWithdrawalSats: asSats(depositSats - haircutSats),
+  secondWithdrawalSats: asSats(depositSats + Math.floor(haircutSats / 2)),
+  soloFeeBudgetSats: asSats(soloFeeBudgetSats),
+  soloWithdrawalFeeSats: asSats(soloFeeSats),
+  cooperativeFeeSats: asSats(integerEnv('VAULT_COOP_FEE_SATS', depositSats < 1_000_000 ? 300 : 900)),
+  recoveryFeeSats: asSats(integerEnv('VAULT_RECOVERY_FEE_SATS', depositSats < 1_000_000 ? 500 : 1_500)),
+  finalSweepFeeSats: asSats(integerEnv('VAULT_FINAL_SWEEP_FEE_SATS', soloFeeSats)),
+  recoveryDelayBlocks: integerEnv('RECOVERY_DELAY_BLOCKS', 6),
+});
+
+// Compatibility names for CLI fixtures. Product paths use state.economics.
+export const SOLO_FEE_BUDGET_SATS: Sats = VAULT_ECONOMICS.soloFeeBudgetSats;
 export const AMOUNTS = {
-  deposit: asSats(depositSats),
-  firstWithdrawal: asSats(depositSats - haircutSats),
-  secondWithdrawal: asSats(depositSats + Math.floor(haircutSats / 2)),
-  feePerSoloWithdrawal: asSats(Number(process.env.VAULT_SOLO_FEE_SATS || 1_000)),
-  finalSweepFee: asSats(Number(process.env.VAULT_SOLO_FEE_SATS || 1_000)),
-  cooperativeFee: asSats(Number(process.env.VAULT_COOP_FEE_SATS || 900)),
-  recoveryFee: asSats(Number(process.env.VAULT_RECOVERY_FEE_SATS || 1_500)),
+  deposit: VAULT_ECONOMICS.depositSatsPerParticipant,
+  firstWithdrawal: VAULT_ECONOMICS.firstWithdrawalSats,
+  secondWithdrawal: VAULT_ECONOMICS.secondWithdrawalSats,
+  feePerSoloWithdrawal: VAULT_ECONOMICS.soloWithdrawalFeeSats,
+  finalSweepFee: VAULT_ECONOMICS.finalSweepFeeSats,
+  cooperativeFee: VAULT_ECONOMICS.cooperativeFeeSats,
+  recoveryFee: VAULT_ECONOMICS.recoveryFeeSats,
 } satisfies Record<string, Sats>;
 
 // Leftover floors are derived from the schedule so the maximum a malicious
@@ -48,24 +57,87 @@ export const AMOUNTS = {
 //   round two:  worst-case round-two vault (round-one floor) minus 1.025 BTC
 //               payout minus one more fee budget
 export const POLICY_FLOORS = {
-  roundOneLeftover: asSats(
-    AMOUNTS.deposit * PARTICIPANTS.length - AMOUNTS.firstWithdrawal - SOLO_FEE_BUDGET_SATS,
-  ),
-  roundTwoLeftover: asSats(
-    AMOUNTS.deposit * PARTICIPANTS.length -
-      AMOUNTS.firstWithdrawal -
-      SOLO_FEE_BUDGET_SATS -
-      AMOUNTS.secondWithdrawal -
-      SOLO_FEE_BUDGET_SATS,
-  ),
+  ...vaultPolicyFloors(VAULT_ECONOMICS),
 } satisfies Record<string, Sats>;
 
-// Short on purpose so the signet demo can exercise the recovery path. Note the
-// trust consequence documented in the README: after this many blocks of vault
-// inactivity, N-1 of the current participants can co-sign the recovery leaf.
-export const RECOVERY_DELAY_BLOCKS = Number(process.env.RECOVERY_DELAY_BLOCKS || 6);
+// The default remains the original prototype value for reproducible offline
+// acceptance only. Mainnet deployment must explicitly choose and review a
+// production delay before the release gate can pass.
+export const RECOVERY_DELAY_BLOCKS = VAULT_ECONOMICS.recoveryDelayBlocks;
 
-export const DEFAULT_DEMO_SEED = 'btc-multiplayer-vault-signet-demo';
+export function vaultPolicyFloors(economics: VaultEconomics): {
+  roundOneLeftover: Sats;
+  roundTwoLeftover: Sats;
+} {
+  const validated = validateVaultEconomics(economics);
+  return {
+    roundOneLeftover: asSats(
+      validated.depositSatsPerParticipant * PARTICIPANTS.length -
+        validated.firstWithdrawalSats - validated.soloFeeBudgetSats,
+    ),
+    roundTwoLeftover: asSats(
+      validated.depositSatsPerParticipant * PARTICIPANTS.length -
+        validated.firstWithdrawalSats - validated.soloFeeBudgetSats -
+        validated.secondWithdrawalSats - validated.soloFeeBudgetSats,
+    ),
+  };
+}
+
+export function validateVaultEconomics(input: VaultEconomics): VaultEconomics {
+  const economics: VaultEconomics = {
+    depositSatsPerParticipant: asSats(input.depositSatsPerParticipant),
+    firstWithdrawalSats: asSats(input.firstWithdrawalSats),
+    secondWithdrawalSats: asSats(input.secondWithdrawalSats),
+    soloFeeBudgetSats: asSats(input.soloFeeBudgetSats),
+    soloWithdrawalFeeSats: asSats(input.soloWithdrawalFeeSats),
+    cooperativeFeeSats: asSats(input.cooperativeFeeSats),
+    recoveryFeeSats: asSats(input.recoveryFeeSats),
+    finalSweepFeeSats: asSats(input.finalSweepFeeSats),
+    recoveryDelayBlocks: Number(input.recoveryDelayBlocks),
+  };
+  if (economics.depositSatsPerParticipant < 10_000) {
+    throw new Error('vault deposit must be at least 10,000 sats per participant');
+  }
+  if (!Number.isSafeInteger(economics.recoveryDelayBlocks) || economics.recoveryDelayBlocks < 1) {
+    throw new Error('recovery delay must be a positive integer number of blocks');
+  }
+  if (
+    economics.firstWithdrawalSats + economics.secondWithdrawalSats * 2 !==
+    economics.depositSatsPerParticipant * PARTICIPANTS.length
+  ) {
+    throw new Error('withdrawal schedule must conserve exactly three participant deposits');
+  }
+  for (const [name, value] of Object.entries({
+    soloFeeBudgetSats: economics.soloFeeBudgetSats,
+    soloWithdrawalFeeSats: economics.soloWithdrawalFeeSats,
+    cooperativeFeeSats: economics.cooperativeFeeSats,
+    recoveryFeeSats: economics.recoveryFeeSats,
+    finalSweepFeeSats: economics.finalSweepFeeSats,
+  })) {
+    if (value <= 0) throw new Error(`${name} must be positive`);
+  }
+  const roundOneFloor = economics.depositSatsPerParticipant * 3 -
+    economics.firstWithdrawalSats - economics.soloFeeBudgetSats;
+  const roundTwoFloor = roundOneFloor - economics.secondWithdrawalSats -
+    economics.soloFeeBudgetSats;
+  if (roundTwoFloor < 330) throw new Error('economics leave a dust-sized final payout floor');
+  if (economics.soloWithdrawalFeeSats > economics.soloFeeBudgetSats) {
+    throw new Error('solo withdrawal fee exceeds the policy fee budget');
+  }
+  if (economics.soloWithdrawalFeeSats * 2 > economics.soloFeeBudgetSats) {
+    throw new Error('pair-round solo fee exceeds the policy fee budget');
+  }
+  return economics;
+}
+
+function integerEnv(name: string, fallback: number): number {
+  const raw = typeof process === 'undefined' ? undefined : process.env[name];
+  const value = raw === undefined || raw === '' ? fallback : Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer`);
+  return value;
+}
+
+export const DEFAULT_DEMO_SEED = 'btc-multiplayer-vault-public-test-fixture';
 
 export const DEMO_SEED = process.env.VAULT_DEMO_SEED || DEFAULT_DEMO_SEED;
 

@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Isolated production-bundle acceptance only. The application remains
+# mainnet-only; synthetic public registrations/readiness, coin observations,
+# chain responses, and ephemeral wallet signers used by the browser tests are
+# explicit prerequisites, never live Sigbash, real-wallet, or funding evidence.
+
+container_acceptance=${CONTAINER_ACCEPTANCE:-false}
+container_engine=${CONTAINER_ENGINE:-docker}
+container_image_tag=${CONTAINER_IMAGE_TAG:-btc-multiplayer-vault:local-acceptance}
+if [ "$container_acceptance" = true ] && ! command -v "$container_engine" >/dev/null 2>&1; then
+  echo "Container acceptance requires the configured engine: $container_engine" >&2
+  exit 1
+fi
+
+readonly DEFAULT_POSTGRES_BIN='/home/codex/.cache/btc-multiplayer-vault/postgresql-16.14/usr/lib/postgresql/16/bin'
+readonly DEFAULT_POSTGRES_LIB='/home/codex/.cache/btc-multiplayer-vault/postgresql-16.14/usr/lib/x86_64-linux-gnu'
+
+repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repository_root"
+
+node_executable=${NODE_EXECUTABLE:-}
+if [ -z "$node_executable" ]; then
+  node_executable=$(command -v node)
+fi
+"$node_executable" scripts/check-runtime.mjs
+node_bin=$(dirname "$node_executable")
+export PATH="$node_bin:$PATH"
+
+postgres_bin=${POSTGRES_BIN:-$DEFAULT_POSTGRES_BIN}
+if [ ! -x "$postgres_bin/initdb" ] || [ ! -x "$postgres_bin/pg_ctl" ]; then
+  echo 'PostgreSQL 16 initdb and pg_ctl are required; set POSTGRES_BIN to their directory' >&2
+  exit 1
+fi
+if [ -n "${POSTGRES_LIB:-}" ]; then
+  export LD_LIBRARY_PATH="${POSTGRES_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+elif [ -z "${POSTGRES_BIN:-}" ] && [ -d "$DEFAULT_POSTGRES_LIB" ]; then
+  export LD_LIBRARY_PATH="${DEFAULT_POSTGRES_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
+work_dir=$(mktemp -d /tmp/btc-vault-production-browser.XXXXXX)
+postgres_started=false
+web_started=false
+container_started=false
+acceptance_passed=false
+container_image_id=''
+
+cleanup() {
+  safe_to_trash=true
+  preserve_diagnostics=false
+  if [ "$acceptance_passed" != true ]; then preserve_diagnostics=true; fi
+  if [ "$web_started" = true ]; then
+    if [ "$container_started" = true ]; then
+      "$container_engine" stop --time 10 "$container_name" >/dev/null 2>&1 || true
+    else
+      kill "$web_pid" >/dev/null 2>&1 || true
+    fi
+    wait "$web_pid" >/dev/null 2>&1 || true
+    if kill -0 "$web_pid" >/dev/null 2>&1; then safe_to_trash=false; fi
+  fi
+  if [ "$postgres_started" = true ]; then
+    "$postgres_bin/pg_ctl" -D "$work_dir/postgres" -m immediate stop >/dev/null 2>&1 || true
+    postgres_pid_file="$work_dir/postgres/postmaster.pid"
+    if [ -f "$postgres_pid_file" ]; then
+      postgres_pid=$(head -n 1 "$postgres_pid_file")
+      if [[ "$postgres_pid" =~ ^[0-9]+$ ]] && kill -0 "$postgres_pid" >/dev/null 2>&1; then
+        safe_to_trash=false
+      fi
+    fi
+  fi
+  if [ "$safe_to_trash" = true ] && [ "$preserve_diagnostics" = false ]; then
+    gio trash "$work_dir" >/dev/null 2>&1 || true
+  elif [ "$safe_to_trash" = true ]; then
+    echo "Acceptance failed; preserved owner-only diagnostics at $work_dir" >&2
+  else
+    echo "An isolated acceptance service did not stop; preserved its data at $work_dir" >&2
+  fi
+}
+trap cleanup EXIT INT TERM
+
+free_port() {
+  "$node_executable" -e "const server=require('node:net').createServer();server.listen(0,'127.0.0.1',()=>{process.stdout.write(String(server.address().port));server.close()})"
+}
+
+postgres_port=$(free_port)
+web_port=$(free_port)
+while [ "$web_port" = "$postgres_port" ]; do web_port=$(free_port); done
+chain_fixture_port=$(free_port)
+while [ "$chain_fixture_port" = "$postgres_port" ] || [ "$chain_fixture_port" = "$web_port" ]; do
+  chain_fixture_port=$(free_port)
+done
+"$postgres_bin/initdb" -D "$work_dir/postgres" --auth=trust --no-locale --encoding=UTF8 >/dev/null
+postgres_started=true
+"$postgres_bin/pg_ctl" -D "$work_dir/postgres" \
+  -o "-h 127.0.0.1 -p $postgres_port -k $work_dir" \
+  -l "$work_dir/postgres.log" start >/dev/null
+
+export NODE_ENV=production
+export NEXT_TELEMETRY_DISABLED=1
+export DATABASE_URL="postgresql://$(id -un)@127.0.0.1:${postgres_port}/postgres"
+export WEBAUTHN_RP_ID=localhost
+export WEBAUTHN_ORIGIN="http://localhost:${web_port}"
+export APP_ORIGIN="$WEBAUTHN_ORIGIN"
+export CHAIN_OBSERVATION_ORIGINS=https://chain.example
+export BITCOIN_BACKEND=core
+unset BITCOIN_ESPLORA_URL
+export BITCOIN_RPC_URL="http://127.0.0.1:${chain_fixture_port}"
+export BROWSER_CHAIN_FIXTURE_PORT="$chain_fixture_port"
+export VAULT_CONFIRMATIONS_REQUIRED=1
+export VAULT_DEPOSIT_SATS=10000
+export PRIVATE_BETA_MAX_DEPOSIT_SATS=10000
+export VAULT_FUNDING_FEE_SATS=600
+export VAULT_SOLO_FEE_SATS=300
+export VAULT_SOLO_FEE_BUDGET_SATS=2000
+export VAULT_COOP_FEE_SATS=300
+export VAULT_RECOVERY_FEE_SATS=500
+export VAULT_FINAL_SWEEP_FEE_SATS=300
+export RECOVERY_DELAY_BLOCKS=144
+export BROWSER_TEST_BASE_URL="$WEBAUTHN_ORIGIN"
+
+npm run web:migrate >/dev/null
+if [ "$container_acceptance" = true ]; then
+  container_name="btc-vault-container-acceptance-$$"
+  "$container_engine" build --pull --tag "$container_image_tag" .
+  container_image_id=$("$container_engine" image inspect --format '{{.Id}}' "$container_image_tag")
+  if [[ ! "$container_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo 'Container engine returned an invalid local image ID' >&2
+    exit 1
+  fi
+  "$container_engine" run --rm --network none --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,size=16m --entrypoint node \
+    "$container_image_tag" scripts/check-operator-runtime.mjs
+  "$container_engine" run --rm --name "$container_name" --network host \
+    --env NODE_ENV --env NEXT_TELEMETRY_DISABLED \
+    --env DATABASE_URL --env WEBAUTHN_RP_ID --env WEBAUTHN_ORIGIN --env APP_ORIGIN \
+    --env CHAIN_OBSERVATION_ORIGINS --env BITCOIN_BACKEND --env BITCOIN_RPC_URL \
+    --env VAULT_CONFIRMATIONS_REQUIRED --env VAULT_DEPOSIT_SATS \
+    --env PRIVATE_BETA_MAX_DEPOSIT_SATS --env VAULT_FUNDING_FEE_SATS \
+    --env VAULT_SOLO_FEE_SATS --env VAULT_SOLO_FEE_BUDGET_SATS \
+    --env VAULT_COOP_FEE_SATS --env VAULT_RECOVERY_FEE_SATS \
+    --env VAULT_FINAL_SWEEP_FEE_SATS --env RECOVERY_DELAY_BLOCKS \
+    --env "HOSTNAME=127.0.0.1" --env "PORT=$web_port" \
+    "$container_image_tag" >"$work_dir/web.log" 2>&1 &
+  container_started=true
+else
+  npm run web:build
+  mkdir -p .next/standalone/.next/static
+  cp -a .next/static/. .next/standalone/.next/static/
+
+  HOSTNAME=127.0.0.1 PORT="$web_port" \
+    "$node_executable" .next/standalone/server.js >"$work_dir/web.log" 2>&1 &
+fi
+web_pid=$!
+web_started=true
+
+ready=false
+for _attempt in $(seq 1 120); do
+  if curl --fail --silent --output /dev/null "$WEBAUTHN_ORIGIN/api/health/ready"; then
+    ready=true
+    break
+  fi
+  if ! kill -0 "$web_pid" >/dev/null 2>&1; then
+    sed -n '1,240p' "$work_dir/web.log" >&2
+    exit 1
+  fi
+  sleep 0.5
+done
+if [ "$ready" != true ]; then
+  sed -n '1,240p' "$work_dir/web.log" >&2
+  exit 1
+fi
+
+npx playwright test \
+  web/browser-tests/passkey-prf.spec.ts \
+  web/browser-tests/cooperative-musig2.spec.ts \
+  web/browser-tests/recovery-final-sweep.spec.ts \
+  web/browser-tests/funding-wallet.spec.ts
+
+acceptance_passed=true
+if [ "$container_acceptance" = true ]; then
+  printf 'Local container image %s (%s), PostgreSQL %s, and all browser acceptance checks passed.\n' \
+    "$container_image_tag" "$container_image_id" \
+    "$("$postgres_bin/postgres" --version | awk '{print $3}')"
+else
+  printf 'Optimized standalone bundle, PostgreSQL %s, and all browser acceptance checks passed.\n' \
+    "$("$postgres_bin/postgres" --version | awk '{print $3}')"
+fi

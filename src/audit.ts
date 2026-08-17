@@ -1,4 +1,4 @@
-import { AMOUNTS, PARTICIPANTS, POLICY_FLOORS, RECOVERY_DELAY_BLOCKS, SOLO_FEE_BUDGET_SATS } from './config.js';
+import { NETWORK, PARTICIPANTS, vaultPolicyFloors } from './config.js';
 import { policyId, roundId, verifyNoSigbashInKeyPath } from './vault.js';
 import type { SoloPolicy, VaultState } from './types.js';
 
@@ -23,12 +23,16 @@ export function auditSpecState(state: VaultState): AuditReport {
         PARTICIPANTS.map((participant) => participant.id),
       ),
     ),
-    check('deposit amount is 1 BTC', AMOUNTS.deposit === 100_000_000),
-    check('first withdrawal amount is 0.95 BTC', AMOUNTS.firstWithdrawal === 95_000_000),
-    check('second withdrawal amount is 1.025 BTC', AMOUNTS.secondWithdrawal === 102_500_000),
-    check('configured payout schedule sums to 3 BTC', payoutScheduleTotal() === 300_000_000),
+    check('participant deposit is above the tiny-mainnet floor', state.economics.depositSatsPerParticipant >= 10_000),
+    check('first withdrawal is the committed haircut amount', state.economics.firstWithdrawalSats < state.economics.depositSatsPerParticipant),
+    check('second withdrawal is the committed bonus amount', state.economics.secondWithdrawalSats > state.economics.depositSatsPerParticipant),
+    check(
+      'configured payout schedule conserves exactly three deposits',
+      payoutScheduleTotal(state) === state.economics.depositSatsPerParticipant * 3,
+    ),
     check('precomputed vault tree has 1 round-one and 3 round-two vaults', state.vaults.size === 4),
-    check('all vault addresses are signet taproot addresses', allVaultAddressesAreSignetTaproot(state)),
+    check('all payout and vault addresses are mainnet taproot addresses', allAddressesAreMainnetTaproot(state)),
+    check('all solo policies and destination conditions declare mainnet', allPoliciesAreMainnet(state)),
     check('all vault scriptPubKeys are v1 P2TR outputs', allVaultScriptsAreP2tr(state)),
     check('all cooperative key-paths exclude Sigbash keys', allKeyPathsExcludeSigbash(state)),
     check('all cooperative key-paths use standard BIP-327 KeyAgg', allKeyPathsUseBip327(state)),
@@ -37,12 +41,20 @@ export function auditSpecState(state: VaultState): AuditReport {
     check('one immutable Sigbash policy exists per (round, leaver)', state.policies.size === 9),
     check('no policy is an OR across rounds', noOrPolicies(state)),
     check('Sigbash leaf keys are unique per (participant, round)', leafKeysAreRoundScoped(state)),
+    check(
+      'every participant/round pairs a policy-spend leaf with a distinct identification leaf',
+      dualLeavesArePairedAndDistinct(state),
+    ),
+    check(
+      'identification leaf keys never satisfy any policy REQKEY',
+      identificationKeysNeverSatisfyReqkey(state),
+    ),
     check('all solo policies pin exactly two outputs', allBranchesPinOutputCount(state)),
     check('all solo policies pin exactly one input', allBranchesPinInputCount(state)),
     check('all solo policies pin the round leaf key via REQKEY', allBranchesRequireLeafKey(state)),
     check('round-one policies pin leftover to round-two vaults', roundOneLeftoversAreRevaulted(state)),
     check('round-two policies pin leftover to final participant payout address', roundTwoLeftoversGoToLastParticipant(state)),
-    check('leftover floors bound the fee burn to the configured budget', leftoverFloorsBoundFeeBurn()),
+    check('leftover floors bound the fee burn to the configured budget', leftoverFloorsBoundFeeBurn(state)),
   ];
   return {
     passed: checks.every((item) => item.ok),
@@ -54,12 +66,25 @@ function check(name: string, ok: boolean, details?: unknown): AuditCheck {
   return { name, ok, ...(details === undefined ? {} : { details }) };
 }
 
-function payoutScheduleTotal(): number {
-  return AMOUNTS.firstWithdrawal + AMOUNTS.secondWithdrawal + AMOUNTS.secondWithdrawal;
+function payoutScheduleTotal(state: VaultState): number {
+  return state.economics.firstWithdrawalSats + state.economics.secondWithdrawalSats * 2;
 }
 
-function allVaultAddressesAreSignetTaproot(state: VaultState): boolean {
-  return [...state.vaults.values()].every((vault) => vault.address.startsWith('tb1p'));
+function allAddressesAreMainnetTaproot(state: VaultState): boolean {
+  return (
+    state.participants.every((participant) => participant.payoutAddress.startsWith('bc1p')) &&
+    [...state.vaults.values()].every((vault) => vault.address.startsWith('bc1p'))
+  );
+}
+
+function allPoliciesAreMainnet(state: VaultState): boolean {
+  return [...state.policies.values()].every(
+    (policy) =>
+      policy.network === NETWORK &&
+      policy.conditions
+        .filter((condition) => condition.type === 'OUTPUT_DEST_IS_IN_SETS')
+        .every((condition) => condition.network === NETWORK),
+  );
 }
 
 function allVaultScriptsAreP2tr(state: VaultState): boolean {
@@ -87,7 +112,8 @@ function allVaultsHaveRecoveryLeaf(state: VaultState): boolean {
   return [...state.vaults.values()].every((vault) =>
     vault.tapscriptLeaves.some(
       (leaf) =>
-        leaf.type === 'timelocked-recovery' && leaf.relativeBlocks === RECOVERY_DELAY_BLOCKS,
+        leaf.type === 'timelocked-recovery' &&
+        leaf.relativeBlocks === state.economics.recoveryDelayBlocks,
     ),
   );
 }
@@ -112,8 +138,12 @@ function leafKeysAreRoundScoped(state: VaultState): boolean {
   const seen = new Set<string>();
   for (const participant of state.participants) {
     for (const [round, key] of Object.entries(participant.sigbashByRound)) {
+      // Policy and identification keys share one uniqueness universe: no key
+      // may appear twice in any role, in any round.
       if (seen.has(key.xonlyPubKeyHex)) return false;
       seen.add(key.xonlyPubKeyHex);
+      if (seen.has(key.identificationXonlyPubKeyHex)) return false;
+      seen.add(key.identificationXonlyPubKeyHex);
       const vault = state.vaults.get(round);
       const leaf = vault?.tapscriptLeaves.find(
         (item) => item.type === 'solo-withdrawal' && item.participantId === participant.id,
@@ -127,6 +157,58 @@ function leafKeysAreRoundScoped(state: VaultState): boolean {
     }
   }
   return true;
+}
+
+// Each participant in each round vault has exactly one policy-spend leaf and
+// exactly one identification leaf, with distinct scripts/keys, and both match
+// that participant's round key material. The `role` fields must be present so
+// callers can never confuse the two.
+function dualLeavesArePairedAndDistinct(state: VaultState): boolean {
+  for (const vault of state.vaults.values()) {
+    for (const participantId of vault.participantIds) {
+      const participant = state.participants.find((item) => item.id === participantId);
+      const roundKey = participant?.sigbashByRound[vault.id];
+      if (!roundKey) return false;
+      const policyLeaves = vault.tapscriptLeaves.filter(
+        (item) => item.type === 'solo-withdrawal' && item.participantId === participantId,
+      );
+      const identificationLeaves = vault.tapscriptLeaves.filter(
+        (item) => item.type === 'sigbash-identification' && item.participantId === participantId,
+      );
+      if (policyLeaves.length !== 1 || identificationLeaves.length !== 1) return false;
+      const policyLeaf = policyLeaves[0]!;
+      const identificationLeaf = identificationLeaves[0]!;
+      if (policyLeaf.type !== 'solo-withdrawal') return false;
+      if (identificationLeaf.type !== 'sigbash-identification') return false;
+      if (policyLeaf.role !== 'policy-spend') return false;
+      if (identificationLeaf.role !== 'identification-only') return false;
+      if (policyLeaf.sigbashXonlyPubkey !== roundKey.xonlyPubKeyHex) return false;
+      if (identificationLeaf.internalRootXonlyPubkey !== roundKey.identificationXonlyPubKeyHex) {
+        return false;
+      }
+      if (identificationLeaf.scriptHex === policyLeaf.scriptHex) return false;
+      if (identificationLeaf.internalRootXonlyPubkey === policyLeaf.sigbashXonlyPubkey) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+// No REQKEY anywhere may reference an identification-leaf key: the
+// identification leaf must carry zero policy authority.
+function identificationKeysNeverSatisfyReqkey(state: VaultState): boolean {
+  const identificationKeys = new Set(
+    state.participants.flatMap((participant) =>
+      Object.values(participant.sigbashByRound).map((key) => key.identificationXonlyPubKeyHex),
+    ),
+  );
+  return [...state.policies.values()].every((policy) =>
+    policy.conditions.every(
+      (condition) =>
+        condition.type !== 'REQKEY' || !identificationKeys.has(condition.local_key_identifier),
+    ),
+  );
 }
 
 function allBranchesPinOutputCount(state: VaultState): boolean {
@@ -202,13 +284,15 @@ function pinsOutputOneAddress(policy: SoloPolicy | undefined, address: string): 
   );
 }
 
-function leftoverFloorsBoundFeeBurn(): boolean {
-  const potAfterFirst = 300_000_000 - AMOUNTS.firstWithdrawal;
-  const worstRoundTwoPot = POLICY_FLOORS.roundOneLeftover;
+function leftoverFloorsBoundFeeBurn(state: VaultState): boolean {
+  const policyFloors = vaultPolicyFloors(state.economics);
+  const potAfterFirst = state.economics.depositSatsPerParticipant * 3 -
+    state.economics.firstWithdrawalSats;
+  const worstRoundTwoPot = policyFloors.roundOneLeftover;
   return (
-    potAfterFirst - POLICY_FLOORS.roundOneLeftover === SOLO_FEE_BUDGET_SATS &&
-    worstRoundTwoPot - AMOUNTS.secondWithdrawal - POLICY_FLOORS.roundTwoLeftover ===
-      SOLO_FEE_BUDGET_SATS
+    potAfterFirst - policyFloors.roundOneLeftover === state.economics.soloFeeBudgetSats &&
+    worstRoundTwoPot - state.economics.secondWithdrawalSats - policyFloors.roundTwoLeftover ===
+      state.economics.soloFeeBudgetSats
   );
 }
 
