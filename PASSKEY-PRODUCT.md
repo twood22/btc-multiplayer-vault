@@ -1,5 +1,8 @@
 # Passkey product status
 
+The concise current verdict, verified baseline, open risks, and ordered hard
+gates are maintained in [`STATUS.md`](./STATUS.md).
+
 This is the user-facing layer for the existing Bitcoin multiplayer vault. It
 does not replace the round-based game, the Sigbash solo-withdrawal path, the
 participant-only MuSig2 path, or the timelocked recovery path.
@@ -261,8 +264,12 @@ deployment evidence.
 
 The manual-only `Exact container acceptance` workflow provides the same gate
 on an engine-enabled Ubuntu runner without publishing or deploying the image.
-It is prepared release infrastructure, not evidence until it passes for the
-exact reviewed commit.
+It passed for merged commit `5dde338` in
+[run 32064526120](https://github.com/twood22/btc-multiplayer-vault/actions/runs/32064526120),
+including the six isolated browser scenarios and packaged operator probe. Its
+reported local image ID is acceptance evidence only; it is not a published
+registry manifest digest, deployment evidence, live-service proof, or funding
+authorization.
 
 `web:release-status` is the post-deployment funding audit and prints only
 non-secret gate summaries plus a non-authorizing `statusDigest`. It verifies the

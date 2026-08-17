@@ -10,8 +10,9 @@ with Sigbash completely uninvolved.
 
 The passkey-backed user product is being built without changing those vault
 semantics. Its current implementation and hard deployment gates are documented
-in [`PASSKEY-PRODUCT.md`](./PASSKEY-PRODUCT.md). It is not yet approved for
-funding or deployment. The reviewed container and operator topology are in
+in [`STATUS.md`](./STATUS.md) and [`PASSKEY-PRODUCT.md`](./PASSKEY-PRODUCT.md).
+It is ready to share with Sigbash for integration review, but is not approved
+for funding or deployment. The reviewed container and operator topology are in
 [`DEPLOYMENT.md`](./DEPLOYMENT.md); those artifacts prepare the real service
 but do not relax the live Sigbash gate.
 
@@ -30,14 +31,14 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Timelocked recovery (N−1 multi_a) | ✅ consensus + distributed passkey-browser verified |
 | Final sweep | ✅ consensus + owner-only passkey-browser verified |
 | Mainnet address, PSBT, policy, RPC, and explorer configuration | ✅ offline suite; real Core run still required |
-| Sigbash policy enforcement + tamper rejection | ✅ historical signet evidence; mainnet unproven |
+| Sigbash policy enforcement + tamper rejection | ⚠️ historical signet evidence; browser registration provenance is not independently attested; mainnet unproven |
 | Sigbash co-signing a live mainnet withdrawal | ⛔ browser proof gate implemented; external execution not proven |
 | Per-participant key custody | ✅ browser-distributed and passkey protected |
 | Recoverable passkey custody + encrypted Sigbash credentials/kits | ✅ implemented; real authenticator run still required |
 | Browser PRF setup/recovery/sign-in/unlock | ✅ Chromium + two virtual authenticators; physical devices still required |
-| Optimized standalone user-facing bundle | ✅ passkey + cooperative/recovery/final-sweep/three-wallet-funding Chromium gate; exact container image still requires digest review |
-| Packaged private operator runtime | ✅ non-mutating fail-closed probe; exact image execution requires a container engine |
-| Engine-enabled exact-image CI gate | ✅ manual-only pinned workflow prepared; not yet executed for this commit |
+| Optimized standalone user-facing bundle | ✅ passkey + cooperative/recovery/final-sweep/three-wallet-funding Chromium gate; deployed registry digest still required |
+| Packaged private operator runtime | ✅ non-mutating fail-closed probe passed in the exact local image |
+| Engine-enabled exact-image CI gate | ✅ passed for merged commit `5dde338`; local image evidence only, not deployment |
 | Immediate session revocation and vault-tab cleanup | ✅ browser + PostgreSQL verified |
 | Immutable three-passkey roster gate | ✅ implemented; PostgreSQL 16 migrations verified, real authenticator run still required |
 | User-facing solo/cooperative/recovery/final signing | ✅ implemented and server re-authorized |
@@ -77,8 +78,11 @@ the same policy constraints the live Sigbash server would enforce.
 
 ## Architecture
 
-**One vault UTXO per round.** Round one is `{Alice,Bob,Carol}` holding 3 BTC;
-the three possible round-two vaults hold the ~2.05 BTC leftover. A solo
+**One vault UTXO per round.** In the illustrative 1-BTC-per-player schedule,
+round one is `{Alice,Bob,Carol}` holding 3 BTC and the three possible round-two
+vaults hold the ~2.05 BTC leftover. The private pilot amount is intentionally
+undecided and must be much smaller, while preserving the same configured
+proportions. A solo
 withdrawal spends the entire current vault UTXO into exactly two outputs:
 the leaver's pinned payout (index 0) and the next round's vault (index 1).
 Ordering needs no counter — the second transaction for the same round is a
@@ -90,9 +94,12 @@ double-spend.
   personal keys (validated against the official BIP-327 test vectors). No
   Sigbash key is ever in the key path; the cooperative exit works with
   Sigbash offline or hostile.
-- *One tapscript leaf per participant*: `pk(<that participant's Sigbash key
-  for this round>)`. The Sigbash key is a 2-of-2 (browser share + server
-  share); the server half only signs transactions satisfying the policy.
+- *Two distinct Sigbash-related tapscript leaves per participant*: a
+  `pk(child 0/0)` policy-spend leaf and a bare `pk(internal root)`
+  identification leaf required by the historically observed SDK/service input
+  recognition behavior. The local product authorizes only the policy leaf.
+  Whether the provider subjects every signing path for the identification root
+  to the same policy is an explicit pre-funding question.
 - *One timelocked recovery leaf*: `older(RECOVERY_DELAY_BLOCKS)` +
   `multi_a(N-1, personal keys)` so a vanished participant cannot freeze the
   vault forever.
@@ -354,13 +361,13 @@ input scriptPubKey, so you only pass `--participant`.
    command and receipt retain only the explicit public signing-result fields;
    unexpected provider-response fields are discarded.
 
-   *Leaf-key assumption:* the tapscript leaf key is derived from each key's
+   *Leaf-key contract:* the tapscript leaf key is derived from each key's
    BIP-328 xpub at child path 0/0, matching the SDK's documented
    `tr(SIGBASH_XPUB/0/*)` multisig convention. The descriptor-mode `REQKEY`
-   in every policy makes Sigbash verify this itself at signing time; if a
-   live `verifyPSBT` fails only on REQKEY, swap `SIGBASH_LEAF_KEYS_JSON` to
-   the `tweakedAggregate` candidates printed by setup and re-run setup once
-   more so the vault addresses match.
+   in every policy makes Sigbash verify this itself at signing time. If a live
+   `verifyPSBT` fails on `REQKEY`, stop and confirm the mainnet derivation
+   contract with Sigbash. Do not substitute another candidate or rebuild the
+   vault around an unverified assumption.
 
 4. **Only after all nine browser readiness proofs pass and a separate funding
    approval is given, fund round one** with the exact configured output. The
@@ -502,3 +509,14 @@ input scriptPubKey, so you only pass `--participant`.
   remain env-overridable (`VAULT_DEPOSIT_SATS`, `VAULT_*_FEE_SATS`). A real
   Core acceptance run, deliberately tiny amount profile, reviewed recovery
   delay, unanimous roster, and live Sigbash signature remain mandatory.
+- **Browser Sigbash registration is not provider-attested.** The coordinator
+  verifies the submitted xpub, derived leaves, index, and policies for internal
+  consistency, but it cannot currently prove to the other participants that
+  Sigbash issued the key or committed the claimed policy. Until Sigbash provides
+  a verifiable attestation or a trusted read-only verification path is added, a
+  dishonest participant could register a self-controlled leaf and bypass the
+  game policy outside this application. This is a hard pre-funding blocker.
+- **Exit fees are committed and not dynamically bumpable.** Choose them for a
+  long-lived mainnet vault only after adding a participant-approved fee-bump or
+  explicitly tested CPFP/RBF procedure; the small-deposit defaults are not a
+  production fee market strategy.

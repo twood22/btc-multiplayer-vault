@@ -125,6 +125,13 @@ private keys.
 ## 6. Roster and funding ceremony
 
 The publishable roster requires all nine live, mainnet Sigbash registrations.
+Registration data supplied by a participant's browser is not, by itself,
+evidence that Sigbash issued the key or bound the canonical policy. Before
+funding, every registration must carry a Sigbash-verifiable attestation binding
+the organization, key identifier/index, BIP-328 xpub, policy root, and compiled
+policy, or be independently checked through an explicitly trusted read-only
+provider path. A locally valid signature under a submitted leaf proves key
+possession but does not prove provider provenance.
 All participants independently reproduce and passkey-confirm the same public
 artifact, economics, policies, payout addresses, and vault commitments. The
 round-one funding address remains hidden until confirmation is unanimous.
@@ -193,6 +200,10 @@ unfunded placeholder mainnet outpoint. It must demonstrate:
 - `signPSBT` returns a real signature artifact; and
 - the local authorizer proves that artifact is the exact requested
   policy-leaf transaction and passes consensus validation.
+
+The proof does not replace registration provenance. Sigbash must also confirm
+whether every signing route for the identification root/aggregate leaf is
+subject to the same canonical policy as the child-`0/0` policy leaf.
 
 The command writes a fresh owner-only proof receipt that binds the request,
 artifacts, authorization, hostile checks, final txid, and canonical digest.

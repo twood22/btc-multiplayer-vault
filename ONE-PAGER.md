@@ -2,18 +2,22 @@
 
 ## What it is
 
-A 3-player Bitcoin savings game whose product code is pinned to mainnet. Alice, Bob, and Carol each lock
-1 BTC into a shared vault that rewards patience: anyone can leave at any
-time, but the **first** to withdraw takes a haircut (**0.95 BTC**), the
-**second** gets a bonus (**1.025 BTC**), and the **last** sweeps the remainder
-(**~1.025 BTC**). If everyone agrees, a cooperative exit refunds all deposits
+A 3-player Bitcoin savings game whose product code is pinned to mainnet. In the
+illustrative schedule, Alice, Bob, and Carol each lock 1 BTC into a shared vault
+that rewards patience: anyone can leave at any time, but the **first** to
+withdraw takes a haircut (**0.95 BTC**), the **second** gets a bonus
+(**1.025 BTC**), and the **last** sweeps the remainder (**~1.025 BTC**). The
+private pilot must use a separately approved, deliberately tiny amount while
+preserving those configured proportions. If everyone agrees, a cooperative
+exit refunds all deposits
 in full — with no third party involved. The payout schedule is enforced by
 **Sigbash**, a policy co-signer that holds half of a 2-of-2 signing key and
 refuses to sign any withdrawal that breaks the rules.
 
 ## How it works
 
-Each round of the game is **one Taproot UTXO**. Round one holds 3 BTC; a solo
+Each round of the game is **one Taproot UTXO**. In that illustrative schedule,
+round one holds 3 BTC; a solo
 withdrawal spends it entirely into exactly two outputs — the leaver's pinned
 payout, and the leftover re-vaulted into the next round's (smaller) vault for
 the remaining players. Ordering needs no coordinator: two people trying to
@@ -26,7 +30,8 @@ Every vault output has three kinds of spending paths:
 | Path | Who | Enforced by |
 |---|---|---|
 | **Key path** — MuSig2 (BIP-327) of all current players' personal keys | everyone together | Bitcoin consensus only |
-| **One tapscript leaf per player** — that player's 2-of-2 Sigbash key | one player + Sigbash | Sigbash policy |
+| **Policy leaf per player** — that player's child-`0/0` Sigbash key | one player + Sigbash | Sigbash policy |
+| **Identification leaf per player** — the key's distinct internal root required by the observed service contract | one player + Sigbash | provider contract; locally rejected for product spends |
 | **Recovery leaf** — `older(T)` timelock + (N−1)-of-N personal keys | remaining players after a delay | Bitcoin consensus only |
 
 Each Sigbash key's policy pins everything: exact payout amount and address at
@@ -61,16 +66,18 @@ input boundary. Key design decisions:
 
 ## Security model
 
-**Sigbash is trusted for fairness, never for custody.** A hostile or offline
-Sigbash can only grief (refuse to co-sign solo withdrawals); it can never
-move or freeze funds, because the cooperative key path and the recovery leaf
-contain no Sigbash key. This separation is the product's core invariant and
-is checked by the audit suite.
+**Sigbash is trusted for policy fairness, but is not in the cooperative key
+path.** Sigbash alone cannot move funds. A cooperative exit remains available
+without it, and the delayed recovery leaf contains only participant keys. A
+participant cooperating with a provider that violates its policy contract can
+break fairness through a Sigbash leaf; this provider-contract risk is distinct
+from Sigbash having unilateral custody.
 
 **What each party can and cannot do:**
 
-- *One player alone*: can take exactly their round's scheduled payout to
-  their own registered address — nothing more, nothing else, nowhere else.
+- *One player alone, before the recovery delay, with an honestly provisioned
+  and independently verified Sigbash registration*: can take exactly their
+  round's scheduled payout to their own registered address.
 - *All players together*: full refund anytime, no Sigbash needed.
 - *N−1 players after the timelock*: can recover a stuck vault (the escape
   hatch if someone vanishes).
@@ -95,3 +102,12 @@ is checked by the audit suite.
    live Sigbash mainnet signing, Core acceptance, a reviewed recovery delay,
    roster unanimity, real passkeys/Postgres, and deliberately tiny funding are
    still hard gates.
+6. **Sigbash key provenance is not yet independently attested.** The browser
+   currently supplies the coordinator with its key/xpub/policy registration.
+   Internal consistency checks and a valid policy-leaf signature do not prove
+   that Sigbash issued the key or enforces the claimed policy. Provider-signed
+   attestation or a trusted read-only verification path is required before
+   funding.
+7. **Fees are fixed for the life of the roster.** The current proposal flow has
+   no participant-approved RBF/fee-bump control; this must be resolved or given
+   an explicit tested operating procedure before a long-lived mainnet vault.

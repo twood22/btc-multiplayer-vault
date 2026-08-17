@@ -3,7 +3,8 @@
 > Historical review record: the external service evidence below was collected
 > on signet. The current code is mainnet-only, but no live Sigbash mainnet
 > signature or mainnet Bitcoin Core acceptance has been proven. Nothing in this
-> document overrides the current release gates in `PASSKEY-PRODUCT.md`.
+> document overrides the current verdict and release gates in `STATUS.md` and
+> `PASSKEY-PRODUCT.md`.
 
 Verdict: **solid scaffolding, not safe to fund.** The Codex build got the
 overall shape right — precomputed vault tree, taproot outputs with a
