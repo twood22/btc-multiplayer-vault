@@ -4,8 +4,10 @@ This runbook packages the real round-based Bitcoin multiplayer vault. It does
 not authorize deployment or funding. Do not deploy the service until an
 independent predeployment command has obtained and locally authorized a real
 Sigbash mainnet signature. All nine in-product readiness proofs remain a later
-funding gate. Funding is always a separate decision. See [`STATUS.md`](./STATUS.md)
-for the current reviewed baseline, evidence, open risks, and ordered roadmap.
+funding gate. Funding is always a separate decision. This is the future mainnet
+runbook; it is not the Signet validation runbook. See
+[`SIGNET-VALIDATION-PLAN.md`](./SIGNET-VALIDATION-PLAN.md) and
+[`STATUS.md`](./STATUS.md) for the current work order, evidence, and open risks.
 
 ## Runtime shape
 

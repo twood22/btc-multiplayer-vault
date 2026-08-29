@@ -1,13 +1,17 @@
-# Bitcoin Multiplayer Vault — Mainnet Product Specification
+# Bitcoin Multiplayer Vault — Product Specification
 
 This is the authoritative product contract. It supersedes the repository's
-original signet-demo brief. A deterministic offline harness may remain for
-testing, but it is never evidence that the product is deployable, fundable, or
-working with Sigbash mainnet.
+original signet-demo brief. The production product remains mainnet-only. A
+separately isolated default-global-Signet profile is now permitted for real
+pre-production Sigbash and on-chain validation, but it must preserve every
+mechanic below. Signet success is never evidence that the product is deployable
+or fundable on mainnet.
 
 ## 1. Non-negotiable scope
 
-- The product is mainnet-only and fixed to exactly three participants.
+- The production product is mainnet-only and fixed to exactly three
+  participants. The non-production Signet profile is a validation environment,
+  not a different product or completion substitute.
 - It implements the round-based haircut/bonus withdrawal game described below.
 - A solo withdrawal is enforced by the departing participant's round-scoped
   Sigbash key and policy.
@@ -18,8 +22,9 @@ working with Sigbash mainnet.
   not a custodian.
 - The product must never be replaced by a static 3-of-3 vault, an eventually
   degraded threshold vault, a mock, or a UI-only simulation.
-- No deployment, funding, or broadcast is allowed until a real Sigbash mainnet
-  signing result passes the local hostile-artifact and consensus verifier.
+- No mainnet deployment, funding, or broadcast is allowed until a real Sigbash
+  mainnet signing result passes the local hostile-artifact and consensus
+  verifier. Signet success cannot satisfy this gate.
 
 ## 2. Economic game and state transitions
 

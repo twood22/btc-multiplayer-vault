@@ -1,7 +1,10 @@
 # Passkey product status
 
 The concise current verdict, verified baseline, open risks, and ordered hard
-gates are maintained in [`STATUS.md`](./STATUS.md).
+gates are maintained in [`STATUS.md`](./STATUS.md). The next real integration
+milestone is the isolated standard-Signet profile in
+[`SIGNET-VALIDATION-PLAN.md`](./SIGNET-VALIDATION-PLAN.md); the mainnet gates
+below remain the later production standard and are not satisfied by Signet.
 
 This is the user-facing layer for the existing Bitcoin multiplayer vault. It
 does not replace the round-based game, the Sigbash solo-withdrawal path, the
@@ -295,6 +298,11 @@ deployment gate creates that receipt through the explicit
 `live-predeployment-proof` command described in `DEPLOYMENT.md`.
 
 ## Sequenced hard gates
+
+The immediate work order has moved to real standard-Signet validation because
+Sigbash mainnet SDK access is unavailable for the current experimental project.
+Complete the Signet plan first. The remaining section deliberately retains the
+stronger mainnet production gates for a later commercial decision.
 
 Before deployment, `live-predeployment-proof` must return a real Sigbash
 mainnet signature that the local consensus authorizer accepts. The preceding

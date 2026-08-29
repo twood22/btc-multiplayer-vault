@@ -1,7 +1,7 @@
 # Bitcoin Multiplayer Savings Vault
 
-A mainnet-only implementation of the round-based product now governed by the
-[authoritative product specification](./spec.md): Alice, Bob, and Carol each
+A mainnet-production-target implementation of the round-based product governed
+by the [authoritative product specification](./spec.md): Alice, Bob, and Carol each
 contribute the configured deposit to a shared Taproot vault. Solo withdrawals
 follow the original incentive proportions (first out takes a 5% haircut,
 later leavers get a bonus) enforced by a Sigbash policy co-signer; the
@@ -9,10 +9,13 @@ cooperative exit is a MuSig2 key-path spend of the participants' personal keys
 with Sigbash completely uninvolved.
 
 The passkey-backed user product is being built without changing those vault
-semantics. Its current implementation and hard deployment gates are documented
-in [`STATUS.md`](./STATUS.md) and [`PASSKEY-PRODUCT.md`](./PASSKEY-PRODUCT.md).
-It is ready to share with Sigbash for integration review, but is not approved
-for funding or deployment. The reviewed container and operator topology are in
+semantics. Sigbash declined experimental mainnet SDK enablement, so the next
+real integration target is the default global Bitcoin Signet; see
+[`SIGNET-VALIDATION-PLAN.md`](./SIGNET-VALIDATION-PLAN.md). The current code is
+still pinned to mainnet and must be safely parameterized before any Signet run.
+Its current status and hard gates are documented in [`STATUS.md`](./STATUS.md)
+and [`PASSKEY-PRODUCT.md`](./PASSKEY-PRODUCT.md). It is not approved for mainnet
+funding or deployment. The reviewed container and operator topology are in
 [`DEPLOYMENT.md`](./DEPLOYMENT.md); those artifacts prepare the real service
 but do not relax the live Sigbash gate.
 

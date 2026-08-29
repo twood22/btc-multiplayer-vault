@@ -1,26 +1,32 @@
 # Current project status
 
-Last updated: 2026-08-17
+Last updated: 2026-08-29
 Reviewed baseline: `5dde338eba32aea11f5208fbb720007fbd79fe32`
 
-This is the current operational status and roadmap for the real mainnet-only
-Bitcoin multiplayer vault described in [`spec.md`](./spec.md). Historical
+This is the current operational status and roadmap for the Bitcoin multiplayer
+vault described in [`spec.md`](./spec.md). The production target remains
+mainnet, while the next implementation and integration milestone is the default
+global Bitcoin Signet described in
+[`SIGNET-VALIDATION-PLAN.md`](./SIGNET-VALIDATION-PLAN.md). Historical
 findings remain in [`REVIEW.md`](./REVIEW.md), and detailed product and
 deployment gates remain in [`PASSKEY-PRODUCT.md`](./PASSKEY-PRODUCT.md) and
 [`DEPLOYMENT.md`](./DEPLOYMENT.md).
 
 ## Verdict
 
-**Ready to share with Sigbash for integration and security review, with the
-open findings below disclosed. Not ready to deploy, fund, or broadcast.**
+**The next milestone is a real end-to-end standard-Signet product validation.
+The current code is not yet Signet-capable and remains unready to deploy, fund,
+or broadcast on mainnet.**
 
 The repository implements the intended round-based game: Sigbash-enforced solo
 withdrawals, participant-only BIP-327 MuSig2 cooperative exits, distributed
 passkey-protected participant custody, timelocked recovery, final sweep, and
 three-wallet funding preparation. Remaining blockers include a critical
 Sigbash-registration provenance gap, in-repository safety work, and deliberately
-external operational proof. In particular, no live Sigbash mainnet signature
-has been obtained and no real mainnet transaction has been authorized. See the
+external operational proof. Sigbash declined mainnet SDK enablement for the
+current experimental project but permits SDK testing on Signet. No current
+standard-Signet end-to-end run or live Sigbash mainnet signature has been
+obtained, and no real mainnet transaction has been authorized. See the
 [`current code review`](./CODE-REVIEW-2026-08-17.md) for evidence and severity.
 
 ## Proven on this baseline
@@ -45,6 +51,12 @@ item, not evidence that the application ran under the wrong Node version.
 
 ## Explicitly unproven
 
+- A safely isolated standard-Signet application profile; the checked-in product
+  is still pinned to mainnet.
+- A complete real hosted-Sigbash signing flow on standard Signet, including the
+  historical server-side `signPSBT` failure.
+- Nine real Signet participant-and-round keys/proofs, three physical-passkey
+  identities, three real Signet wallets, and the complete on-chain state machine.
 - Sigbash mainnet enablement and one real, locally authorized mainnet signature.
 - The nine participant-and-round readiness proofs using three independently
   owned Sigbash organizations and physical passkeys.
@@ -91,13 +103,14 @@ a deliberately reviewed mainnet delay before any funds are approved.
 
 ## Questions for Sigbash
 
-1. Can three participant-owned organizations be enabled for mainnet, with each
-   participant creating the three immutable round-scoped keys they control?
+1. May the three participant-owned organizations each create their three
+   immutable round-scoped keys on the default global Bitcoin Signet under the
+   free SDK testing policy?
 2. Can Sigbash provide a server-verifiable attestation binding organization,
    key ID/index, BIP-328 xpub, policy root, and the canonical compiled policy?
    If `policyRoot` is deterministic, how should an independent verifier
    recompute it?
-3. Does the current mainnet service support the SDK contract used here,
+3. Does the current Signet service support the SDK contract used here,
    including immutable `REQKEY`, output destination/value constraints,
    input/output counts, recovery-kit export, and the expected rate limits?
 4. Please confirm that descriptor `tr(SIGBASH_XPUB/0/*)` identifies the
@@ -108,36 +121,35 @@ a deliberately reviewed mainnet delay before any funds are approved.
    the same canonical policy, even though it is a separate bare Taproot leaf?
 6. What service-side evidence can Sigbash provide for policy rejection,
    nullifier consumption, key/network identity, and signed-response fields?
-7. Are there mainnet-specific operational, fee, or abuse limits that should be
-   reflected in the private three-person pilot?
+7. What Signet rate, key-count, nullifier, and retention limits should the
+   nine-key three-person validation respect?
 
 ## Roadmap and hard gates
 
 These are sequential gates, not a deployment schedule:
 
-1. **Sigbash integration review:** share this repository, the
-   [`current code review`](./CODE-REVIEW-2026-08-17.md), and the questions above;
-   enable only the isolated proof organization; confirm mainnet SDK, attestation,
-   policy-root, and both leaf-key behaviors.
+1. **Network boundary:** implement the isolated default-global-Signet profile
+   in [`SIGNET-VALIDATION-PLAN.md`](./SIGNET-VALIDATION-PLAN.md) without changing
+   the round game or weakening the existing mainnet gates.
 2. **In-repository safety pass:** close the verified provenance, recovery-bound,
    fee-handling, stale-observation, funding-signature, and final-sweep findings;
    add focused regression tests and repeat the independent review.
-3. **Predeployment proof:** run the unfunded live setup/proof flow, back up the
-   generated recovery kits, and have a human review the owner-only receipt and
-   consensus evidence. Never fund its helper address.
-4. **Private deployment:** publish the reviewed image, record and independently
-   verify its registry manifest digest, configure HTTPS/RP/database/Core
-   boundaries, and prove backup restoration.
-5. **Three-person drills:** use two physical passkeys per participant, three
-   separately controlled Sigbash organizations, all nine live keys/proofs, real
-   wallets, and real-browser solo/cooperative/recovery/final-sweep exercises
-   while the vault remains unfunded.
-6. **Funding review:** choose a deliberately tiny amount cap and an appropriate
-   recovery delay; review the recovery collusion trade-off, fees, readiness
-   report, exact deployed digest, and final funding transaction with all three
-   participants.
-7. **Separate funding authorization:** only an explicit later decision may
-   authorize broadcasting the funding transaction. A subsequent spend or
-   broadcast remains a separate user and operator action.
+3. **Signet infrastructure and coins:** run isolated default-Signet Core,
+   Postgres, HTTPS/passkey, and independent observation boundaries; obtain a
+   small faucet coin and split it into three participant-controlled wallet UTXOs.
+4. **Real hosted-Sigbash proof:** create fresh Signet credentials and keys,
+   resolve the historical signing failure, prove allowed signing and hostile
+   rejection, and verify provider provenance as far as the service permits.
+5. **Complete Signet product run:** execute all nine readiness proofs, funding,
+   solo orderings, cooperative exits, recovery thresholds, final-owner flow,
+   confirmation, restart, outage, fee, and reorganization drills using the real
+   service and chain rather than fixtures.
+6. **Independent Signet release review:** require no open critical/high funding
+   issue and produce an explicitly non-mainnet report.
+7. **Later commercial/mainnet decision:** only a separate decision may begin a
+   new mainnet-scoped deployment and tiny-funding review. Every mainnet gate and
+   explicit authorization remains required.
 
-Until every applicable gate passes, the correct state remains **unfunded**.
+Until the Signet network boundary and safety gates pass, do not acquire or use
+even Signet coins in the product flow. Mainnet remains **unfunded** unless a
+later commercial and funding decision explicitly changes that state.

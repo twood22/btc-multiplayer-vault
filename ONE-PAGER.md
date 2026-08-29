@@ -98,10 +98,12 @@ from Sigbash having unilateral custody.
    only an offline fixture and live commands refuse it.
 4. **Fee-burn bound.** A malicious leaver can overpay fees by at most 10,000
    sats per withdrawal — bounded by policy, not goodwill.
-5. **Mainnet is not the same as mainnet-ready.** The code is mainnet-only, but
-   live Sigbash mainnet signing, Core acceptance, a reviewed recovery delay,
-   roster unanimity, real passkeys/Postgres, and deliberately tiny funding are
-   still hard gates.
+5. **Signet validation is not mainnet readiness.** The current code is still
+   mainnet-only; the next milestone is to add an isolated standard-Signet
+   profile and exercise the exact product with real Sigbash signing and Signet
+   coins. Mainnet SDK access, Core acceptance, a reviewed production recovery
+   delay, roster unanimity, real passkeys/Postgres, and deliberately tiny
+   mainnet funding remain separate later gates.
 6. **Sigbash key provenance is not yet independently attested.** The browser
    currently supplies the coordinator with its key/xpub/policy registration.
    Internal consistency checks and a valid policy-leaf signature do not prove
