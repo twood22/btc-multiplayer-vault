@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { getAuthHash } from '@sigbash/sdk';
+import { BITCOIN_NETWORK_CONFIG, BITCOIN_NETWORK_NAME } from '../../src/network.js';
 import { toBase64url } from '../lib/client/base64url';
 import {
   createEmptySigbashCustodyBundle,
@@ -31,7 +32,7 @@ await check('browser credentials match the exact Sigbash 32-byte hex shape', asy
   assert(credentials.apikeyHash === sdkHashes.apikeyHash, 'browser apikeyHash differs from the pinned SDK');
 });
 
-await check('participant secret encrypts and decrypts a mainnet Sigbash bundle', async () => {
+await check(`participant secret encrypts and decrypts a ${BITCOIN_NETWORK_CONFIG.addressLabel} Sigbash bundle`, async () => {
   const bundle = createEmptySigbashCustodyBundle('alice', await generateSigbashCredentials());
   const envelope = await encryptSigbashCustodyBundle(bundle, participantSecret, 1, aadOne);
   const decrypted = await decryptSigbashCustodyEnvelope(envelope, participantSecret);
@@ -64,7 +65,7 @@ await check('append-only recovery falls back from a corrupt newest revision', as
   assert(recovered?.revision === 1, 'did not recover last decryptable revision');
 });
 
-await check('recovery kit is bound to its key and mainnet', async () => {
+await check(`recovery kit is bound to its key and ${BITCOIN_NETWORK_CONFIG.addressLabel}`, async () => {
   const empty = createEmptySigbashCustodyBundle('alice', await generateSigbashCredentials());
   const withKey: SigbashCustodyBundle = {
     ...empty,
@@ -74,7 +75,7 @@ await check('recovery kit is bound to its key and mainnet', async () => {
       keyIndex: 0,
       policyId: 'alicebob:alice',
       policyRoot: 'ab'.repeat(32),
-      bip328Xpub: `xpub${'a'.repeat(108)}`,
+      bip328Xpub: `${BITCOIN_NETWORK_CONFIG.bip32PublicPrefix}${'a'.repeat(108)}`,
       poetJSON: { version: '1.1' },
       recoveryKit: {
         version: 'sdk-recovery-v1',
@@ -82,7 +83,7 @@ await check('recovery kit is bound to its key and mainnet', async () => {
         recoveryKEK: 'cd'.repeat(32),
         cekCiphertext: 'ef'.repeat(48),
         cekNonce: '01'.repeat(12),
-        network: 'mainnet',
+        network: BITCOIN_NETWORK_NAME,
         createdAt: 1,
       },
     }],

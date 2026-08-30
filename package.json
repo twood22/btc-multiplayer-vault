@@ -93,7 +93,10 @@
     "ceremony-aggregate": "tsx src/cli.ts ceremony-aggregate",
     "vault-keygen": "tsx src/cli.ts vault-keygen",
     "verify-roster": "tsx src/cli.ts verify-roster",
-    "network-acceptance": "tsx src/network-acceptance.ts"
+    "network-acceptance": "tsx src/network-acceptance.ts",
+    "network-acceptance:mainnet": "VAULT_NETWORK=mainnet NEXT_PUBLIC_VAULT_NETWORK=mainnet tsx src/network-acceptance.ts",
+    "network-acceptance:signet": "VAULT_NETWORK=signet NEXT_PUBLIC_VAULT_NETWORK=signet tsx src/network-acceptance.ts",
+    "network-acceptance:all": "npm run network-acceptance:mainnet && npm run network-acceptance:signet"
   },
   "engines": {
     "node": "22.23.2"
@@ -102,7 +105,7 @@
   "dependencies": {
     "@noble/curves": "^2.3.0",
     "@noble/hashes": "^2.3.0",
-    "@sigbash/sdk": "0.7.1",
+    "@sigbash/sdk": "^0.8.0",
     "@simplewebauthn/server": "^13.3.2",
     "bitcoinjs-lib": "^7.0.1",
     "buffer": "^6.0.3",

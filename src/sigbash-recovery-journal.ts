@@ -16,6 +16,8 @@ import type {
   SigbashRecoveryKit,
 } from './sigbash.js';
 import { fsyncDirectory } from './operator-environment.js';
+import { BITCOIN_NETWORK_NAME } from './network.js';
+import type { BitcoinNetworkName } from './types.js';
 
 const JOURNAL_VERSION = 'btc-multiplayer-vault-sigbash-recovery-v1' as const;
 const HEX_32_BYTES = /^[0-9a-f]{64}$/u;
@@ -34,7 +36,7 @@ export interface SigbashRecoveryRecord {
   round: string;
   keyId: string;
   keyIndex: number;
-  network: 'mainnet';
+  network: BitcoinNetworkName;
   recoveryKit: SigbashRecoveryKit;
 }
 
@@ -167,15 +169,17 @@ function validateSigbashRecoveryRecord(input: unknown): SigbashRecoveryRecord {
       String(input.keyIndex) !== input.keyId) {
     throw new Error('Sigbash recovery journal keyId and keyIndex do not match');
   }
-  if (input.network !== 'mainnet') throw new Error('Sigbash recovery journal is not mainnet');
-  const kit = validateRecoveryKit(input.recoveryKit, input.keyId, input.network);
+  if (input.network !== BITCOIN_NETWORK_NAME) {
+    throw new Error(`Sigbash recovery journal is not ${BITCOIN_NETWORK_NAME}`);
+  }
+  const kit = validateRecoveryKit(input.recoveryKit, input.keyId, BITCOIN_NETWORK_NAME);
   return {
     version: JOURNAL_VERSION,
     participantId: input.participantId,
     round: input.round,
     keyId: input.keyId,
     keyIndex: input.keyIndex,
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     recoveryKit: kit,
   };
 }

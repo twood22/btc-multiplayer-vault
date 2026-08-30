@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import * as bitcoin from 'bitcoinjs-lib';
 import postgres from 'postgres';
+import { BITCOIN_NETWORK_NAME } from '../../src/network.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error('DATABASE_URL is required for funding database acceptance');
@@ -142,7 +143,7 @@ try {
     const reason = 'Alice selected an input that was spent before broadcast.';
     const snapshot = {
       version: 1,
-      network: 'mainnet',
+      network: BITCOIN_NETWORK_NAME,
       vaultId,
       rosterDigest: rosterDigest.toString('hex'),
       inputs: participants.map((participant, index) => ({
@@ -240,8 +241,8 @@ async function seed(): Promise<void> {
       INSERT INTO vault_rosters (
         vault_id, version, network, artifact_json, digest, funding_address, status, confirmed_at
       ) VALUES (
-        ${vaultId}::uuid, 1, 'mainnet', '{}'::jsonb, ${rosterDigest},
-        'bc1pfundingdbacceptance', 'confirmed', now()
+        ${vaultId}::uuid, 1, ${BITCOIN_NETWORK_NAME}, '{}'::jsonb, ${rosterDigest},
+        ${BITCOIN_NETWORK_NAME === 'mainnet' ? 'bc1pfundingdbacceptance' : 'tb1pfundingdbacceptance'}, 'confirmed', now()
       )
     `;
     for (const [index, participant] of participants.entries()) {

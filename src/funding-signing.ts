@@ -4,14 +4,15 @@ import * as ecc from 'tiny-secp256k1';
 import type { RpcMempoolAcceptResult, RpcTransaction } from './bitcoin-rpc.js';
 import { sha256Hex } from './crypto.js';
 import type { FundingInputCommitment, FundingProposal } from './funding-ceremony.js';
-import { BITCOIN_NETWORK } from './network.js';
+import { BITCOIN_NETWORK, BITCOIN_NETWORK_NAME } from './network.js';
+import type { BitcoinNetworkName } from './types.js';
 import { unsignedTx } from './psbt.js';
 
 bitcoin.initEccLib(ecc);
 
 export type FundingSignatureContribution = {
   version: 1;
-  network: 'mainnet';
+  network: BitcoinNetworkName;
   vaultId: string;
   rosterDigest: string;
   proposalDigest: string;
@@ -22,7 +23,7 @@ export type FundingSignatureContribution = {
   publicKeyHex: string;
 } | {
   version: 1;
-  network: 'mainnet';
+  network: BitcoinNetworkName;
   vaultId: string;
   rosterDigest: string;
   proposalDigest: string;
@@ -35,7 +36,7 @@ export type FundingSignatureContribution = {
 
 export interface FinalizedFundingTransaction {
   version: 1;
-  network: 'mainnet';
+  network: BitcoinNetworkName;
   vaultId: string;
   rosterDigest: string;
   proposalDigest: string;
@@ -48,7 +49,7 @@ export interface FinalizedFundingTransaction {
 
 export interface FundingRestartSnapshot {
   version: 1;
-  network: 'mainnet';
+  network: BitcoinNetworkName;
   vaultId: string;
   rosterDigest: string;
   inputs: Array<{ participantId: string; commitmentDigest: string }>;
@@ -78,7 +79,7 @@ export function fundingRestartApprovalDigest(input: {
 }): string {
   return sha256Hex(JSON.stringify({
     version: 1,
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     stateDigest: fundingRestartStateDigest(input.snapshot),
     reason: canonicalFundingRestartReason(input.reason),
   }));
@@ -87,10 +88,10 @@ export function fundingRestartApprovalDigest(input: {
 export function canonicalFundingRestartSnapshot(
   snapshot: FundingRestartSnapshot,
 ): FundingRestartSnapshot {
-  if (snapshot.version !== 1 || snapshot.network !== 'mainnet' ||
+  if (snapshot.version !== 1 || snapshot.network !== BITCOIN_NETWORK_NAME ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(snapshot.vaultId) ||
       !/^[0-9a-f]{64}$/u.test(snapshot.rosterDigest)) {
-    throw new Error('funding restart snapshot has an invalid mainnet binding');
+    throw new Error('funding restart snapshot has an invalid configured-network binding');
   }
   const inputs = [...snapshot.inputs].sort(compareParticipantBinding);
   const signatures = [...snapshot.signatures].sort(compareParticipantBinding);
@@ -106,7 +107,7 @@ export function canonicalFundingRestartSnapshot(
   }
   return {
     version: 1,
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     vaultId: snapshot.vaultId,
     rosterDigest: snapshot.rosterDigest,
     inputs,
@@ -287,7 +288,7 @@ export function validateFundingSignatureContribution(input: {
   );
   const commitment = input.commitments.find((item) => item.participantId === contribution.participantId);
   if (!commitment || expectedIndex < 0 || contribution.inputIndex !== expectedIndex ||
-      contribution.version !== 1 || contribution.network !== 'mainnet' ||
+      contribution.version !== 1 || contribution.network !== BITCOIN_NETWORK_NAME ||
       contribution.vaultId !== input.proposal.vaultId ||
       contribution.rosterDigest !== input.proposal.rosterDigest ||
       contribution.proposalDigest !== input.proposal.digest) {
@@ -370,7 +371,7 @@ export function finalizeFundingSignatures(input: {
   const finalTxid = finalized.getId();
   const binding = {
     version: 1 as const,
-    network: 'mainnet' as const,
+    network: BITCOIN_NETWORK_NAME,
     vaultId: input.proposal.vaultId,
     rosterDigest: input.proposal.rosterDigest,
     proposalDigest: input.proposal.digest,
@@ -388,7 +389,7 @@ export function finalizeFundingSignatures(input: {
 function contributionBinding(proposal: FundingProposal, participantId: string, inputIndex: number) {
   return {
     version: 1 as const,
-    network: 'mainnet' as const,
+    network: BITCOIN_NETWORK_NAME,
     vaultId: proposal.vaultId,
     rosterDigest: proposal.rosterDigest,
     proposalDigest: proposal.digest,
@@ -500,6 +501,9 @@ function verifyP2trSignature(
   const hashType = signatureWithHashType.length === 64
     ? bitcoin.Transaction.SIGHASH_DEFAULT
     : signatureWithHashType[64]!;
+  if (signatureWithHashType.length === 65 && hashType === bitcoin.Transaction.SIGHASH_DEFAULT) {
+    throw new Error(`funding input ${index} P2TR signature must omit an explicit SIGHASH_DEFAULT byte`);
+  }
   if (hashType !== bitcoin.Transaction.SIGHASH_DEFAULT && hashType !== bitcoin.Transaction.SIGHASH_ALL) {
     throw new Error(`funding input ${index} P2TR signature must commit all inputs and outputs`);
   }

@@ -2,11 +2,13 @@ import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { sha256Hex } from './crypto.js';
 import { assertProtectedRegularFile } from './operator-environment.js';
+import { BITCOIN_NETWORK_NAME } from './network.js';
+import type { BitcoinNetworkName } from './types.js';
 
 export interface LiveSigbashProofReceipt {
   version: 1;
   kind: 'live-sigbash-mainnet-signing-proof';
-  network: 'mainnet';
+  network: BitcoinNetworkName;
   createdAt: string;
   round: string;
   leaverId: string;
@@ -55,7 +57,7 @@ export function createLiveSigbashProofReceipt<TAuthorization extends { finalTxid
   const body = canonicalReceiptBody({
     version: 1,
     kind: 'live-sigbash-mainnet-signing-proof',
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     createdAt: input.createdAt,
     round: input.round,
     leaverId: input.leaverId,
@@ -92,7 +94,7 @@ export function validateLiveSigbashProofReceipt(input: unknown): LiveSigbashProo
     ? row.checkNames as string[]
     : null;
   if (row.version !== 1 || row.kind !== 'live-sigbash-mainnet-signing-proof' ||
-      row.network !== 'mainnet' || row.placeholderOutpoint !== true || !checkNames?.length ||
+      row.network !== BITCOIN_NETWORK_NAME || row.placeholderOutpoint !== true || !checkNames?.length ||
       typeof row.createdAt !== 'string' || !validIsoTimestamp(row.createdAt) ||
       typeof row.round !== 'string' || !['alicebob', 'alicecarol', 'bobcarol'].includes(row.round) ||
       typeof row.leaverId !== 'string' || !['alice', 'bob', 'carol'].includes(row.leaverId) ||
@@ -132,7 +134,7 @@ export function validateLiveSigbashProofReceipt(input: unknown): LiveSigbashProo
   const body = canonicalReceiptBody({
     version: 1,
     kind: 'live-sigbash-mainnet-signing-proof',
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     createdAt: row.createdAt,
     round: row.round,
     leaverId: row.leaverId,
@@ -190,7 +192,7 @@ function canonicalReceiptBody(input: Omit<LiveSigbashProofReceipt, 'proofDigest'
   return {
     version: 1,
     kind: 'live-sigbash-mainnet-signing-proof',
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     createdAt: input.createdAt,
     round: input.round,
     leaverId: input.leaverId,

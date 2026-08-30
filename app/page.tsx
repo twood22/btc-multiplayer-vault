@@ -1,5 +1,6 @@
 import { connection } from 'next/server';
 import { PasskeySignIn } from '@/web/components/passkey-sign-in';
+import { BITCOIN_NETWORK_CONFIG, BITCOIN_NETWORK_NAME } from '@/src/network';
 
 export default async function HomePage() {
   await connection();
@@ -32,8 +33,8 @@ export default async function HomePage() {
           </article>
           <article>
             <span>03</span>
-            <h2>Mainnet gated</h2>
-            <p>Funding stays off until live Sigbash signing and every mainnet check pass.</p>
+            <h2>{BITCOIN_NETWORK_NAME === 'mainnet' ? 'Mainnet gated' : 'Signet validation'}</h2>
+            <p>Funding stays off until live Sigbash signing and every {BITCOIN_NETWORK_CONFIG.addressLabel} check pass.</p>
           </article>
         </div>
         <div className="invite-callout">

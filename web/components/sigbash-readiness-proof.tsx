@@ -11,6 +11,7 @@ import {
 } from '../lib/client/sigbash-browser';
 import { withUnlockedVaultCustody } from '../lib/client/unlocked-vault-custody';
 import { signAuthorizedSoloWithdrawal } from '../lib/client/vault-signing';
+import { BITCOIN_NETWORK_CONFIG, BITCOIN_NETWORK_NAME } from '../../src/network.js';
 
 interface PasskeyChoice { id: string; name: string }
 interface ReadinessStatus {
@@ -117,23 +118,23 @@ export function SigbashReadinessProof({
             verbose: true,
             keyIndex: custodyKey.keyIndex,
           });
-          if (key.network !== 'mainnet' || key.keyId !== custodyKey.keyId ||
+          if (key.network !== BITCOIN_NETWORK_NAME || key.keyId !== custodyKey.keyId ||
               key.keyIndex !== custodyKey.keyIndex || key.policyRoot !== custodyKey.policyRoot ||
               key.require2FA) {
-            throw new Error('Sigbash returned a key different from the confirmed mainnet registration');
+            throw new Error(`Sigbash returned a key different from the confirmed ${BITCOIN_NETWORK_CONFIG.addressLabel} registration`);
           }
           for (const [name, psbtBase64] of Object.entries(challenge.tamperedPsbts)) {
             setMessage(`Proving Sigbash rejects hostile ${name} transaction…`);
             const rejected = await client.verifyPSBT({
               psbtBase64,
               kmcJSON: key.kmcJSON,
-              network: 'mainnet',
+              network: BITCOIN_NETWORK_NAME,
             });
             if (rejected.passed !== false) {
               throw new Error(`Sigbash did not explicitly reject the hostile ${name} transaction`);
             }
           }
-          setMessage(`Proving live mainnet signing for ${challenge.round}…`);
+          setMessage(`Proving live ${BITCOIN_NETWORK_CONFIG.addressLabel} signing for ${challenge.round}…`);
           const signed = await signAuthorizedSoloWithdrawal({
             unlocked,
             currentIds: challenge.currentIds,
@@ -158,7 +159,7 @@ export function SigbashReadinessProof({
       const next = completed as unknown as ReadinessStatus;
       setStatus(next);
       setMessage(next.ready
-        ? 'All nine live mainnet Sigbash keys are proven. Funding remains closed until the separate operational release checks and explicit approval pass.'
+        ? `All nine live ${BITCOIN_NETWORK_CONFIG.addressLabel} Sigbash keys are proven. Funding remains closed until the separate operational release checks and explicit approval pass.`
         : next.nextRound
           ? `${next.participantProofRounds.length} of 3 personal proofs complete; ${next.nextRound} is next`
           : `Your three proofs are complete; waiting for friends (${next.totalProofCount}/9 total)`);
@@ -181,7 +182,7 @@ export function SigbashReadinessProof({
         <h2>{status.ready ? 'Sigbash signing gate passed' : 'Prove every Sigbash round key'}</h2>
         <p>
           Each proof uses a server-random unfunded outpoint. Sigbash must reject three hostile
-          transactions and return one real mainnet signature that this service verifies independently.
+          transactions and return one real {BITCOIN_NETWORK_CONFIG.addressLabel} signature that this service verifies independently.
           Completing this signer gate does not authorize funding.
         </p>
       </div>

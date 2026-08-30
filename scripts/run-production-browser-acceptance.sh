@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Isolated production-bundle acceptance only. The application remains
-# mainnet-only; synthetic public registrations/readiness, coin observations,
+# Isolated production-bundle acceptance only. The selected network is explicit;
+# synthetic public registrations/readiness, coin observations,
 # chain responses, and ephemeral wallet signers used by the browser tests are
 # explicit prerequisites, never live Sigbash, real-wallet, or funding evidence.
 
@@ -135,6 +135,7 @@ if [ "$container_acceptance" = true ]; then
     --env NODE_ENV --env NEXT_TELEMETRY_DISABLED \
     --env DATABASE_URL --env WEBAUTHN_RP_ID --env WEBAUTHN_ORIGIN --env APP_ORIGIN \
     --env CHAIN_OBSERVATION_ORIGINS --env BITCOIN_BACKEND --env BITCOIN_RPC_URL \
+    --env VAULT_NETWORK --env NEXT_PUBLIC_VAULT_NETWORK \
     --env VAULT_CONFIRMATIONS_REQUIRED --env VAULT_DEPOSIT_SATS \
     --env PRIVATE_BETA_MAX_DEPOSIT_SATS --env VAULT_FUNDING_FEE_SATS \
     --env VAULT_SOLO_FEE_SATS --env VAULT_SOLO_FEE_BUDGET_SATS \

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import postgres from 'postgres';
+import { BITCOIN_NETWORK_CONFIG, BITCOIN_NETWORK_NAME } from '../../src/network.js';
 import {
   reanchorConfirmedVaultTransition,
   rollbackConfirmedFunding,
@@ -111,9 +112,9 @@ try {
           WHERE proposal_id = ${parentProposal}::uuid AND action = 'rolled_back') AS events
     `;
     assert.equal(rows[0]?.child_status, 'stale');
-    assert.match(rows[0]?.child_reason || '', /mainnet reorganization/u);
+    assert.match(rows[0]?.child_reason || '', new RegExp(`${BITCOIN_NETWORK_CONFIG.addressLabel} reorganization`, 'u'));
     assert.equal(rows[0]?.approval_status, 'failed');
-    assert.match(rows[0]?.approval_reason || '', /mainnet reorganization/u);
+    assert.match(rows[0]?.approval_reason || '', new RegExp(`${BITCOIN_NETWORK_CONFIG.addressLabel} reorganization`, 'u'));
     assert.equal(rows[0]?.observations, '0');
     assert.equal(rows[0]?.challenges, '0');
     assert.equal(rows[0]?.events, '1');
@@ -387,8 +388,8 @@ async function seedBase(
       INSERT INTO vault_rosters (
         vault_id, version, network, artifact_json, digest, funding_address, status, confirmed_at
       ) VALUES (
-        ${vaultId}::uuid, 1, 'mainnet', '{}'::jsonb, ${digest},
-        'bc1preorgacceptance', 'confirmed', now()
+        ${vaultId}::uuid, 1, ${BITCOIN_NETWORK_NAME}, '{}'::jsonb, ${digest},
+        ${BITCOIN_NETWORK_NAME === 'mainnet' ? 'bc1preorgacceptance' : 'tb1preorgacceptance'}, 'confirmed', now()
       )
     `;
   });

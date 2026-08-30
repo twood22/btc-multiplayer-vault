@@ -1,7 +1,7 @@
 import { Buffer } from 'buffer';
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
-import { BITCOIN_NETWORK } from './network.js';
+import { BITCOIN_NETWORK, BITCOIN_NETWORK_CONFIG, BITCOIN_NETWORK_NAME } from './network.js';
 import { PARTICIPANTS } from './config.js';
 import { verifyVaultTransaction, type ConsensusVerification } from './consensus.js';
 import {
@@ -231,8 +231,8 @@ function requireSigbashRegistrationMap(
       throw new Error(`${participantId} ${round} Sigbash registration must be an object`);
     }
     const item = raw as Partial<SigbashRosterRegistration>;
-    if (item.network !== 'mainnet') {
-      throw new Error(`${participantId} ${round} Sigbash registration is not mainnet`);
+    if (item.network !== BITCOIN_NETWORK_NAME) {
+      throw new Error(`${participantId} ${round} Sigbash registration is not ${BITCOIN_NETWORK_CONFIG.addressLabel}`);
     }
     if (typeof item.keyId !== 'string' || item.keyId.length < 1 || item.keyId.length > 256) {
       throw new Error(`${participantId} ${round} Sigbash registration has an invalid keyId`);
@@ -242,8 +242,10 @@ function requireSigbashRegistrationMap(
     }
     const xpub = typeof item.bip328Xpub === 'string' ? item.bip328Xpub : '';
     const strippedXpub = xpub.replace(/^\[[0-9a-fA-F/h']*\]/u, '');
-    if (!strippedXpub.startsWith('xpub')) {
-      throw new Error(`${participantId} ${round} Sigbash registration must carry a mainnet xpub`);
+    if (!strippedXpub.startsWith(BITCOIN_NETWORK_CONFIG.bip32PublicPrefix)) {
+      throw new Error(
+        `${participantId} ${round} Sigbash registration must carry a ${BITCOIN_NETWORK_CONFIG.bip32PublicPrefix}`,
+      );
     }
     const derivedPolicyLeaf = deriveXpubChildPubkey(xpub, [0, 0]).xonlyPubKeyHex;
     const derivedIdentificationLeaf = xpubRootXonly(xpub);
@@ -266,7 +268,7 @@ function requireSigbashRegistrationMap(
       throw new Error(`${participantId} ${round} Sigbash registration has the wrong policyId`);
     }
     return [round, {
-      network: 'mainnet',
+      network: BITCOIN_NETWORK_NAME,
       keyId: item.keyId,
       keyIndex: Number(item.keyIndex),
       bip328Xpub: xpub,

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import * as bitcoin from 'bitcoinjs-lib';
 import postgres from 'postgres';
+import { BITCOIN_NETWORK_NAME } from '../../src/network.js';
 import { buildVaultProposal } from '../../src/vault-runtime.js';
 import { closeDatabase } from '../lib/server/db.js';
 import { finalizeStoredSoloProposal } from '../lib/server/vault-runtime-store.js';
@@ -139,7 +140,7 @@ async function seed(): Promise<void> {
         vault_id, version, network, artifact_json, digest, funding_address,
         status, confirmed_at
       ) VALUES (
-        ${vaultId}::uuid, 1, 'mainnet',
+        ${vaultId}::uuid, 1, ${BITCOIN_NETWORK_NAME},
         ${tx.json(JSON.parse(JSON.stringify(fixture.artifact)))},
         ${Buffer.from(fixture.digest, 'hex')}, ${fixture.artifact.funding.address},
         'confirmed', now()

@@ -22,6 +22,7 @@ import {
 import type { PublishedRosterArtifact } from '../../src/roster-ceremony.js';
 import { observeFundingInput } from '../lib/client/chain-observation';
 import { assertPasskey } from '../lib/client/webauthn';
+import { BITCOIN_NETWORK_CONFIG, BITCOIN_NETWORK_NAME } from '../../src/network.js';
 
 interface PasskeyChoice { id: string; name: string }
 interface FundingStatus {
@@ -73,7 +74,7 @@ export function FundingCeremony({ passkeys }: { passkeys: PasskeyChoice[] }) {
     setMessage(next.finalization?.status === 'confirmed'
       ? 'The exact unanimously approved funding transaction is confirmed and the multiplayer vault is active.'
       : next.finalization?.status === 'broadcast'
-        ? 'The exact unanimously approved funding transaction is on mainnet and awaiting the required confirmations.'
+        ? `The exact unanimously approved funding transaction is on ${BITCOIN_NETWORK_CONFIG.addressLabel} and awaiting the required confirmations.`
         : next.finalization?.status === 'submitting'
           ? 'The private operator is submitting the exact unanimously approved funding transaction.'
       : next.finalization?.readyForOperatorBroadcast
@@ -97,9 +98,9 @@ export function FundingCeremony({ passkeys }: { passkeys: PasskeyChoice[] }) {
     setWorking(true);
     try {
       const source = status.chainObservationOrigins[0];
-      if (!source) throw new Error('no independent mainnet source is configured');
+      if (!source) throw new Error(`no independent ${BITCOIN_NETWORK_CONFIG.addressLabel} source is configured`);
       const outputNumber = Number(vout);
-      setMessage('Checking that coin directly against Bitcoin mainnet…');
+      setMessage(`Checking that coin directly against Bitcoin ${BITCOIN_NETWORK_CONFIG.addressLabel}…`);
       const observed = await observeFundingInput(source, txid.trim().toLowerCase(), outputNumber);
       const participantIndex = ['alice', 'bob', 'carol'].indexOf(status.participantId);
       const baseFeeShare = Math.floor(status.fundingFeeSats / 3);
@@ -114,7 +115,7 @@ export function FundingCeremony({ passkeys }: { passkeys: PasskeyChoice[] }) {
       }
       const expectedCommitment: FundingInputCommitment = {
         version: 1,
-        network: 'mainnet',
+        network: BITCOIN_NETWORK_NAME,
         vaultId: status.vaultId,
         rosterDigest: status.rosterDigest,
         participantId: status.participantId,
@@ -326,11 +327,12 @@ export function FundingCeremony({ passkeys }: { passkeys: PasskeyChoice[] }) {
           <label>
             Change address (leave blank only for an exact-value coin)
             <input autoCapitalize="none" autoCorrect="off" value={changeAddress}
-              onChange={(event) => setChangeAddress(event.target.value)} placeholder="bc1q… or bc1p…" />
+              onChange={(event) => setChangeAddress(event.target.value)}
+              placeholder={BITCOIN_NETWORK_NAME === 'mainnet' ? 'bc1q… or bc1p…' : 'tb1q… or tb1p…'} />
           </label>
           <button disabled={working || !credentialId || txid.trim().length !== 64}
             onClick={approveFundingInput} type="button">
-            {working ? 'Verifying mainnet coin…' : 'Verify and approve my coin'}
+            {working ? `Verifying ${BITCOIN_NETWORK_CONFIG.addressLabel} coin…` : 'Verify and approve my coin'}
           </button>
         </div>
       )}
@@ -394,7 +396,7 @@ export function FundingCeremony({ passkeys }: { passkeys: PasskeyChoice[] }) {
           ) : (
             <p className="muted">
               Funding state: {status.finalization.status}. Activation still waits for the configured
-              mainnet confirmation depth and an exact-byte chain-watcher verification.
+              {BITCOIN_NETWORK_CONFIG.addressLabel} confirmation depth and an exact-byte chain-watcher verification.
             </p>
           )}
         </div>
@@ -485,7 +487,7 @@ function fundingRestartSnapshotFromStatus(status: FundingStatus): FundingRestart
   if (status.inputs.length === 0) return null;
   return {
     version: 1,
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     vaultId: status.vaultId,
     rosterDigest: status.rosterDigest,
     inputs: status.inputs.map((item) => ({

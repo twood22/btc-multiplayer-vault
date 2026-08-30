@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { observeFundingInput, observeVaultCoin } from '../lib/client/chain-observation.js';
-import { MAINNET_GENESIS_HASH } from '../../src/network.js';
+import { BITCOIN_GENESIS_HASH, BITCOIN_NETWORK_CONFIG } from '../../src/network.js';
 import { vaultCoinSnapshotDigest, type VaultCoinSnapshot } from '../../src/vault-runtime.js';
 import {
   consumeCooperativeSecnonce,
@@ -38,7 +38,7 @@ Object.defineProperty(globalThis, 'sessionStorage', {
 });
 
 try {
-  await check('browser independently verifies mainnet, confirmation, outpoint, value, script, and unspent state', async () => {
+  await check(`browser independently verifies ${BITCOIN_NETWORK_CONFIG.addressLabel}, confirmation, outpoint, value, script, and unspent state`, async () => {
     globalThis.fetch = fakeEsplora();
     const observed = await observeVaultCoin('https://chain.example', coin);
     assert.equal(observed.snapshotDigest, vaultCoinSnapshotDigest(coin));
@@ -56,14 +56,20 @@ try {
     await assert.rejects(() => observeVaultCoin('https://chain.example', coin), /differs from the committed value/);
   });
 
-  await check('a non-mainnet chain identity is rejected before observation succeeds', async () => {
+  await check('a wrong chain identity is rejected before observation succeeds', async () => {
     globalThis.fetch = fakeEsplora({ genesisHash: '00'.repeat(32) });
-    await assert.rejects(() => observeVaultCoin('https://chain.example', coin), /not Bitcoin mainnet/);
+    await assert.rejects(
+      () => observeVaultCoin('https://chain.example', coin),
+      new RegExp(`not ${BITCOIN_NETWORK_CONFIG.addressLabel}`, 'u'),
+    );
   });
 
   await check('an unconfirmed vault output is rejected', async () => {
     globalThis.fetch = fakeEsplora({ confirmed: false });
-    await assert.rejects(() => observeVaultCoin('https://chain.example', coin), /not confirmed on mainnet/);
+    await assert.rejects(
+      () => observeVaultCoin('https://chain.example', coin),
+      new RegExp(`not confirmed on ${BITCOIN_NETWORK_CONFIG.addressLabel}`, 'u'),
+    );
   });
 
   await check('browser resolves a real confirmed unspent funding outpoint without trusting typed value or script', async () => {
@@ -132,7 +138,7 @@ function fakeEsplora(overrides: {
     assert.equal(options?.credentials, 'omit');
     const url = String(resource);
     if (url.endsWith('/block-height/0')) {
-      return new Response(overrides.genesisHash ?? MAINNET_GENESIS_HASH);
+      return new Response(overrides.genesisHash ?? BITCOIN_GENESIS_HASH);
     }
     if (url.endsWith(`/tx/${coin.txid}`)) {
       return Response.json({

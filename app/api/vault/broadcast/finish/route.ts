@@ -13,6 +13,7 @@ import {
 } from '@/web/lib/server/vault-runtime-store';
 import { asWebAuthnCredential } from '@/web/lib/server/webauthn-store';
 import { consumeRateLimit } from '@/web/lib/server/rate-limit';
+import { BITCOIN_NETWORK_NAME } from '@/src/network';
 
 export const runtime = 'nodejs';
 
@@ -63,7 +64,7 @@ export async function POST(request: Request) {
       verification.authenticationInfo.newCounter,
     );
     const submitted = await submitApprovedBroadcast({ approvalId, userId });
-    return Response.json({ ok: true, txid: submitted.txid, network: 'mainnet' });
+    return Response.json({ ok: true, txid: submitted.txid, network: BITCOIN_NETWORK_NAME });
   } catch (error) {
     return jsonError(error);
   }

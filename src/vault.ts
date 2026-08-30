@@ -20,6 +20,7 @@ import {
 } from './crypto.js';
 import {
   asSats,
+  type BitcoinNetworkName,
   type LedgerTx,
   type LedgerUtxo,
   type Participant,
@@ -185,7 +186,7 @@ export interface RosterEntry {
 }
 
 export interface SigbashRosterRegistration {
-  network: 'mainnet';
+  network: BitcoinNetworkName;
   keyId: string;
   keyIndex: number;
   bip328Xpub: string;

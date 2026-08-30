@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import * as bitcoin from 'bitcoinjs-lib';
 import postgres from 'postgres';
+import { BITCOIN_NETWORK_NAME } from '../../src/network.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error('DATABASE_URL is required for broadcast database acceptance');
@@ -294,8 +295,8 @@ async function seed(): Promise<void> {
       INSERT INTO vault_rosters (
         vault_id, version, network, artifact_json, digest, funding_address, status, confirmed_at
       ) VALUES (
-        ${vaultId}::uuid, 1, 'mainnet', '{}'::jsonb, ${rosterDigest},
-        'bc1pacceptance', 'confirmed', now()
+        ${vaultId}::uuid, 1, ${BITCOIN_NETWORK_NAME}, '{}'::jsonb, ${rosterDigest},
+        ${BITCOIN_NETWORK_NAME === 'mainnet' ? 'bc1pacceptance' : 'tb1pacceptance'}, 'confirmed', now()
       )
     `;
     await tx`

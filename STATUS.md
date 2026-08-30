@@ -14,19 +14,19 @@ deployment gates remain in [`PASSKEY-PRODUCT.md`](./PASSKEY-PRODUCT.md) and
 
 ## Verdict
 
-**The next milestone is a real end-to-end standard-Signet product validation.
-The current code is not yet Signet-capable and remains unready to deploy, fund,
-or broadcast on mainnet.**
+**The typed standard-Signet product profile and its offline, PostgreSQL, build,
+and optimized-browser gates now pass. Real hosted signing and the real on-chain
+product lifecycle remain blocked or unproven; mainnet is still unauthorized.**
 
 The repository implements the intended round-based game: Sigbash-enforced solo
 withdrawals, participant-only BIP-327 MuSig2 cooperative exits, distributed
 passkey-protected participant custody, timelocked recovery, final sweep, and
-three-wallet funding preparation. Remaining blockers include a critical
-Sigbash-registration provenance gap, in-repository safety work, and deliberately
-external operational proof. Sigbash declined mainnet SDK enablement for the
-current experimental project but permits SDK testing on Signet. No current
-standard-Signet end-to-end run or live Sigbash mainnet signature has been
-obtained, and no real mainnet transaction has been authorized. See the
+three-wallet funding preparation. Remaining blockers include Sigbash-registration
+provenance, fee adaptation, final-sweep destination semantics, and external
+operational proof. Sigbash declined mainnet SDK enablement for the current
+experimental project but permits SDK testing on Signet. No complete
+standard-Signet on-chain run or live Sigbash signature has been obtained, and
+no real mainnet transaction has been authorized. See the
 [`current code review`](./CODE-REVIEW-2026-08-17.md) for evidence and severity.
 
 ## Proven on this baseline
@@ -34,6 +34,24 @@ obtained, and no real mainnet transaction has been authorized. See the
 - The offline TypeScript, policy, PSBT, Taproot, MuSig2, recovery, consensus,
   custody, and product-conformance suite passes under Node 22.23.2.
 - Web typechecking and isolated browser tests pass under Node 22.23.2.
+- Both mainnet and default-global-Signet network acceptance pass. The Signet
+  offline/web suite, fresh PostgreSQL 16 migration/database suite, optimized
+  production build, and all six optimized three-browser scenarios pass.
+- Nine fresh **10,000-sat-per-participant** Signet-only hosted Sigbash keys were
+  created under three independent credential organizations, with protected
+  recovery journals. An earlier nine-key 1-BTC policy set is retained only as
+  non-fundable historical setup evidence. Hosted
+  `verifyPSBT` accepted the exact allowed transaction and rejected wrong-value,
+  wrong-destination, and extra-output variants.
+- Funding rejects non-canonical 65-byte Taproot signatures with an explicit zero
+  sighash byte; all proposal types require fresh observations; recovery delay is
+  bounded to the CSV-encodable range 1 through 65,535.
+- Bitcoin Core 31.1 is running against default global Signet in an isolated
+  datadir with `txindex=1`; synchronization is progressing. A current unspent
+  PoW-faucet output was independently located and a difficulty-32 claim was
+  attempted, but sustained hashing drove the host to 94–96 °C even after CPU
+  throttling. The claim was stopped before the thermal limit; obtaining coins
+  now requires one manual public-faucet CAPTCHA rather than risking the host.
 - `npm audit --audit-level=low` reports zero known vulnerabilities.
 - The manual `Exact container acceptance` GitHub Actions run passed for the
   merged baseline: [run 32064526120](https://github.com/twood22/btc-multiplayer-vault/actions/runs/32064526120).
@@ -51,11 +69,9 @@ item, not evidence that the application ran under the wrong Node version.
 
 ## Explicitly unproven
 
-- A safely isolated standard-Signet application profile; the checked-in product
-  is still pinned to mainnet.
 - A complete real hosted-Sigbash signing flow on standard Signet, including the
-  historical server-side `signPSBT` failure.
-- Nine real Signet participant-and-round keys/proofs, three physical-passkey
+  current `server_error: Signing service error` after proof transport parsing.
+- Nine live readiness signatures, three physical-passkey
   identities, three real Signet wallets, and the complete on-chain state machine.
 - Sigbash mainnet enablement and one real, locally authorized mainnet signature.
 - The nine participant-and-round readiness proofs using three independently
@@ -74,15 +90,8 @@ item, not evidence that the application ran under the wrong Node version.
   queried attestation that the provider issued that key with that policy. The
   existing positive readiness proof can be satisfied by possession of the
   registered leaf key and therefore does not close this gap.
-- **Recovery bounds:** enforce both a reviewed production minimum and the
-  65,535-block BIP-68 maximum. The current explicit-value release check is not a
-  safety bound.
 - **Long-lived fee handling:** immutable low fixed fees and non-RBF sequences
   need a participant-approved fee-bump design or an explicit, tested alternative.
-- **Funding P2TR signature encoding:** reject a 65-byte signature carrying an
-  explicit zero/default sighash byte before it reaches final approvals.
-- **Fresh chain evidence:** apply an age bound to solo, cooperative, and final
-  proposal observations, not only recovery.
 - **Final sweep semantics:** choose a separately approved destination or remove
   the current self-send and fee burn.
 

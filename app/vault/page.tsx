@@ -13,6 +13,7 @@ import { getRosterCeremonyStatus } from '@/web/lib/server/roster-store';
 import { getSigbashReadinessStatus } from '@/web/lib/server/sigbash-readiness-store';
 import { requireSessionUser } from '@/web/lib/server/session';
 import { getMemberStatus } from '@/web/lib/server/webauthn-store';
+import { BITCOIN_NETWORK_CONFIG } from '@/src/network';
 
 export default async function VaultPage() {
   await connection();
@@ -41,7 +42,7 @@ export default async function VaultPage() {
         <p className="eyebrow">{participant.participantId} · {participant.displayName}</p>
         <h1>Your side of the vault is set up.</h1>
         <p className="lede">
-          Funding is intentionally unavailable while live Sigbash mainnet signing, recovery setup,
+          Funding is intentionally unavailable while live Sigbash {BITCOIN_NETWORK_CONFIG.addressLabel} signing, recovery setup,
           and three-person roster verification remain incomplete.
         </p>
       </section>
@@ -83,7 +84,7 @@ export default async function VaultPage() {
         <article className={participant.setupComplete ? 'done' : ''}><span>{participant.setupComplete ? 'Done' : 'Required'}</span><h2>Personal key protected</h2><p>Encrypted with your passkey PRF; plaintext is never stored.</p></article>
         <article className={participant.recoveryComplete ? 'done' : ''}><span>{participant.recoveryComplete ? 'Done' : 'Required'}</span><h2>Recovery credential</h2><p>A distinct second passkey protects the same participant identity.</p></article>
         <article className={roster.review?.unanimous ? 'done' : ''}><span>{roster.review?.unanimous ? 'Done' : 'Required'}</span><h2>Three-person roster</h2><p>All friends confirm one immutable digest built from real participant and Sigbash keys.</p></article>
-        <article className={readiness?.participantProofRounds.length === 3 ? 'done' : ''}><span>{readiness?.participantProofRounds.length === 3 ? 'Done' : 'Required'}</span><h2>Live Sigbash mainnet</h2><p>Create three immutable personal round keys, then prove a real policy-limited solo signature for each before funding.</p></article>
+        <article className={readiness?.participantProofRounds.length === 3 ? 'done' : ''}><span>{readiness?.participantProofRounds.length === 3 ? 'Done' : 'Required'}</span><h2>Live Sigbash {BITCOIN_NETWORK_CONFIG.addressLabel}</h2><p>Create three immutable personal round keys, then prove a real policy-limited solo signature for each before funding.</p></article>
       </section>
     </main>
   );

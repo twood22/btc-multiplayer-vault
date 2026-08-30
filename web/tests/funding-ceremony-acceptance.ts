@@ -22,6 +22,7 @@ import {
   type FundingSignatureContribution,
 } from '../../src/funding-signing.js';
 import type { RpcTransaction } from '../../src/bitcoin-rpc.js';
+import { BITCOIN_NETWORK_CONFIG, BITCOIN_NETWORK_NAME } from '../../src/network.js';
 import { unsignedTx } from '../../src/psbt.js';
 import {
   base58CheckEncode,
@@ -52,7 +53,7 @@ const fundingKeys = Object.fromEntries(ids.map((participantId) => [
 ]));
 const commitments = artifact.participants.map((participant, index): FundingInputCommitment => ({
   version: 1,
-  network: 'mainnet',
+  network: BITCOIN_NETWORK_NAME,
   vaultId: artifact.vaultId,
   rosterDigest,
   participantId: participant.id,
@@ -84,7 +85,7 @@ assert.equal(proposal.txTemplate.outputs[0]!.address, artifact.funding.address);
 assert.equal(proposal.txTemplate.outputs[0]!.valueSats, 30_000);
 assert.deepEqual(proposal.txTemplate.inputs.map((input) => input.participantId), ids);
 assert(proposal.txTemplate.inputs.every((input) => input.changeSats === 330));
-checks.push({ name: 'three passkey-approved wallet coins deterministically build one exact mainnet funding PSBT', ok: true });
+checks.push({ name: `three passkey-approved wallet coins deterministically build one exact ${BITCOIN_NETWORK_CONFIG.addressLabel} funding PSBT`, ok: true });
 
 const expectedTransaction = unsignedTx(psbt);
 const confirmedTransaction: RpcTransaction = {
@@ -181,7 +182,7 @@ checks.push({ name: 'external P2WPKH and P2TR wallet signatures normalize, verif
 
 const restartSnapshot = canonicalFundingRestartSnapshot({
   version: 1,
-  network: 'mainnet',
+  network: BITCOIN_NETWORK_NAME,
   vaultId: artifact.vaultId,
   rosterDigest,
   inputs: [...commitments].reverse().map((item) => ({
@@ -250,6 +251,19 @@ assert.throws(() => authorizeFundingSignedPsbt({
   signedPsbtBase64: weakSighash.toBase64(),
 }), /must commit all inputs and outputs/u);
 
+const explicitDefaultSighash = bitcoin.Psbt.fromBase64(proposal.psbtBase64);
+addP2trSignature(explicitDefaultSighash, 1, 'bob', bitcoin.Transaction.SIGHASH_DEFAULT);
+explicitDefaultSighash.data.inputs[1]!.tapKeySig = Buffer.concat([
+  explicitDefaultSighash.data.inputs[1]!.tapKeySig!,
+  Buffer.from([bitcoin.Transaction.SIGHASH_DEFAULT]),
+]);
+assert.throws(() => authorizeFundingSignedPsbt({
+  proposal,
+  commitments,
+  participantId: 'bob',
+  signedPsbtBase64: explicitDefaultSighash.toBase64(),
+}), /must omit an explicit SIGHASH_DEFAULT byte/u);
+
 const changedSignature = structuredClone(contributionResults[2]!.contribution);
 changedSignature.signatureHex = `${changedSignature.signatureHex.slice(0, -2)}00`;
 assert.throws(() => finalizeFundingSignatures({
@@ -270,7 +284,10 @@ assert.throws(() => finalizeFundingSignatures({
     contributionResults[1]!.contribution,
   ],
 }), /one distinct signature/u);
-checks.push({ name: 'signature exchange rejects cross-input signing, changed prevouts, weak sighashes, invalid signatures, and duplicate seats', ok: true });
+checks.push({
+  name: 'signature exchange rejects cross-input signing, changed prevouts, weak or non-canonical sighashes, invalid signatures, and duplicate seats',
+  ok: true,
+});
 
 const reordered = buildFundingProposal({
   artifact,
@@ -385,11 +402,11 @@ function liveRoster(): RosterEntry[] {
   return ids.map((id) => {
     const base = rosterEntry(id, `funding-${id}-secret-material-that-is-long-enough`, ids);
     const registrations = Object.fromEntries(participantLeaveRounds(id, ids).map((round) => {
-      const xpub = syntheticMainnetXpub(`${id}:${round}`);
+      const xpub = syntheticConfiguredXpub(`${id}:${round}`);
       const policyLeaf = deriveXpubChildPubkey(xpub, [0, 0]).xonlyPubKeyHex;
       const identificationLeaf = xpubRootXonly(xpub);
       return [round, {
-        network: 'mainnet',
+        network: BITCOIN_NETWORK_NAME,
         keyId: `live-key:${id}:${round}`,
         keyIndex: participantLeaveRounds(id, ids).indexOf(round),
         bip328Xpub: xpub,
@@ -410,10 +427,11 @@ function liveRoster(): RosterEntry[] {
   });
 }
 
-function syntheticMainnetXpub(label: string): string {
+function syntheticConfiguredXpub(label: string): string {
   const root = deterministicKeypair('funding-ceremony-acceptance', `${label}:root`);
   return base58CheckEncode(Buffer.concat([
-    Buffer.from('0488b21e', 'hex'), Buffer.from([0]), Buffer.alloc(4), Buffer.alloc(4),
+    Buffer.from(BITCOIN_NETWORK_NAME === 'mainnet' ? '0488b21e' : '043587cf', 'hex'),
+    Buffer.from([0]), Buffer.alloc(4), Buffer.alloc(4),
     Buffer.from(sha256Hex(`${label}:chain-code`), 'hex'), Buffer.from(root.publicKeyHex, 'hex'),
   ]));
 }

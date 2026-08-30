@@ -17,6 +17,7 @@ import {
   type ConfirmedVaultArtifact,
 } from './roster-store';
 import type { StoredCredential } from './webauthn-store';
+import { BITCOIN_NETWORK_NAME } from '../../../src/network';
 
 interface MembershipRow { vault_id: string; participant_id: string }
 
@@ -168,7 +169,7 @@ export async function createFundingInputChallenge(input: {
     : fundingFeeSats();
   const commitment = validateFundingInputCommitment(confirmed.artifact, {
     version: 1,
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     vaultId: membership.vault_id,
     rosterDigest: confirmed.digest,
     participantId: membership.participant_id,
@@ -374,7 +375,7 @@ async function selectedCredential(
 function commitmentFromRow(row: FundingInputRow): FundingInputCommitment {
   return {
     version: 1,
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     vaultId: row.vault_id,
     rosterDigest: row.roster_digest.toString('hex'),
     participantId: row.participant_id,

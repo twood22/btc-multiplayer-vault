@@ -6,6 +6,7 @@ import { sha256Hex } from '../../src/crypto.js';
 import { verifyVaultTransaction } from '../../src/consensus.js';
 import type { PublishedRosterArtifact } from '../../src/roster-ceremony.js';
 import { publishedRosterDigest } from '../../src/roster-ceremony.js';
+import { BITCOIN_NETWORK_CONFIG } from '../../src/network.js';
 import { vaultCoinSnapshotDigest, type VaultCoinSnapshot } from '../../src/vault-runtime.js';
 import {
   createParticipantBrowser,
@@ -245,9 +246,11 @@ test('three passkey-held participants complete cooperative MuSig2 with Sigbash u
       await expect(participant.page.getByText(
         'Cooperative exit finalized and held for explicit broadcast approval.',
       )).toBeVisible();
-      await expect(participant.page.getByText('Ready for explicit mainnet broadcast')).toBeVisible();
+      await expect(participant.page.getByText(
+        `Ready for explicit ${BITCOIN_NETWORK_CONFIG.addressLabel} broadcast`,
+      )).toBeVisible();
       await expect(participant.page.getByRole('button', {
-        name: 'Approve with passkey and broadcast to mainnet',
+        name: `Approve with passkey and broadcast to ${BITCOIN_NETWORK_CONFIG.addressLabel}`,
       })).toBeDisabled();
     }
 

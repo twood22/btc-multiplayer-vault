@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { deriveXpubChildPubkey, xpubRootXonly } from '@/src/crypto';
+import { BITCOIN_NETWORK_NAME } from '@/src/network';
 import { assertSameOrigin, jsonError } from '@/web/lib/server/http';
 import { recordLiveSigbashRegistration } from '@/web/lib/server/roster-store';
 import { assertSigbashCustodyLease } from '@/web/lib/server/sigbash-custody-store';
@@ -52,7 +53,7 @@ export async function POST(request: Request) {
       userId,
       round: input.round,
       registration: {
-        network: 'mainnet',
+        network: BITCOIN_NETWORK_NAME,
         keyId: input.keyId,
         keyIndex: input.keyIndex,
         bip328Xpub: input.bip328Xpub,

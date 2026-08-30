@@ -3,7 +3,7 @@ import * as bitcoin from 'bitcoinjs-lib';
 import postgres from 'postgres';
 import { verifyVaultTransaction } from '../../src/consensus.js';
 import { sha256Hex } from '../../src/crypto.js';
-import { MAINNET_GENESIS_HASH } from '../../src/network.js';
+import { BITCOIN_GENESIS_HASH, BITCOIN_NETWORK, BITCOIN_NETWORK_CONFIG } from '../../src/network.js';
 import type { VaultCoinSnapshot } from '../../src/vault-runtime.js';
 import {
   createConfirmedParticipantFixture,
@@ -64,7 +64,7 @@ test('two passkey-held survivors finalize mature recovery without the vanished p
     for (const survivor of [alice, bob]) {
       await survivor.page.getByRole('button', { name: 'Verify current coin' }).click();
       await expect(survivor.page.getByText(
-        'Mainnet coin verified with your passkey (146 confirmation(s))',
+        `${BITCOIN_NETWORK_CONFIG.addressLabel} coin verified with your passkey (146 confirmation(s))`,
       )).toBeVisible();
     }
     await expect(alice.page.getByRole('button', { name: 'Start recovery without carol' })).toBeVisible();
@@ -75,14 +75,18 @@ test('two passkey-held survivors finalize mature recovery without the vanished p
     await bob.page.reload();
     await carol.page.reload();
     await expect(carol.page.getByRole('button', {
-      name: 'Recheck mainnet and sign recovery',
+      name: `Recheck ${BITCOIN_NETWORK_CONFIG.addressLabel} and sign recovery`,
     })).toHaveCount(0);
 
-    await alice.page.getByRole('button', { name: 'Recheck mainnet and sign recovery' }).click();
+    await alice.page.getByRole('button', {
+      name: `Recheck ${BITCOIN_NETWORK_CONFIG.addressLabel} and sign recovery`,
+    }).click();
     await expect(alice.page.getByText(
       'Your recovery share is verified; waiting for 1 more',
     )).toBeVisible();
-    await bob.page.getByRole('button', { name: 'Recheck mainnet and sign recovery' }).click();
+    await bob.page.getByRole('button', {
+      name: `Recheck ${BITCOIN_NETWORK_CONFIG.addressLabel} and sign recovery`,
+    }).click();
     await expect(bob.page.getByText(
       /All recovery shares verified; transaction finalized as/u,
     )).toBeVisible();
@@ -92,16 +96,20 @@ test('two passkey-held survivors finalize mature recovery without the vanished p
       await expect(survivor.page.getByText(
         'Recovery finalized and held for explicit broadcast approval.',
       )).toBeVisible();
-      await expect(survivor.page.getByText('Ready for explicit mainnet broadcast')).toBeVisible();
+      await expect(survivor.page.getByText(
+        `Ready for explicit ${BITCOIN_NETWORK_CONFIG.addressLabel} broadcast`,
+      )).toBeVisible();
       await expect(survivor.page.getByRole('button', {
-        name: 'Approve with passkey and broadcast to mainnet',
+        name: `Approve with passkey and broadcast to ${BITCOIN_NETWORK_CONFIG.addressLabel}`,
       })).toBeDisabled();
     }
     await carol.page.reload();
     await expect(carol.page.getByText(
       'Recovery finalized and held for explicit broadcast approval.',
     )).toBeVisible();
-    await expect(carol.page.getByText('Ready for explicit mainnet broadcast')).toHaveCount(0);
+    await expect(carol.page.getByText(
+      `Ready for explicit ${BITCOIN_NETWORK_CONFIG.addressLabel} broadcast`,
+    )).toHaveCount(0);
 
     const rows = await sql<Array<{
       status: string;
@@ -191,7 +199,7 @@ test('only the final payout owner passkey-signs the exact final sweep', async ({
       valueSats: finalValueSats,
       scriptPubKeyHex: Buffer.from(bitcoin.address.toOutputScript(
         carolEntry.payoutAddress,
-        bitcoin.networks.bitcoin,
+        BITCOIN_NETWORK,
       )).toString('hex'),
     };
     await seedCurrentCoin(sql, fixture.vaultId, fixture.rosterDigest, coin, 850000);
@@ -219,7 +227,7 @@ test('only the final payout owner passkey-signs the exact final sweep', async ({
 
     await carol.page.getByRole('button', { name: 'Verify current coin' }).click();
     await expect(carol.page.getByText(
-      'Mainnet coin verified with your passkey (6 confirmation(s))',
+      `${BITCOIN_NETWORK_CONFIG.addressLabel} coin verified with your passkey (6 confirmation(s))`,
     )).toBeVisible();
     await carol.page.getByRole('button', { name: 'Create my final payout sweep' }).click();
     await expect(carol.page.getByText(
@@ -228,13 +236,17 @@ test('only the final payout owner passkey-signs the exact final sweep', async ({
     await carol.page.getByRole('button', { name: 'Verify and sign my final payout sweep' }).click();
     await expect(carol.page.getByText(/Final payout sweep verified as .*; not broadcast/u)).toBeVisible();
     await carol.page.reload();
-    await expect(carol.page.getByText('Ready for explicit mainnet broadcast')).toBeVisible();
+    await expect(carol.page.getByText(
+      `Ready for explicit ${BITCOIN_NETWORK_CONFIG.addressLabel} broadcast`,
+    )).toBeVisible();
     await expect(carol.page.getByRole('button', {
-      name: 'Approve with passkey and broadcast to mainnet',
+      name: `Approve with passkey and broadcast to ${BITCOIN_NETWORK_CONFIG.addressLabel}`,
     })).toBeDisabled();
     for (const nonOwner of [alice, bob]) {
       await nonOwner.page.reload();
-      await expect(nonOwner.page.getByText('Ready for explicit mainnet broadcast')).toHaveCount(0);
+      await expect(nonOwner.page.getByText(
+        `Ready for explicit ${BITCOIN_NETWORK_CONFIG.addressLabel} broadcast`,
+      )).toHaveCount(0);
     }
 
     const rows = await sql<Array<{
@@ -318,7 +330,7 @@ async function installChainFixture(
       requests.push(requestUrl);
       const url = new URL(requestUrl);
       if (url.pathname === '/api/block-height/0') {
-        await route.fulfill({ status: 200, contentType: 'text/plain', body: MAINNET_GENESIS_HASH });
+        await route.fulfill({ status: 200, contentType: 'text/plain', body: BITCOIN_GENESIS_HASH });
         return;
       }
       if (url.pathname === `/api/tx/${coin.txid}`) {

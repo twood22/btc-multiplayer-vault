@@ -1,4 +1,9 @@
 import { fromBase64url, toBase64url } from './base64url';
+import {
+  BITCOIN_NETWORK_CONFIG,
+  BITCOIN_NETWORK_NAME,
+} from '../../../src/network';
+import type { BitcoinNetworkName } from '../../../src/types';
 
 export interface SigbashCredentials {
   apiKey: string;
@@ -14,7 +19,7 @@ export interface SigbashRecoveryKit {
   recoveryKEK: string;
   cekCiphertext: string;
   cekNonce: string;
-  network: 'mainnet';
+  network: BitcoinNetworkName;
   createdAt: number;
   apiKey?: string;
   userKey?: string;
@@ -40,7 +45,7 @@ export interface SigbashPendingKey {
 
 export interface SigbashCustodyBundle {
   version: 1;
-  network: 'mainnet';
+  network: BitcoinNetworkName;
   participantId: 'alice' | 'bob' | 'carol';
   credentials: SigbashCredentials;
   keys: SigbashCustodyKey[];
@@ -77,7 +82,7 @@ export function createEmptySigbashCustodyBundle(
 ): SigbashCustodyBundle {
   return validateSigbashCustodyBundle({
     version: 1,
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     participantId,
     credentials,
     keys: [],
@@ -165,7 +170,7 @@ export async function recoverLatestSigbashCustodyBundle(
 }
 
 export function validateSigbashCustodyBundle(input: unknown): SigbashCustodyBundle {
-  if (!isRecord(input) || input.version !== 1 || input.network !== 'mainnet') {
+  if (!isRecord(input) || input.version !== 1 || input.network !== BITCOIN_NETWORK_NAME) {
     throw new Error('Sigbash custody bundle has an invalid version or network');
   }
   if (!/^(alice|bob|carol)$/u.test(String(input.participantId))) {
@@ -205,7 +210,7 @@ export function validateSigbashCustodyBundle(input: unknown): SigbashCustodyBund
   }
   return {
     version: 1,
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     participantId: input.participantId as SigbashCustodyBundle['participantId'],
     credentials,
     keys,
@@ -244,7 +249,8 @@ function validateCustodyKey(input: unknown): SigbashCustodyKey {
   if (!HEX_32.test(String(input.policyRoot))) throw new Error('Sigbash policyRoot is invalid');
   const bip328Xpub = String(input.bip328Xpub);
   const strippedXpub = bip328Xpub.replace(/^\[[0-9a-fA-F/h']*\]/u, '');
-  if (!strippedXpub.startsWith('xpub') || bip328Xpub.length < 100 || bip328Xpub.length > 160) {
+  if (!strippedXpub.startsWith(BITCOIN_NETWORK_CONFIG.bip32PublicPrefix) ||
+      bip328Xpub.length < 100 || bip328Xpub.length > 160) {
     throw new Error('Sigbash xpub is invalid');
   }
   if (!isRecord(input.poetJSON)) throw new Error('Sigbash compiled policy is missing');
@@ -262,7 +268,7 @@ function validateCustodyKey(input: unknown): SigbashCustodyKey {
 }
 
 function validateRecoveryKit(input: unknown, keyId: string): SigbashRecoveryKit {
-  if (!isRecord(input) || input.version !== 'sdk-recovery-v1' || input.network !== 'mainnet') {
+  if (!isRecord(input) || input.version !== 'sdk-recovery-v1' || input.network !== BITCOIN_NETWORK_NAME) {
     throw new Error('Sigbash recovery kit has an invalid version or network');
   }
   if (input.keyId !== keyId) throw new Error('Sigbash recovery kit belongs to a different key');
@@ -285,7 +291,7 @@ function validateRecoveryKit(input: unknown, keyId: string): SigbashRecoveryKit 
     recoveryKEK: String(input.recoveryKEK),
     cekCiphertext: String(input.cekCiphertext),
     cekNonce: String(input.cekNonce),
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     createdAt: Number(input.createdAt),
     ...(input.apiKey === undefined ? {} : { apiKey: String(input.apiKey) }),
     ...(input.userKey === undefined ? {} : { userKey: String(input.userKey) }),

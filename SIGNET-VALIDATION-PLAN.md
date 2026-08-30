@@ -119,3 +119,26 @@ provenance, key provisioning, policy, physical-device, database, backend,
 deployment-digest, fee, recovery-delay, and tiny-value funding reviews using
 new mainnet-scoped material. No Signet key, receipt, database state, wallet, or
 success flag may be promoted into the mainnet release evidence.
+
+## Progress snapshot — 2026-08-29
+
+- Complete: typed mainnet/default-global-Signet boundary, cross-network rejection,
+  Signet migration, network-specific browser/operator text, offline/web/database
+  acceptance, optimized production build, and all six optimized browser scenarios.
+- Complete: fresh three-organization Signet credentials, all nine immutable
+  10,000-sat-per-participant round keys, protected recovery journals, one allowed
+  hosted `verifyPSBT`, and three hosted hostile-transaction rejections. The prior
+  default-amount key set is explicitly non-fundable and not reused.
+- Complete: explicit-zero Taproot sighash rejection, CSV upper bound, and fresh
+  observation enforcement for every proposal type.
+- In progress: isolated fully validating Signet Core synchronization.
+- Needs one user action: submit the isolated Alice wallet address to a public
+  standard-Signet faucet and complete its CAPTCHA. The no-CAPTCHA PoW route
+  reached a current unspent difficulty-32 output, but sustained hashing drove
+  this host to 94–96 °C even after CPU throttling and was stopped for safety.
+- Blocked externally: hosted `signPSBT` proceeds past local policy verification,
+  proof generation, and proof transport parsing, then returns
+  `server_error: Signing service error` from the signing service.
+- Still open: provider-signed key/policy provenance, fee adaptation, final-sweep
+  destination semantics, real coins/wallets, physical passkeys, and the complete
+  on-chain lifecycle.

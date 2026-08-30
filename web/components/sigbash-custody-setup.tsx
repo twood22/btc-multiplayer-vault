@@ -21,6 +21,7 @@ import {
   type SigbashCustodyKey,
 } from '../lib/client/sigbash-custody';
 import { assertPasskeyWithPrf } from '../lib/client/webauthn';
+import { BITCOIN_NETWORK_CONFIG, BITCOIN_NETWORK_NAME } from '../../src/network.js';
 
 interface PasskeyChoice {
   id: string;
@@ -117,7 +118,7 @@ export function SigbashCustodySetup({
         envelope,
       });
       setApikeyHash(credentials.apikeyHash);
-      setStatus('Protected Sigbash identity created; Sigbash must enable this organization for mainnet before keys can be registered');
+      setStatus(`Protected Sigbash identity created; it is ready for ${BITCOIN_NETWORK_CONFIG.addressLabel} key registration`);
       window.setTimeout(() => window.location.reload(), 900);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Sigbash custody setup failed');
@@ -210,14 +211,14 @@ export function SigbashCustodySetup({
       setStatus(`Checking Sigbash for resumable key index ${next.keyIndex}…`);
       const listed = await client.listKeys();
       let summary = listed.find((key) => key.keyId === String(next.keyIndex));
-      if (summary && summary.network !== 'mainnet') {
-        throw new Error(`Sigbash key index ${next.keyIndex} already exists on a non-mainnet network`);
+      if (summary && summary.network !== BITCOIN_NETWORK_NAME) {
+        throw new Error(`Sigbash key index ${next.keyIndex} already exists on ${summary.network}, not ${BITCOIN_NETWORK_CONFIG.addressLabel}`);
       }
       if (!summary) {
-        setStatus(`Creating immutable mainnet key for ${next.round}…`);
+        setStatus(`Creating immutable ${BITCOIN_NETWORK_CONFIG.addressLabel} key for ${next.round}…`);
         const created = await client.createKey({
           policy: rebuiltPolicy,
-          network: 'mainnet',
+          network: BITCOIN_NETWORK_NAME,
           require2FA: false,
           keyIndex: next.keyIndex,
           verbose: false,
@@ -226,7 +227,7 @@ export function SigbashCustodySetup({
         if (created.keyIndex !== next.keyIndex) throw new Error('Sigbash returned a different key index');
         summary = {
           keyId: created.keyId,
-          network: 'mainnet',
+          network: BITCOIN_NETWORK_NAME,
           policyRoot: created.policyRoot,
           require2FA: false,
           createdAt: null,
@@ -240,7 +241,9 @@ export function SigbashCustodySetup({
       }
       setStatus(`Exporting the required recovery kit for ${next.round}…`);
       const recoveryKit = await client.exportRecoveryKit(summary.keyId, { keyIndex: next.keyIndex });
-      if (recoveryKit.network !== 'mainnet') throw new Error('Sigbash recovery kit is not mainnet');
+      if (recoveryKit.network !== BITCOIN_NETWORK_NAME) {
+        throw new Error(`Sigbash recovery kit is not ${BITCOIN_NETWORK_CONFIG.addressLabel}`);
+      }
       const protectedKey: SigbashCustodyKey = {
         round: next.round,
         keyId: summary.keyId,
@@ -249,7 +252,7 @@ export function SigbashCustodySetup({
         policyRoot: summary.policyRoot,
         bip328Xpub: summary.bip328Xpub,
         poetJSON: summary.poetJSON,
-        recoveryKit: { ...recoveryKit, network: 'mainnet' },
+        recoveryKit: { ...recoveryKit, network: BITCOIN_NETWORK_NAME },
       };
       const completeBundle: SigbashCustodyBundle = {
         ...workingBundle,
@@ -313,7 +316,7 @@ export function SigbashCustodySetup({
         <p>
           Your browser creates a separate Sigbash organization identity. The service stores only an
           encrypted bundle recoverable by either of your passkeys—not the API key, user secret, or recovery kits.
-          Sigbash mainnet entitlement is external: the app creates your credentials, but cannot grant mainnet access.
+          Sigbash network entitlement is external: the app creates your credentials, but cannot grant access beyond {BITCOIN_NETWORK_CONFIG.addressLabel}.
         </p>
       </div>
       <div className="sigbash-controls">
@@ -328,7 +331,7 @@ export function SigbashCustodySetup({
         </button>
         {started && keyCount < 3 && (
           <button disabled={working || !credentialId} onClick={registerNextRoundKey} type="button">
-            Register next real mainnet round key
+            Register next real {BITCOIN_NETWORK_CONFIG.addressLabel} round key
           </button>
         )}
         <p className="form-message" role="status">{status}</p>
@@ -341,7 +344,7 @@ export function SigbashCustodySetup({
               {runtimeReady ? 'Signing runtime ready' : 'Verify signing runtime'}
             </button>
             <p>
-              Send this non-secret identifier to Sigbash for mainnet activation. Each of the three
+              This non-secret identifier distinguishes your Sigbash organization. Each of the three
               friends has a different identifier; all three must be enabled before the nine keys can exist.
             </p>
           </div>

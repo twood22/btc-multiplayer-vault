@@ -1,10 +1,11 @@
 import 'server-only';
 import { Buffer } from 'buffer';
 import type { TransactionSql } from 'postgres';
+import { BITCOIN_NETWORK_CONFIG } from '../../../src/network.js';
 import { transaction } from './db';
 
 const DIGEST = /^[0-9a-f]{64}$/u;
-const REORG_REASON = 'ancestor confirmation removed by Bitcoin mainnet reorganization';
+const REORG_REASON = `ancestor confirmation removed by Bitcoin ${BITCOIN_NETWORK_CONFIG.addressLabel} reorganization`;
 
 interface AnchorInput {
   vaultId: string;

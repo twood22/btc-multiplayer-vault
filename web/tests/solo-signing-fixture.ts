@@ -12,7 +12,7 @@ import {
   tapLeafHash,
   xpubRootXonly,
 } from '../../src/crypto.js';
-import { BITCOIN_NETWORK } from '../../src/network.js';
+import { BITCOIN_NETWORK, BITCOIN_NETWORK_NAME } from '../../src/network.js';
 import {
   createPublishedRosterArtifact,
   publishedRosterDigest,
@@ -52,7 +52,7 @@ export function createIsolatedSoloFixture(vaultId: string): IsolatedSoloFixture 
       const key = syntheticBip328Key(`${vaultId}:${id}:${round}`);
       policyPrivateKeys.set(`${id}:${round}`, key.childPrivateKey);
       return [round, {
-        network: 'mainnet',
+        network: BITCOIN_NETWORK_NAME,
         keyId: String(keyIndex),
         keyIndex,
         bip328Xpub: key.xpub,
@@ -115,7 +115,7 @@ function syntheticBip328Key(label: string): {
   const rootPrivateKey = Buffer.from(root.privateKeyHex, 'hex');
   const chainCode = Buffer.from(sha256Hex(`isolated-solo-chain:${label}`), 'hex');
   const xpub = base58CheckEncode(Buffer.concat([
-    Buffer.from('0488b21e', 'hex'),
+    Buffer.from(BITCOIN_NETWORK_NAME === 'mainnet' ? '0488b21e' : '043587cf', 'hex'),
     Buffer.from([0]),
     Buffer.alloc(4),
     Buffer.alloc(4),

@@ -6,8 +6,9 @@ import { auditSpecState, type AuditCheck } from './audit.js';
 import { PARTICIPANTS } from './config.js';
 import {
   BITCOIN_CORE_CHAIN,
+  BITCOIN_GENESIS_HASH,
   BITCOIN_NETWORK_NAME,
-  MAINNET_GENESIS_HASH,
+  BITCOIN_NETWORK_CONFIG,
 } from './network.js';
 import { createDemoState } from './vault.js';
 import { EXPECTED_MIGRATION_FILES } from '../web/lib/migrations.js';
@@ -28,13 +29,10 @@ function record(name: string, assertion: () => void): void {
   }
 }
 
-record('the product network is Bitcoin mainnet everywhere at the root boundary', () => {
-  assert.equal(BITCOIN_NETWORK_NAME, 'mainnet');
-  assert.equal(BITCOIN_CORE_CHAIN, 'main');
-  assert.equal(
-    MAINNET_GENESIS_HASH,
-    '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f',
-  );
+record('the product network is coherent everywhere at the root boundary', () => {
+  assert.equal(BITCOIN_CORE_CHAIN, BITCOIN_NETWORK_CONFIG.coreChain);
+  assert.equal(BITCOIN_GENESIS_HASH, BITCOIN_NETWORK_CONFIG.genesisHash);
+  assert.ok(BITCOIN_NETWORK_NAME === 'mainnet' || BITCOIN_NETWORK_NAME === 'signet');
 });
 
 record('the semantic vault audit preserves the round game instead of a static threshold vault', () => {
@@ -105,7 +103,7 @@ record('live Sigbash setup stores a protected recovery kit before its public che
   assert.equal(exportAt >= 0 && recoveryAt > exportAt && checkpointAt > recoveryAt, true);
   assert.match(journal, /O_NOFOLLOW/u);
   assert.match(journal, /fsyncSync/u);
-  assert.match(journal, /input\.network !== 'mainnet'/u);
+  assert.match(journal, /input\.network !== BITCOIN_NETWORK_NAME/u);
 });
 
 record('the funding release requires executable production database restore evidence', () => {
@@ -120,7 +118,7 @@ record('the funding release requires executable production database restore evid
   assert.match(release, /DATABASE_RESTORE_RECEIPT_DIGEST/u);
 });
 
-record('the private watcher continuously reconciles confirmed mainnet block anchors', () => {
+record('the private watcher continuously reconciles confirmed configured-network block anchors', () => {
   const runtime = readFileSync(resolve(root, 'web/lib/server/vault-runtime-store.ts'), 'utf8');
   const reconciliation = readFileSync(resolve(root, 'web/lib/server/chain-reconciliation.ts'), 'utf8');
   const rollback = readFileSync(resolve(root, 'web/lib/server/chain-reorganization-store.ts'), 'utf8');
@@ -268,7 +266,7 @@ record('every required PostgreSQL product-state migration is present', () => {
   assert.deepEqual(actual, [...EXPECTED_MIGRATION_FILES].sort());
 });
 
-record('the authoritative spec rejects signet, demos as completion, and static 3-of-3 substitution', () => {
+record('the authoritative spec rejects Signet as mainnet completion, demos, and static 3-of-3 substitution', () => {
   const specification = readFileSync(resolve(root, 'spec.md'), 'utf8');
   assert.match(specification, /authoritative product contract/u);
   assert.match(specification, /mainnet-only/u);
@@ -279,14 +277,15 @@ record('the authoritative spec rejects signet, demos as completion, and static 3
 
 const passed = checks.every((item) => item.ok);
 console.log(JSON.stringify({
-  title: 'mainnet multiplayer-vault product conformance',
+  title: `${BITCOIN_NETWORK_CONFIG.addressLabel} multiplayer-vault product conformance`,
   localConformancePassed: passed,
   externalReleaseEvidenceEvaluated: false,
   deploymentAuthorized: false,
   fundingAuthorized: false,
   checks,
-  remainingExternalGate:
-    'Run and independently review the real protected Sigbash mainnet proof, then complete the physical-device, wallet, database, Bitcoin Core, and deployment drills.',
+  remainingExternalGate: BITCOIN_NETWORK_NAME === 'signet'
+    ? 'Resolve the hosted Sigbash signing failure, then complete the real-wallet, coin, physical-device, and on-chain Signet lifecycle.'
+    : 'Run and independently review the real protected Sigbash mainnet proof, then complete the physical-device, wallet, database, Bitcoin Core, and deployment drills.',
 }, null, 2));
 
 if (!passed) process.exitCode = 1;

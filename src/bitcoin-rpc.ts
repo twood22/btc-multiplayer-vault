@@ -7,9 +7,9 @@ import {
   esploraSendRawTransaction,
 } from './esplora.js';
 import { BitcoinTransactionNotFoundError } from './bitcoin-backend-errors.js';
-import { assertMainnetChain, DEFAULT_BITCOIN_RPC_URL } from './network.js';
+import { assertConfiguredChain, DEFAULT_BITCOIN_RPC_URL } from './network.js';
 
-// Thin JSON-RPC client for Bitcoin Core on mainnet. RPC results are inherently
+// Thin JSON-RPC client for Bitcoin Core on the explicitly configured network. RPC results are inherently
 // untyped JSON; the narrow result shapes the CLI relies on are declared here.
 // When BITCOIN_BACKEND=esplora, chain reads/broadcast are served by a public
 // Esplora API instead, so no local node is required.
@@ -115,7 +115,7 @@ async function assertMainnetRpc(
   headers: Record<string, string>,
 ): Promise<RpcBlockchainInfo> {
   const info = await rawBitcoinRpc<RpcBlockchainInfo>('getblockchaininfo', [], url, headers);
-  assertMainnetChain(info.chain);
+  assertConfiguredChain(info.chain);
   if (info.pruned !== false || info.initialblockdownload !== false) {
     throw new Error('Bitcoin Core must be fully synchronized and non-pruned');
   }
@@ -187,7 +187,7 @@ export async function getBlockchainInfo(): Promise<RpcBlockchainInfo> {
     const { url, headers } = rpcConfig();
     info = await assertMainnetRpc(url, headers);
   }
-  assertMainnetChain(info.chain);
+  assertConfiguredChain(info.chain);
   return info;
 }
 

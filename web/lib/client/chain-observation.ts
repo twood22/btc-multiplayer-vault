@@ -1,6 +1,9 @@
 'use client';
 
-import { MAINNET_GENESIS_HASH } from '../../../src/network.js';
+import {
+  BITCOIN_GENESIS_HASH,
+  BITCOIN_NETWORK_CONFIG,
+} from '../../../src/network.js';
 import {
   vaultCoinSnapshotDigest,
   type VaultCoinSnapshot,
@@ -22,7 +25,7 @@ export interface ObservedFundingInput {
   observedUnspent: true;
 }
 
-/** Resolve and independently verify a participant-selected mainnet funding coin. */
+/** Resolve and independently verify a participant-selected funding coin on the configured network. */
 export async function observeFundingInput(
   sourceOrigin: string,
   txid: string,
@@ -40,8 +43,8 @@ export async function observeFundingInput(
     fetch(`${base}/tx/${txid}/outspend/${vout}`, { cache: 'no-store', credentials: 'omit' }),
     fetch(`${base}/blocks/tip/height`, { cache: 'no-store', credentials: 'omit' }),
   ]);
-  if (!genesisResponse.ok || (await genesisResponse.text()).trim() !== MAINNET_GENESIS_HASH) {
-    throw new Error('independent chain source is not Bitcoin mainnet');
+  if (!genesisResponse.ok || (await genesisResponse.text()).trim() !== BITCOIN_GENESIS_HASH) {
+    throw new Error(`independent chain source is not ${BITCOIN_NETWORK_CONFIG.addressLabel}`);
   }
   if (!transactionResponse.ok) throw new Error('independent chain source did not find the funding transaction');
   if (!outspendResponse.ok) throw new Error('independent chain source could not verify the funding output');
@@ -56,7 +59,7 @@ export async function observeFundingInput(
   }
   if (outspend.spent !== false) throw new Error('independent chain source reports the funding output spent');
   if (!transaction.status?.confirmed || !Number.isSafeInteger(transaction.status.block_height)) {
-    throw new Error('funding output is not confirmed on mainnet');
+    throw new Error(`funding output is not confirmed on ${BITCOIN_NETWORK_CONFIG.addressLabel}`);
   }
   if (!Number.isSafeInteger(tip) || tip < transaction.status.block_height!) {
     throw new Error('independent chain source returned an invalid tip height');
@@ -90,8 +93,8 @@ export async function observeVaultCoin(
     fetch(`${base}/tx/${coin.txid}/outspend/${coin.vout}`, { cache: 'no-store', credentials: 'omit' }),
     fetch(`${base}/blocks/tip/height`, { cache: 'no-store', credentials: 'omit' }),
   ]);
-  if (!genesisResponse.ok || (await genesisResponse.text()).trim() !== MAINNET_GENESIS_HASH) {
-    throw new Error('independent chain source is not Bitcoin mainnet');
+  if (!genesisResponse.ok || (await genesisResponse.text()).trim() !== BITCOIN_GENESIS_HASH) {
+    throw new Error(`independent chain source is not ${BITCOIN_NETWORK_CONFIG.addressLabel}`);
   }
   if (!transactionResponse.ok) throw new Error('independent chain source did not find the vault transaction');
   if (!outspendResponse.ok) throw new Error('independent chain source could not verify the vault output');
@@ -108,7 +111,7 @@ export async function observeVaultCoin(
   }
   if (outspend.spent !== false) throw new Error('independent chain source reports the vault output spent');
   if (!transaction.status?.confirmed || !Number.isSafeInteger(transaction.status.block_height)) {
-    throw new Error('vault output is not confirmed on mainnet');
+    throw new Error(`vault output is not confirmed on ${BITCOIN_NETWORK_CONFIG.addressLabel}`);
   }
   if (!Number.isSafeInteger(tip) || tip < transaction.status.block_height!) {
     throw new Error('independent chain source returned an invalid tip height');

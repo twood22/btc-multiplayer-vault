@@ -30,6 +30,8 @@ import {
   type PublishedRosterArtifact,
 } from '../../../src/roster-ceremony.js';
 import { evaluatePolicy } from '../../../src/sigbash.js';
+import { BITCOIN_NETWORK_CONFIG, BITCOIN_NETWORK_NAME } from '../../../src/network.js';
+import { withSigbashHexProofTransport } from '../../../src/sigbash.js';
 import type { TrustedVaultInput } from '../../../src/types.js';
 import { policyId, roundId, type SigbashRosterRegistration } from '../../../src/vault.js';
 import type { SigbashCustodyKey } from './sigbash-custody';
@@ -219,7 +221,9 @@ export async function signAuthorizedSoloWithdrawal(input: {
     verbose: true,
     keyIndex: input.custodyKey.keyIndex,
   });
-  if (key.network !== 'mainnet') throw new Error('Sigbash returned a non-mainnet key');
+  if (key.network !== BITCOIN_NETWORK_NAME) {
+    throw new Error(`Sigbash returned a key for a network other than ${BITCOIN_NETWORK_CONFIG.addressLabel}`);
+  }
   if (key.keyIndex !== input.custodyKey.keyIndex || key.keyId !== input.custodyKey.keyId) {
     throw new Error('Sigbash returned a different key identity');
   }
@@ -231,21 +235,21 @@ export async function signAuthorizedSoloWithdrawal(input: {
   const verification = await input.client.verifyPSBT({
     psbtBase64: built.psbtBase64,
     kmcJSON: key.kmcJSON,
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     progressCallback: input.onProgress,
   });
   if (verification.passed !== true || verification.error) {
     throw new Error(`Sigbash rejected the committed solo withdrawal: ${verification.error || 'policy did not pass'}`);
   }
-  const signed = await input.client.signPSBT({
+  const signed = await withSigbashHexProofTransport(() => input.client.signPSBT({
     keyId: input.custodyKey.keyId,
     psbtBase64: built.psbtBase64,
     kmcJSON: key.kmcJSON,
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     require2FA: false,
     finalizePsbt: true,
     progressCallback: input.onProgress,
-  });
+  }));
   if (signed.success !== true || signed.error) {
     throw new Error(`Sigbash solo signing failed: ${signed.error || 'signer returned no success'}`);
   }

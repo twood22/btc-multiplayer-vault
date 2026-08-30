@@ -2,7 +2,8 @@ import 'server-only';
 import { conditionConfigToPoetPolicy, type POETPolicy } from '@sigbash/sdk';
 import { deterministicKeypair, taprootAddress } from '../../../src/crypto';
 import { planSigbashProvisioning } from '../../../src/sigbash-provisioning';
-import type { SoloPolicy } from '../../../src/types';
+import { BITCOIN_NETWORK_NAME } from '../../../src/network';
+import type { BitcoinNetworkName, SoloPolicy } from '../../../src/types';
 import {
   participantLeaveRounds,
   type RosterEntry,
@@ -20,7 +21,7 @@ export interface SigbashProvisioningStep {
 }
 
 export interface SigbashProvisioningManifest {
-  network: 'mainnet';
+  network: BitcoinNetworkName;
   vaultId: string;
   participantId: string;
   roster: RosterEntry[];
@@ -59,7 +60,7 @@ export async function getSigbashProvisioningManifest(userId: string): Promise<Si
   }
   if (waitingFor.length) {
     return {
-      network: 'mainnet',
+      network: BITCOIN_NETWORK_NAME,
       vaultId: membership.vault_id,
       participantId: membership.participant_id,
       roster: [],
@@ -73,7 +74,7 @@ export async function getSigbashProvisioningManifest(userId: string): Promise<Si
     user_id: string;
     participant_id: string;
     round_id: string;
-    network: 'mainnet';
+    network: BitcoinNetworkName;
     key_id: string;
     key_index: number;
     bip328_xpub: string;
@@ -101,7 +102,7 @@ export async function getSigbashProvisioningManifest(userId: string): Promise<Si
     poetPolicy: conditionConfigToPoetPolicy(plan.next.conditionConfig as never),
   } : null;
   return {
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     vaultId: membership.vault_id,
     participantId: membership.participant_id,
     roster,
@@ -121,7 +122,7 @@ function rosterEntryForProvisioning(
   },
   registrations: Array<{
     round_id: string;
-    network: 'mainnet';
+    network: BitcoinNetworkName;
     key_id: string;
     key_index: number;
     bip328_xpub: string;

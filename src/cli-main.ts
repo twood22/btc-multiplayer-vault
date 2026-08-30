@@ -7,7 +7,10 @@ import {
 } from 'node:fs';
 import { dirname } from 'node:path';
 import { assertReviewedNodeRuntime } from './runtime-version.js';
-import { createSigbashCredentialFile } from './sigbash-credentials.js';
+import {
+  createIndependentSigbashCredentialFile,
+  createSigbashCredentialFile,
+} from './sigbash-credentials.js';
 import {
   appendProtectedFile,
   writeProtectedEnvironmentFile,
@@ -28,7 +31,7 @@ import {
   PARTICIPANTS,
   RECOVERY_DELAY_BLOCKS,
 } from './config.js';
-import { BITCOIN_CORE_CHAIN, DEFAULT_BITCOIN_RPC_URL } from './network.js';
+import { BITCOIN_CORE_CHAIN, BITCOIN_NETWORK_CONFIG, DEFAULT_BITCOIN_RPC_URL } from './network.js';
 import { auditSpecState } from './audit.js';
 import { runBip327KeyAggVectors, verifyVaultTransaction } from './consensus.js';
 import { runBip327ProtocolVectors } from './musig2-vectors.js';
@@ -2681,7 +2684,7 @@ async function livePolicyDryRun() {
       );
     }
     printResult(requestSignature
-      ? 'live predeployment Sigbash mainnet signing proof'
+      ? `live predeployment Sigbash ${BITCOIN_NETWORK_CONFIG.addressLabel} signing proof`
       : 'live policy dry-run (no chain lookup, no nullifier consumed)', {
       round,
       leaverId,
@@ -2701,7 +2704,7 @@ async function livePolicyDryRun() {
       passed: checks.every((item) => item.ok),
     });
     assert(checks.every((item) => item.ok), requestSignature
-      ? 'live predeployment Sigbash mainnet signing proof failed'
+      ? `live predeployment Sigbash ${BITCOIN_NETWORK_CONFIG.addressLabel} signing proof failed`
       : 'live policy dry-run failed');
   });
 }
@@ -3329,7 +3332,7 @@ async function sdkPolicyCheck() {
   });
 }
 
-// Offline proof of the pinned @sigbash/sdk 0.7.1 surface plus the fail-closed
+// Offline proof of the pinned @sigbash/sdk 0.8.0 surface plus the fail-closed
 // result gates, credential atomicity, and WASM-hash validation. No network,
 // no credentials, no WASM loading — safe to run inside `npm test`.
 async function sigbashSdkContract() {
@@ -3477,8 +3480,11 @@ async function sigbashLiveSetup() {
   const setupArgs = parseArgs(process.argv.slice(3));
   const proofRoundRaw = stringArg(setupArgs, 'proof-round');
   const proofEnvironmentOutput = stringArg(setupArgs, 'proof-env-output');
+  const setupEnvironmentOutput = stringArg(setupArgs, 'setup-env-output');
   assert(!proofEnvironmentOutput || proofRoundRaw,
     '--proof-env-output is valid only with --proof-round');
+  assert(!setupEnvironmentOutput || !proofRoundRaw,
+    '--setup-env-output is valid only for the complete nine-key setup');
   const bootstrapState = createDemoState();
   const allIds = participantIds(bootstrapState);
   const roundOne = roundId(allIds);
@@ -3569,13 +3575,29 @@ async function sigbashLiveSetup() {
     const vault = state.vaults.get(round);
     if (!vault) throw new Error(`unknown vault round ${round}`);
     const policy = requirePolicy(state, vault.participantIds, participantId);
+    const musig2PrivateKey = Uint8Array.from(Buffer.from(
+      sigbashRoundKey(participant, round).privateKeyHex,
+      'hex',
+    ));
     const { sdk, client } = await createLiveSigbashClient({
       participantId,
-      musig2PrivateKey: sigbashRoundKey(participant, round).privateKeyHex,
+      musig2PrivateKey,
     });
     try {
       const poetPolicy = toPoetPolicy(sdk, policy);
-      const listed = await client.listKeys();
+      let listed: Awaited<ReturnType<SigbashLiveClient['listKeys']>> = [];
+      try {
+        listed = await client.listKeys();
+      } catch (error) {
+        // A fresh hosted-Sigbash credential has no registered proof-of-possession
+        // key yet. The first createKey call performs that registration, whereas
+        // listKeys correctly rejects the still-unknown signer. Do not treat any
+        // other authentication or transport failure as an empty key list.
+        if (!errorMessage(error).toLowerCase().includes('request signature missing or invalid')) {
+          throw error;
+        }
+        console.error('  fresh Sigbash credential detected; first key creation will register its signer');
+      }
       const matching = findMatchingSigbashKey(listed, poetPolicy, NETWORK);
       const priorRecovery = findRecoveryRecord(recoveryRecords, participantId, round);
       if (priorRecovery && matching?.keyId !== priorRecovery.keyId) {
@@ -3588,6 +3610,7 @@ async function sigbashLiveSetup() {
         network: NETWORK,
         require2FA: false,
         verbose: true,
+        keyIndex: firstUnusedSigbashKeyIndex(listed),
       });
       assert(created.bip328Xpub, `Sigbash did not return bip328Xpub for ${participantId}:${round}`);
 
@@ -3641,6 +3664,7 @@ async function sigbashLiveSetup() {
       );
     } finally {
       disposeSigbashLiveClient(client);
+      musig2PrivateKey.fill(0);
     }
   };
 
@@ -3670,7 +3694,7 @@ async function sigbashLiveSetup() {
       ].join('\n'),
     );
     printResult('live Sigbash predeployment pair setup', {
-      warning: 'This is a real immutable mainnet pair-round vault setup. Do not fund its address.',
+      warning: `This is a real immutable ${BITCOIN_NETWORK_CONFIG.addressLabel} pair-round vault setup. Do not fund its address.`,
       round: proofRound,
       participants: proofRoundIds,
       registrations: proofRegistrations,
@@ -3709,6 +3733,20 @@ async function sigbashLiveSetup() {
   }
 
   const finalState = createDemoState({ sigbashLeafOverrides: leafOverrides });
+  const envExports = [
+    `SIGBASH_LEAF_KEYS_JSON='${JSON.stringify(leafOverrides)}'`,
+    ...registrations.map(
+      (registration) => `${registration.keyIdEnvName}=${registration.keyId}`,
+    ),
+  ];
+  const setupEnvironment = setupEnvironmentOutput
+    ? writeProtectedEnvironmentFile(setupEnvironmentOutput, [
+      '# Generated from the immutable nine-key Signet setup checkpoint.',
+      '# This file contains public keys and key identifiers, never the credential triplets.',
+      ...envExports,
+      '',
+    ].join('\n'))
+    : null;
   printResult('live Sigbash setup', {
     warning:
       'Do not fund any helper p2trAddress. Fund only the printed round-one vault address, and only after verifying every key registration above succeeded.',
@@ -3717,12 +3755,8 @@ async function sigbashLiveSetup() {
       'external gate (Sigbash server signing service error — see REVIEW.md). Do not fund on the ' +
       'assumption that live solo signing works.',
     registrations,
-    envExports: [
-      `SIGBASH_LEAF_KEYS_JSON='${JSON.stringify(leafOverrides)}'`,
-      ...registrations.map(
-        (registration) => `${registration.keyIdEnvName}=${registration.keyId}`,
-      ),
-    ],
+    envExports,
+    setupEnvironment,
     vaults: [...finalState.vaults.values()].map((vault) => ({
       round: vault.id,
       participants: vault.participantIds,
@@ -3746,7 +3780,7 @@ async function sigbashOrgId() {
   const credentials = resolveSigbashCredentials(process.env, participantId);
   const { getAuthHash } = await import('@sigbash/sdk');
   const { apikeyHash } = await getAuthHash(credentials.apiKey, credentials.userKey);
-  printResult('Sigbash mainnet activation identifier', {
+  printResult(`Sigbash ${BITCOIN_NETWORK_CONFIG.addressLabel} activation identifier`, {
     participantId: participantId ?? null,
     credentialSource: credentials.source,
     apikeyHash,
@@ -3758,13 +3792,27 @@ async function sigbashOrgId() {
 /** Create one CLI proof credential without exposing or permissively overwriting it. */
 async function sigbashBootstrap() {
   const args = parseArgs(process.argv.slice(3));
-  const created = await createSigbashCredentialFile(
-    stringArg(args, 'output') ?? 'live-run/proof-credentials.env',
-  );
+  const output = stringArg(args, 'output') ?? 'live-run/proof-credentials.env';
+  const independent = args.independent === true || args.independent === 'true';
+  const created = independent
+    ? await createIndependentSigbashCredentialFile(output, PARTICIPANTS.map((item) => item.id))
+    : await createSigbashCredentialFile(output);
   printResult('Sigbash CLI proof credential created', {
     ...created,
-    next: 'Back up the credential file securely, request mainnet activation for apikeyHash, then run live-predeployment-setup followed by live-predeployment-proof.',
+    next: BITCOIN_NETWORK_CONFIG.name === 'mainnet'
+      ? 'Back up the credential file securely, request mainnet activation for apikeyHash, then run live-predeployment-setup followed by live-predeployment-proof.'
+      : 'Back up the credential file securely, then provision the isolated Signet keys with sigbash-live-setup.',
   });
+}
+
+function firstUnusedSigbashKeyIndex(listed: Awaited<ReturnType<SigbashLiveClient['listKeys']>>): number {
+  const occupied = new Set(listed.map((item) => Number(item.keyId)).filter((value) =>
+    Number.isSafeInteger(value) && value >= 0 && value <= 63,
+  ));
+  for (let candidate = 0; candidate <= 63; candidate += 1) {
+    if (!occupied.has(candidate)) return candidate;
+  }
+  throw new Error('all 64 Sigbash key indexes are already occupied for this credential');
 }
 
 async function createKeyWithAutoIndex(
@@ -3793,6 +3841,10 @@ async function createKeyWithAutoIndex(
       // The server rate-limits key registration (~1/min) and occasionally
       // times out a request; both are transient — wait and retry same index.
       const message = errorMessage(error).toLowerCase();
+      if (message.includes('policy_root mismatch')) {
+        console.error(`  … hosted WASM policy compiler disagreed at keyIndex ${keyIndex}; retrying the same immutable policy`);
+        continue;
+      }
       if (message.includes('rate limit') || message.includes('timed out') || message.includes('timeout')) {
         console.error(`  … transient error on keyIndex ${keyIndex} (${message.slice(0, 60)}); waiting 65s`);
         await new Promise((resolve) => setTimeout(resolve, 65_000));

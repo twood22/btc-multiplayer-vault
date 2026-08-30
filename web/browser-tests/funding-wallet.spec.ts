@@ -5,7 +5,7 @@ import * as ecc from 'tiny-secp256k1';
 import postgres from 'postgres';
 import { deterministicKeypair, sha256Hex } from '../../src/crypto.js';
 import type { FundingProposal } from '../../src/funding-ceremony.js';
-import { MAINNET_GENESIS_HASH } from '../../src/network.js';
+import { BITCOIN_CORE_CHAIN, BITCOIN_GENESIS_HASH, BITCOIN_NETWORK } from '../../src/network.js';
 import { unsignedTx } from '../../src/psbt.js';
 import {
   createConfirmedParticipantFixture,
@@ -49,7 +49,7 @@ const walletCoins: WalletCoin[] = participants.map((participantId, index) => ({
   scriptPubKeyHex: index === 0
     ? Buffer.from(bitcoin.payments.p2wpkh({
         pubkey: Buffer.from(walletKeys[participantId].publicKeyHex, 'hex'),
-        network: bitcoin.networks.bitcoin,
+        network: BITCOIN_NETWORK,
       }).output!).toString('hex')
     : `5120${walletKeys[participantId].xonlyPubKeyHex}`,
 }));
@@ -68,7 +68,7 @@ test('three passkey participants coordinate independent wallet-format signatures
   }
   const coreMethods: string[] = [];
   const unexpectedCoreRequests: string[] = [];
-  const core = await startMainnetCoreFixture(corePort, coreMethods, unexpectedCoreRequests);
+  const core = await startConfiguredCoreFixture(corePort, coreMethods, unexpectedCoreRequests);
   const sql = postgres(databaseUrl, { max: 4 });
   const forbiddenRequests: string[] = [];
   let fixture: ConfirmedParticipantFixture | null = null;
@@ -273,7 +273,7 @@ async function installBrowserChainFixture(
       requests.push(requestUrl);
       const url = new URL(requestUrl);
       if (url.pathname === '/api/block-height/0') {
-        await route.fulfill({ status: 200, contentType: 'text/plain', body: MAINNET_GENESIS_HASH });
+        await route.fulfill({ status: 200, contentType: 'text/plain', body: BITCOIN_GENESIS_HASH });
         return;
       }
       const txid = url.pathname.match(/^\/api\/tx\/([0-9a-f]{64})$/u)?.[1];
@@ -319,7 +319,7 @@ function forbiddenMutationRecorder(target: string[]): (requestUrl: string) => vo
   };
 }
 
-async function startMainnetCoreFixture(
+async function startConfiguredCoreFixture(
   port: number,
   methods: string[],
   unexpected: string[],
@@ -363,7 +363,7 @@ async function handleCoreRequest(
     result = null;
   } else if (method === 'getblockchaininfo') {
     result = {
-      chain: 'main',
+      chain: BITCOIN_CORE_CHAIN,
       blocks: 850005,
       headers: 850005,
       pruned: false,

@@ -7,6 +7,8 @@ import {
   xpubRootXonly,
 } from '../../src/crypto.js';
 import { auditSpecState } from '../../src/audit.js';
+import { validateVaultEconomics } from '../../src/config.js';
+import { BITCOIN_NETWORK_CONFIG, BITCOIN_NETWORK_NAME } from '../../src/network.js';
 import {
   buildSoloWithdrawalPsbt,
   inspectPsbt,
@@ -22,6 +24,7 @@ import { buildSigbashReadinessFixture } from '../../src/sigbash-readiness.js';
 import { evaluatePolicy } from '../../src/sigbash.js';
 import { asSats, type VaultEconomics } from '../../src/types.js';
 import {
+  assertFreshVaultObservation,
   assertFreshMatureRecoveryObservation,
   assertProposalStatusTransition,
   buildVaultProposal,
@@ -47,11 +50,11 @@ const artifact = createPublishedRosterArtifact(vaultId, roster);
 const digest = publishedRosterDigest(artifact);
 const checks: Array<{ name: string; ok: boolean }> = [];
 
-check('a publishable roster contains nine real mainnet Sigbash registrations', () => {
+check(`a publishable roster contains nine real ${BITCOIN_NETWORK_CONFIG.addressLabel} Sigbash registrations`, () => {
   const registrations = artifact.participants.flatMap((participant) =>
     Object.values(participant.sigbashRegistrationByRound || {}));
   assert.equal(registrations.length, 9);
-  assert(registrations.every((registration) => registration.network === 'mainnet'));
+  assert(registrations.every((registration) => registration.network === BITCOIN_NETWORK_NAME));
   assert.equal(artifact.policies.length, 9);
   assert(artifact.policies.every((policy) => policy.keyId.startsWith('live-key:')));
 });
@@ -61,14 +64,14 @@ check('roster-derived signing state retains each live xpub and Sigbash keyId', (
   for (const participant of state.participants) {
     for (const [round, key] of Object.entries(participant.sigbashByRound)) {
       assert.equal(key.isLiveKey, true);
-      assert.match(key.xpub || '', /xpub/);
+      assert.match(key.xpub || '', new RegExp(BITCOIN_NETWORK_CONFIG.bip32PublicPrefix, 'u'));
       assert.equal(state.policies.get(`${round}:${participant.id}`)?.keyId, `live-key:${participant.id}:${round}`);
     }
   }
 });
 
-check('the roster deterministically derives a mainnet round-one funding vault', () => {
-  assert.match(artifact.funding.address, /^bc1p/);
+check(`the roster deterministically derives a ${BITCOIN_NETWORK_CONFIG.addressLabel} round-one funding vault`, () => {
+  assert.match(artifact.funding.address, BITCOIN_NETWORK_NAME === 'mainnet' ? /^bc1p/u : /^tb1p/u);
   assert.equal(artifact.funding.valueSats, artifact.economics.depositSatsPerParticipant * 3);
   assert.equal(artifact.vaults.length, 4);
 });
@@ -91,17 +94,23 @@ check('a registration whose leaf does not derive from its own xpub is rejected',
   assert.throws(() => createPublishedRosterArtifact(vaultId, tampered), /policy leaf does not match/);
 });
 
-check('a testnet extended-public-key version is rejected even when its points are valid', () => {
+check('an extended-public-key version for the other network is rejected even when its points are valid', () => {
   const tampered = structuredClone(roster);
   const round = 'alicebobcarol';
-  const testnetXpub = syntheticXpub('alice:testnet-version', '043587cf');
+  const testnetXpub = syntheticXpub(
+    'alice:wrong-network-version',
+    BITCOIN_NETWORK_NAME === 'mainnet' ? '043587cf' : '0488b21e',
+  );
   const registration = tampered[0]!.sigbashRegistrationByRound![round]!;
   registration.bip328Xpub = testnetXpub;
   registration.policyLeafXonlyPubkey = deriveXpubChildPubkey(testnetXpub, [0, 0]).xonlyPubKeyHex;
   registration.identificationLeafXonlyPubkey = xpubRootXonly(testnetXpub);
   tampered[0]!.sigbashLeafByRound[round] = registration.policyLeafXonlyPubkey;
   tampered[0]!.sigbashIdentificationLeafByRound[round] = registration.identificationLeafXonlyPubkey;
-  assert.throws(() => createPublishedRosterArtifact(vaultId, tampered), /mainnet xpub/);
+  assert.throws(
+    () => createPublishedRosterArtifact(vaultId, tampered),
+    new RegExp(`must carry a ${BITCOIN_NETWORK_CONFIG.bip32PublicPrefix}`, 'u'),
+  );
 });
 
 check('changing a service policy root changes the exact roster digest', () => {
@@ -155,7 +164,7 @@ check('round-one policy pins the vault built from the actual surviving pair keys
   assert(JSON.stringify(plan.next.policy).includes(survivingPairAddress));
 });
 
-check('tiny-mainnet economics are committed into every vault and transaction', () => {
+check(`tiny ${BITCOIN_NETWORK_CONFIG.addressLabel} economics are committed into every vault and transaction`, () => {
   const economics = tinyEconomics();
   const tinyArtifact = createPublishedRosterArtifact(vaultId, roster, economics);
   const state = createRosterState(roster, undefined, economics);
@@ -389,6 +398,26 @@ check('recovery readiness requires both CSV maturity and a fresh chain observati
   }), /timing/);
 });
 
+check('every spend proposal requires a fresh observation and recovery delay stays CSV-encodable', () => {
+  const nowMs = 2_000_000;
+  assert.doesNotThrow(() => assertFreshVaultObservation({
+    observedAtMs: nowMs - 1_000,
+    nowMs,
+  }));
+  assert.throws(() => assertFreshVaultObservation({
+    observedAtMs: nowMs - 2 * 60 * 1000,
+    nowMs,
+  }), /stale/u);
+  assert.doesNotThrow(() => validateVaultEconomics({
+    ...tinyEconomics(),
+    recoveryDelayBlocks: 65_535,
+  }));
+  assert.throws(() => validateVaultEconomics({
+    ...tinyEconomics(),
+    recoveryDelayBlocks: 65_536,
+  }), /1 through 65535/u);
+});
+
 check('nine readiness fixtures bind every live key and reject each hostile transaction locally', () => {
   const state = createRosterState(artifact.participants, undefined, artifact.economics);
   let count = 0;
@@ -445,11 +474,11 @@ function liveRoster(): RosterEntry[] {
   return ids.map((id) => {
     const base = rosterEntry(id, `participant-${id}-secret-material-that-is-long-enough`, ids);
     const registrations = Object.fromEntries(participantLeaveRounds(id, ids).map((round) => {
-      const xpub = syntheticMainnetXpub(`${id}:${round}`);
+      const xpub = syntheticConfiguredXpub(`${id}:${round}`);
       const policyLeaf = deriveXpubChildPubkey(xpub, [0, 0]).xonlyPubKeyHex;
       const identificationLeaf = xpubRootXonly(xpub);
       return [round, {
-        network: 'mainnet',
+        network: BITCOIN_NETWORK_NAME,
         keyId: `live-key:${id}:${round}`,
         keyIndex: participantLeaveRounds(id, ids).indexOf(round),
         bip328Xpub: xpub,
@@ -524,8 +553,8 @@ function roundOneCoin(): VaultCoinSnapshot {
   };
 }
 
-function syntheticMainnetXpub(label: string): string {
-  return syntheticXpub(label, '0488b21e');
+function syntheticConfiguredXpub(label: string): string {
+  return syntheticXpub(label, BITCOIN_NETWORK_NAME === 'mainnet' ? '0488b21e' : '043587cf');
 }
 
 function syntheticXpub(label: string, versionHex: string): string {

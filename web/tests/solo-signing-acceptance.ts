@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import type { SigbashClient } from '@sigbash/sdk';
 import * as bitcoin from 'bitcoinjs-lib';
+import { BITCOIN_NETWORK_NAME } from '../../src/network.js';
 import { psbtUnsignedTxid } from '../../src/psbt.js';
 import type { SigbashRosterRegistration } from '../../src/vault.js';
 import type { SigbashCustodyKey } from '../lib/client/sigbash-custody.js';
@@ -147,7 +148,7 @@ function signerClient(options: {
       return {
         keyId: registration.keyId,
         keyIndex: registration.keyIndex,
-        network: 'mainnet',
+        network: BITCOIN_NETWORK_NAME,
         policyRoot: options.getKeyPolicyRoot ?? registration.policyRoot,
         require2FA: false,
         kmcJSON: '{"isolated":"acceptance-only"}',
@@ -155,7 +156,7 @@ function signerClient(options: {
     },
     async verifyPSBT(input: { psbtBase64: string; kmcJSON: string; network: string }) {
       options.calls?.push('verifyPSBT');
-      assert.equal(input.network, 'mainnet');
+      assert.equal(input.network, BITCOIN_NETWORK_NAME);
       assert.equal(input.kmcJSON, '{"isolated":"acceptance-only"}');
       assert(input.psbtBase64.length > 0);
       verifiedPsbtBase64 = input.psbtBase64;
@@ -179,7 +180,7 @@ function signerClient(options: {
       assert.equal(input.keyId, registration.keyId);
       assert.equal(input.psbtBase64, verifiedPsbtBase64);
       assert.equal(input.kmcJSON, '{"isolated":"acceptance-only"}');
-      assert.equal(input.network, 'mainnet');
+      assert.equal(input.network, BITCOIN_NETWORK_NAME);
       assert.equal(input.require2FA, false);
       assert.equal(input.finalizePsbt, true);
       const signed = signPolicyLeafPsbt(input.psbtBase64, privateKey);
@@ -216,7 +217,7 @@ function custodyKeyFor(item: SigbashRosterRegistration): SigbashCustodyKey {
       recoveryKEK: '31'.repeat(32),
       cekCiphertext: '32'.repeat(48),
       cekNonce: '33'.repeat(12),
-      network: 'mainnet',
+      network: BITCOIN_NETWORK_NAME,
       createdAt: 1_786_000_000,
     },
   };

@@ -141,7 +141,7 @@ export interface VaultRound {
 }
 
 export type ComparisonOperator = 'EQ' | 'NEQ' | 'LT' | 'LTE' | 'GT' | 'GTE';
-export type BitcoinNetworkName = 'mainnet';
+export type BitcoinNetworkName = 'mainnet' | 'signet';
 
 export interface IndexSelector {
   type: 'INDEX';

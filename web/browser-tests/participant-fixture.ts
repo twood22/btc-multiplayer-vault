@@ -12,6 +12,7 @@ import {
   publishedRosterDigest,
   type PublishedRosterArtifact,
 } from '../../src/roster-ceremony.js';
+import { BITCOIN_NETWORK_CONFIG, BITCOIN_NETWORK_NAME } from '../../src/network.js';
 import { participantLeaveRounds } from '../../src/vault.js';
 
 export type ParticipantId = 'alice' | 'bob' | 'carol';
@@ -228,14 +229,14 @@ export async function seedPublicSigbashRegistrations(
   for (const member of members) {
     const rounds = participantLeaveRounds(member.participant_id, participants);
     for (const [keyIndex, round] of rounds.entries()) {
-      const xpub = syntheticMainnetXpub(`${vaultId}:${member.participant_id}:${round}`);
+      const xpub = syntheticConfiguredXpub(`${vaultId}:${member.participant_id}:${round}`);
       await sql`
         INSERT INTO participant_sigbash_keys (
           vault_id, user_id, participant_id, round_id, network, key_id, key_index,
           bip328_xpub, policy_leaf_xonly, identification_leaf_xonly, policy_root, policy_id
         ) VALUES (
           ${vaultId}::uuid, ${member.user_id}::uuid, ${member.participant_id}, ${round},
-          'mainnet', ${`browser-public-fixture:${member.participant_id}:${round}`}, ${keyIndex},
+          ${BITCOIN_NETWORK_NAME}, ${`browser-public-fixture:${member.participant_id}:${round}`}, ${keyIndex},
           ${xpub}, ${Buffer.from(deriveXpubChildPubkey(xpub, [0, 0]).xonlyPubKeyHex, 'hex')},
           ${Buffer.from(xpubRootXonly(xpub), 'hex')},
           ${Buffer.from(sha256Hex(`browser-policy-root:${vaultId}:${member.participant_id}:${round}`), 'hex')},
@@ -354,10 +355,10 @@ function virtualAuthenticator(
   } as const;
 }
 
-function syntheticMainnetXpub(label: string): string {
+function syntheticConfiguredXpub(label: string): string {
   const root = deterministicKeypair('browser-vault-acceptance', `${label}:root`);
   return base58CheckEncode(Buffer.concat([
-    Buffer.from('0488b21e', 'hex'),
+    Buffer.from(BITCOIN_NETWORK_CONFIG.bip32PublicPrefix === 'xpub' ? '0488b21e' : '043587cf', 'hex'),
     Buffer.from([0]),
     Buffer.alloc(4),
     Buffer.alloc(4),

@@ -26,6 +26,7 @@ import {
 } from './funding-ceremony-store';
 import { consumeRateLimit } from './rate-limit';
 import type { StoredCredential } from './webauthn-store';
+import { BITCOIN_NETWORK_NAME } from '../../../src/network';
 
 interface MembershipRow { vault_id: string; participant_id: string }
 
@@ -1004,7 +1005,7 @@ function restartSnapshotFromParts(input: {
   if (input.finalization && !['awaiting_approvals', 'approved'].includes(input.finalization.status)) return null;
   return canonicalFundingRestartSnapshot({
     version: 1,
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     vaultId: input.ceremony.vaultId,
     rosterDigest: input.ceremony.rosterDigest,
     inputs: input.ceremony.inputs.map((item) => ({
@@ -1044,7 +1045,7 @@ async function loadLockedFundingRestartSnapshot(
   const finalization = finalizations[0];
   return canonicalFundingRestartSnapshot({
     version: 1,
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     vaultId,
     rosterDigest,
     inputs: inputs.map((row) => ({
@@ -1080,7 +1081,7 @@ async function clearFundingCeremonyForRestart(
 function contributionFromRow(row: SignatureRow): FundingSignatureContribution {
   const binding = {
     version: 1 as const,
-    network: 'mainnet' as const,
+    network: BITCOIN_NETWORK_NAME,
     vaultId: row.vault_id,
     rosterDigest: row.roster_digest.toString('hex'),
     proposalDigest: row.proposal_digest.toString('hex'),

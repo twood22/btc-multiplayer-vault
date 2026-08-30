@@ -1,12 +1,13 @@
 import type { RpcBlockStatus, RpcTransaction, RpcTxOut } from './bitcoin-rpc.js';
 import { BitcoinTransactionNotFoundError } from './bitcoin-backend-errors.js';
 import {
+  BITCOIN_GENESIS_HASH,
+  BITCOIN_NETWORK_CONFIG,
   BITCOIN_CORE_CHAIN,
   DEFAULT_ESPLORA_URL,
-  MAINNET_GENESIS_HASH,
 } from './network.js';
 
-// Esplora (mempool.space / blockstream) backend for the mainnet product flow.
+// Esplora backend for the explicitly configured Bitcoin network.
 // run without a local Bitcoin Core node. Enabled by BITCOIN_BACKEND=esplora
 // (or by setting BITCOIN_ESPLORA_URL). Covers exactly the read/broadcast
 // surface the CLI needs: gettxout, getrawtransaction, sendrawtransaction, and
@@ -20,17 +21,17 @@ function baseUrl(): string {
   return (process.env.BITCOIN_ESPLORA_URL || DEFAULT_ESPLORA_URL).replace(/\/$/, '');
 }
 
-async function assertMainnetEsplora(): Promise<void> {
+async function assertConfiguredEsplora(): Promise<void> {
   const url = baseUrl();
   const response = await fetch(`${url}/block-height/0`);
   const genesisHash = (await response.text()).trim();
-  if (!response.ok || genesisHash !== MAINNET_GENESIS_HASH) {
-    throw new Error('configured Esplora backend is not Bitcoin mainnet');
+  if (!response.ok || genesisHash !== BITCOIN_GENESIS_HASH) {
+    throw new Error(`configured Esplora backend is not ${BITCOIN_NETWORK_CONFIG.addressLabel}`);
   }
 }
 
 async function esploraGet(path: string): Promise<Response> {
-  await assertMainnetEsplora();
+  await assertConfiguredEsplora();
   const url = `${baseUrl()}${path}`;
   let response: Response;
   try {
@@ -170,7 +171,7 @@ export async function esploraGetBlockStatus(blockHash: string): Promise<RpcBlock
 }
 
 export async function esploraSendRawTransaction(rawTxHex: string): Promise<string> {
-  await assertMainnetEsplora();
+  await assertConfiguredEsplora();
   const url = `${baseUrl()}/tx`;
   const response = await fetch(url, { method: 'POST', body: rawTxHex });
   const body = (await response.text()).trim();

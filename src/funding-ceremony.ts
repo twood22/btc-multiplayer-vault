@@ -7,7 +7,8 @@ import {
   MIN_FUNDING_RELAY_FEE_SATS,
   MIN_SAFE_CHANGE_SATS,
 } from './funding.js';
-import { BITCOIN_NETWORK } from './network.js';
+import { BITCOIN_NETWORK, BITCOIN_NETWORK_CONFIG, BITCOIN_NETWORK_NAME } from './network.js';
+import type { BitcoinNetworkName } from './types.js';
 import { buildFundingPsbt, unsignedTx } from './psbt.js';
 import {
   publishedRosterDigest,
@@ -19,7 +20,7 @@ export const DEFAULT_FUNDING_FEE_SATS = 600;
 
 export interface FundingInputCommitment {
   version: 1;
-  network: 'mainnet';
+  network: BitcoinNetworkName;
   vaultId: string;
   rosterDigest: string;
   participantId: string;
@@ -36,7 +37,7 @@ export interface FundingInputCommitment {
 
 export interface FundingProposal {
   version: 1;
-  network: 'mainnet';
+  network: BitcoinNetworkName;
   vaultId: string;
   rosterDigest: string;
   fundingFeeSats: number;
@@ -46,7 +47,7 @@ export interface FundingProposal {
   txTemplate: ReturnType<typeof buildFundingPsbt>['txTemplate'];
 }
 
-/** Digest of the exact mainnet UTXO evidence and change destination a passkey approves. */
+/** Digest of the exact configured-network UTXO evidence and change destination a passkey approves. */
 export function fundingInputCommitmentDigest(commitment: FundingInputCommitment): string {
   return sha256Hex(JSON.stringify(canonicalFundingInputCommitment(commitment)));
 }
@@ -56,8 +57,9 @@ export function validateFundingInputCommitment(
   commitment: FundingInputCommitment,
 ): FundingInputCommitment {
   const rosterDigest = publishedRosterDigest(artifact);
-  if (commitment.version !== 1 || commitment.network !== 'mainnet' || artifact.network !== 'mainnet') {
-    throw new Error('funding input commitment must use version 1 on Bitcoin mainnet');
+  if (commitment.version !== 1 || commitment.network !== BITCOIN_NETWORK_NAME ||
+      artifact.network !== BITCOIN_NETWORK_NAME) {
+    throw new Error(`funding input commitment must use version 1 on ${BITCOIN_NETWORK_CONFIG.addressLabel}`);
   }
   if (commitment.vaultId !== artifact.vaultId || commitment.rosterDigest !== rosterDigest) {
     throw new Error('funding input commitment belongs to a different confirmed roster');
@@ -74,7 +76,7 @@ export function validateFundingInputCommitment(
   }
   if (!Number.isSafeInteger(commitment.valueSats) || commitment.valueSats <= 0 ||
       !isSupportedFundingInputScript(scriptPubKeyHex)) {
-    throw new Error('funding input must be a positive native P2WPKH or P2TR mainnet output');
+    throw new Error('funding input must be a positive native P2WPKH or P2TR output on the configured network');
   }
   validateFundingFee(commitment.fundingFeeSats, artifact.economics.depositSatsPerParticipant);
   const feeShare = participantFundingFeeShare(
@@ -91,12 +93,12 @@ export function validateFundingInputCommitment(
     throw new Error('an exact funding input must not add a change address');
   }
   if (changeSats > 0) {
-    if (!commitment.changeAddress) throw new Error('funding input requires a mainnet change address');
+    if (!commitment.changeAddress) throw new Error('funding input requires a configured-network change address');
     let changeScript: Uint8Array;
     try {
       changeScript = bitcoin.address.toOutputScript(commitment.changeAddress, BITCOIN_NETWORK);
     } catch {
-      throw new Error('funding change address is not a valid Bitcoin mainnet address');
+      throw new Error(`funding change address is not valid on ${BITCOIN_NETWORK_CONFIG.addressLabel}`);
     }
     const changeScriptHex = Buffer.from(changeScript).toString('hex');
     if (!isSupportedFundingInputScript(changeScriptHex)) {
@@ -108,7 +110,7 @@ export function validateFundingInputCommitment(
   }
   if (commitment.observedUnspent !== true || !Number.isSafeInteger(commitment.confirmations) ||
       commitment.confirmations < 1 || commitment.confirmations > 2_000_000) {
-    throw new Error('funding input needs a confirmed unspent mainnet observation');
+    throw new Error(`funding input needs a confirmed unspent ${BITCOIN_NETWORK_CONFIG.addressLabel} observation`);
   }
   const source = new URL(commitment.sourceOrigin);
   if (source.origin !== commitment.sourceOrigin || source.protocol !== 'https:') {
@@ -157,7 +159,7 @@ export function buildFundingProposal(input: {
   });
   const digest = sha256Hex(JSON.stringify({
     version: 1,
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     vaultId: input.artifact.vaultId,
     rosterDigest,
     fundingFeeSats: input.fundingFeeSats,
@@ -166,7 +168,7 @@ export function buildFundingProposal(input: {
   const unsignedTxid = unsignedTx(bitcoin.Psbt.fromBase64(built.psbtBase64)).getId();
   return {
     version: 1,
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     vaultId: input.artifact.vaultId,
     rosterDigest,
     fundingFeeSats: input.fundingFeeSats,

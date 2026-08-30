@@ -6,7 +6,7 @@ export interface SigbashRuntimeConfig {
   wasmSha384: string;
   wasmExecUrl: string;
   wasmExecSha384: string;
-  sdkVersion: '0.7.1';
+  sdkVersion: '0.8.0';
 }
 
 export function sigbashRuntimeConfig(): SigbashRuntimeConfig {
@@ -16,7 +16,7 @@ export function sigbashRuntimeConfig(): SigbashRuntimeConfig {
     wasmSha384: hash(process.env.SIGBASH_WASM_SHA384, 'SIGBASH_WASM_SHA384'),
     wasmExecUrl: httpsUrl(process.env.SIGBASH_WASM_EXEC_URL || 'https://www.sigbash.com/wasm_exec.js', 'SIGBASH_WASM_EXEC_URL'),
     wasmExecSha384: hash(process.env.SIGBASH_WASM_EXEC_SHA384, 'SIGBASH_WASM_EXEC_SHA384'),
-    sdkVersion: '0.7.1',
+    sdkVersion: '0.8.0',
   };
 }
 

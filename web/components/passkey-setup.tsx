@@ -4,6 +4,7 @@ import { FormEvent, useState } from 'react';
 import { createParticipantSecretEnvelope } from '../lib/client/key-envelope';
 import { deriveParticipantIdentity } from '../lib/client/participant-identity';
 import { assertPasskeyWithPrf, createPasskey } from '../lib/client/webauthn';
+import { BITCOIN_NETWORK_CONFIG } from '../../src/network.js';
 
 type Stage = 'ready' | 'registering' | 'wrapping' | 'complete' | 'error';
 
@@ -60,7 +61,7 @@ export function PasskeySetup({ inviteToken }: { inviteToken: string }) {
         <p>{message}</p>
         <div className="safety-note">
           Funding remains disabled until a second passkey or offline recovery kit is added, all three
-          friends verify the same vault address, and live Sigbash mainnet signing passes.
+          friends verify the same vault address, and live Sigbash {BITCOIN_NETWORK_CONFIG.addressLabel} signing passes.
         </div>
       </section>
     );

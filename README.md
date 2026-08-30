@@ -12,7 +12,8 @@ The passkey-backed user product is being built without changing those vault
 semantics. Sigbash declined experimental mainnet SDK enablement, so the next
 real integration target is the default global Bitcoin Signet; see
 [`SIGNET-VALIDATION-PLAN.md`](./SIGNET-VALIDATION-PLAN.md). The current code is
-still pinned to mainnet and must be safely parameterized before any Signet run.
+now parameterized behind one typed `mainnet`/default-global-`signet` boundary;
+the active validation profile is Signet and cross-network inputs fail closed.
 Its current status and hard gates are documented in [`STATUS.md`](./STATUS.md)
 and [`PASSKEY-PRODUCT.md`](./PASSKEY-PRODUCT.md). It is not approved for mainnet
 funding or deployment. The reviewed container and operator topology are in
@@ -33,9 +34,10 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Cooperative exit (interactive BIP-327 MuSig2 ceremony) | ✅ verified, no single machine holds all keys |
 | Timelocked recovery (N−1 multi_a) | ✅ consensus + distributed passkey-browser verified |
 | Final sweep | ✅ consensus + owner-only passkey-browser verified |
-| Mainnet address, PSBT, policy, RPC, and explorer configuration | ✅ offline suite; real Core run still required |
-| Sigbash policy enforcement + tamper rejection | ⚠️ historical signet evidence; browser registration provenance is not independently attested; mainnet unproven |
-| Sigbash co-signing a live mainnet withdrawal | ⛔ browser proof gate implemented; external execution not proven |
+| Mainnet + default-global-Signet address, PSBT, policy, RPC, explorer, and database boundary | ✅ both offline suites; real Signet Core syncing |
+| Sigbash policy enforcement + tamper rejection | ⚠️ exact Signet PSBT accepted and three hostile forms rejected by the hosted verifier; registration provenance remains unverified |
+| Sigbash co-signing a live Signet withdrawal | ⛔ hosted pipeline reaches the signing service, which returns `server_error: Signing service error` |
+| Real standard-Signet coins | ⏳ isolated Core is syncing; the no-CAPTCHA PoW claim was stopped after the host reached 94–96 °C, so one manual faucet CAPTCHA is required |
 | Per-participant key custody | ✅ browser-distributed and passkey protected |
 | Recoverable passkey custody + encrypted Sigbash credentials/kits | ✅ implemented; real authenticator run still required |
 | Browser PRF setup/recovery/sign-in/unlock | ✅ Chromium + two virtual authenticators; physical devices still required |
@@ -59,11 +61,11 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 - Node.js 22+ (the code is strict TypeScript, run via `tsx` with no build
   step; `npm test` typechecks with `tsc --noEmit` before running the suite)
 - Nothing else for local mode. Live mode needs participant-specific Sigbash
-  mainnet access and a mainnet backend. Chain reads can use configured Esplora,
+  access for the selected network and a matching backend. Chain reads can use configured Esplora,
   but the private initial-funding release deliberately requires Bitcoin Core's
   `testmempoolaccept`. Those external gates are not currently proven.
 - A Bitcoin Core backend must be fully synchronized, non-pruned, and started
-  with `txindex=1`; the service rechecks mainnet identity and synchronized
+  with `txindex=1`; the service rechecks configured-network identity and synchronized
   transaction-index capability before every sensitive RPC operation.
 
 ## Run
@@ -484,11 +486,10 @@ input scriptPubKey, so you only pass `--participant`.
 
 ## Trust model and caveats — read before funding anything
 
-- **Live Sigbash mainnet signing is not proven.** The client is wired to the
-  SDK's mainnet network value, but mainnet entitlement, key creation, policy
-  verification, hostile-PSBT rejection, and a real policy-limited signature
-  must all succeed before the vault is fundable. Historical signet checks are
-  useful regression evidence, not a substitute for that proof.
+- **Live Sigbash signing is not proven.** Fresh Signet keys exist and the hosted
+  verifier accepts the allowed PSBT while rejecting hostile variants, but the
+  hosted signer currently returns `server_error: Signing service error`. Signet
+  evidence is never a substitute for a later mainnet proof.
 - **The recovery leaf is an N-1 collusion path after the delay.** Once a vault
   UTXO sits `RECOVERY_DELAY_BLOCKS` (default 6, ~1 hour) without moving, any
   N-1 of the current participants can co-sign the recovery leaf and send the
@@ -507,10 +508,11 @@ input scriptPubKey, so you only pass `--participant`.
 - **Key custody.** `vault-keygen`/`verify-roster` let each participant generate
   keys from their own secret and confirm identical vault addresses before
   funding. The default `VAULT_DEMO_SEED` is public and live commands refuse it.
-- **Mainnet only, but still release-gated.** Every executable address, PSBT,
-  policy, SDK, RPC, and explorer path is pinned to mainnet; amounts and fees
-  remain env-overridable (`VAULT_DEPOSIT_SATS`, `VAULT_*_FEE_SATS`). A real
-  Core acceptance run, deliberately tiny amount profile, reviewed recovery
+- **Network-typed and still release-gated.** Every executable address, PSBT,
+  policy, SDK, RPC, explorer, database, and custody path is bound to the selected
+  `mainnet` or default-global-`signet` profile; amounts and fees remain
+  env-overridable (`VAULT_DEPOSIT_SATS`, `VAULT_*_FEE_SATS`). Passing Signet can
+  never authorize mainnet. A deliberately tiny amount profile, reviewed recovery
   delay, unanimous roster, and live Sigbash signature remain mandatory.
 - **Browser Sigbash registration is not provider-attested.** The coordinator
   verifies the submitted xpub, derived leaves, index, and policies for internal

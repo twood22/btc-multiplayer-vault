@@ -12,7 +12,7 @@ export interface SigbashSdk {
     apiKey: string;
     userKey: string;
     userSecretKey: string;
-    musig2PrivateKey?: string;
+    musig2PrivateKey?: string | Uint8Array;
   }) => SigbashLiveClient;
   conditionConfigToPoetPolicy(config: unknown): PoetPolicy;
   SDK_VERSION?: string;
@@ -116,7 +116,7 @@ export interface SigbashSignResult {
 export function sigbashVerificationPassed(
   result: SigbashVerifyResult | { passed?: boolean; error?: string } | null | undefined,
 ): boolean {
-  return result?.passed === true && result.error === undefined;
+  return result?.passed === true && (result.error === undefined || result.error === '');
 }
 
 /** Only the service's explicit negative verdict counts as hostile-PSBT rejection. */
@@ -160,7 +160,7 @@ export function normalizeSigbashSigningResult(
     (result.hex as string | undefined) ||
     null;
   return {
-    success: result.success === true && result.error === undefined,
+    success: result.success === true && (result.error === undefined || result.error === null || result.error === ''),
     txHex,
     signedPsbtBase64,
     pathId: (result.pathId as string | undefined) || (result.satisfiedPath as string | undefined) || null,
@@ -308,13 +308,14 @@ class LiveSigbashAdapter implements SigbashAdapter {
     if (!('psbtBase64' in tx) || !tx.psbtBase64 || !policy.keyId) {
       throw new Error('live signing requires tx.psbtBase64 and policy.keyId');
     }
-    const { kmcJSON } = await this.client.getKey(policy.keyId, { verbose: true });
-    return this.client.signPSBT({
-      keyId: policy.keyId,
+    const keyId = policy.keyId;
+    const { kmcJSON } = await this.client.getKey(keyId, { verbose: true });
+    return withSigbashHexProofTransport(() => this.client.signPSBT({
+      keyId,
       psbtBase64: tx.psbtBase64,
       kmcJSON,
       network: BITCOIN_NETWORK_NAME,
-    });
+    }));
   }
 
   dispose(): void {
@@ -322,10 +323,147 @@ class LiveSigbashAdapter implements SigbashAdapter {
   }
 }
 
+/**
+ * The hosted signer currently decodes the complete `policy_proofs` transport
+ * value as hex while the current hosted WASM emits raw JSON text. Interpose
+ * before the SDK's PoP wrapper so the server receives—and the SDK
+ * authenticates—the UTF-8 JSON bytes in its expected transport encoding.
+ * Remove this compatibility boundary once Sigbash deploys matching
+ * WASM/server versions.
+ */
+export async function withSigbashHexProofTransport<T>(action: () => Promise<T>): Promise<T> {
+  const root = globalThis as typeof globalThis & { sharedMusigSocket?: SigbashRawSocket };
+  const priorDescriptor = Object.getOwnPropertyDescriptor(root, 'sharedMusigSocket');
+  let current = root.sharedMusigSocket;
+  const restorers: Array<() => void> = [];
+  const wrapped = new WeakSet<object>();
+  const wrap = (socket: SigbashRawSocket | undefined): SigbashRawSocket | undefined => {
+    if (!socket || typeof socket.emit !== 'function' || wrapped.has(socket)) return socket;
+    const originalEmit = socket.emit;
+    socket.emit = function (event: unknown, payload?: unknown, ...rest: unknown[]) {
+      const rewritten = event === 'blind_signing_request'
+        ? rewritePolicyProofBundlesAsHex(payload)
+        : 0;
+      if (event === 'blind_signing_request' && rewritten > 0 && typeof console !== 'undefined') {
+        // Do not log proof material. This count is enough to confirm that the
+        // compatibility boundary actually saw and rewrote the WASM payload.
+        console.log(`[sigbash-compat] rewrote ${rewritten} policy proof bundle(s) as hex`);
+      }
+      if (event === 'blind_signing_request' &&
+          typeof process !== 'undefined' && process.env.SIGBASH_PROOF_DIAGNOSTICS === '1' &&
+          typeof console !== 'undefined') {
+        // Field names, container types, and lengths only: never proof values.
+        console.log(`[sigbash-compat] payload shape ${JSON.stringify(summarizePayloadShape(payload))}`);
+      }
+      return originalEmit.call(this, event, payload, ...rest);
+    };
+    wrapped.add(socket);
+    restorers.push(() => { socket.emit = originalEmit; });
+    return socket;
+  };
+  current = wrap(current);
+  Object.defineProperty(root, 'sharedMusigSocket', {
+    configurable: true,
+    enumerable: priorDescriptor?.enumerable ?? true,
+    get: () => current,
+    set: (socket: SigbashRawSocket | undefined) => { current = wrap(socket); },
+  });
+  try {
+    return await action();
+  } finally {
+    for (const restore of restorers.reverse()) restore();
+    if (priorDescriptor) Object.defineProperty(root, 'sharedMusigSocket', priorDescriptor);
+    else delete root.sharedMusigSocket;
+  }
+}
+
+interface SigbashRawSocket {
+  emit: (event: unknown, payload?: unknown, ...rest: unknown[]) => unknown;
+}
+
+function summarizePayloadShape(value: unknown): string[] {
+  const fields: string[] = [];
+  const seen = new WeakSet<object>();
+  const visit = (item: unknown, path: string, depth: number): void => {
+    if (fields.length >= 100) return;
+    if (typeof item === 'string') {
+      const isJson = item.startsWith('{') || item.startsWith('[');
+      const shape = item.startsWith('{') ? 'json-object'
+        : item.startsWith('[') ? 'json-array'
+          : /^(?:[0-9a-f]{2})+$/u.test(item) ? 'hex'
+            : /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(item) ? 'base64'
+              : 'opaque';
+      fields.push(`${path}:string:${shape}:${item.length}`);
+      if (isJson && depth < 8) {
+        try {
+          visit(JSON.parse(item), `${path}<json>`, depth + 1);
+        } catch {
+          fields.push(`${path}<json>:invalid`);
+        }
+      }
+      return;
+    }
+    if (!item || typeof item !== 'object') {
+      fields.push(`${path}:${typeof item}`);
+      return;
+    }
+    if (seen.has(item as object)) return;
+    seen.add(item as object);
+    if (Array.isArray(item)) {
+      fields.push(`${path}:array:${item.length}`);
+      if (depth < 8) {
+        item.forEach((entry, index) => {
+          if (typeof entry === 'string' || (entry && typeof entry === 'object')) {
+            visit(entry, `${path}[${index}]`, depth + 1);
+          }
+        });
+      }
+      return;
+    }
+    const row = item as Record<string, unknown>;
+    fields.push(`${path}:object:${Object.keys(row).length}`);
+    if (depth < 8) {
+      for (const [key, entry] of Object.entries(row)) visit(entry, `${path}.${key}`, depth + 1);
+    }
+  };
+  visit(value, '$', 0);
+  return fields;
+}
+
+function utf8ToHex(value: string): string {
+  const binary = new TextEncoder().encode(value);
+  let hex = '';
+  for (let index = 0; index < binary.length; index += 1) {
+    hex += binary[index]!.toString(16).padStart(2, '0');
+  }
+  return hex;
+}
+
+function rewritePolicyProofBundlesAsHex(value: unknown, seen = new WeakSet<object>()): number {
+  if (!value || typeof value !== 'object' || seen.has(value as object)) return 0;
+  seen.add(value as object);
+  let rewritten = 0;
+  if (Array.isArray(value)) {
+    for (const item of value) rewritten += rewritePolicyProofBundlesAsHex(item, seen);
+    return rewritten;
+  }
+  const row = value as Record<string, unknown>;
+  for (const [key, item] of Object.entries(row)) {
+    if (key === 'policy_proofs' && typeof item === 'string' &&
+        (item.startsWith('{') || item.startsWith('['))) {
+      row[key] = utf8ToHex(item);
+      rewritten += 1;
+    } else {
+      rewritten += rewritePolicyProofBundlesAsHex(item, seen);
+    }
+  }
+  return rewritten;
+}
+
 export async function createLiveSigbashClient({
   participantId,
   musig2PrivateKey,
-}: { participantId?: string; musig2PrivateKey?: string } = {}): Promise<{
+}: { participantId?: string; musig2PrivateKey?: string | Uint8Array } = {}): Promise<{
   sdk: SigbashSdk;
   client: SigbashLiveClient;
 }> {

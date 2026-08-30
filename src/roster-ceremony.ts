@@ -3,11 +3,17 @@ import { NETWORK, PARTICIPANTS, VAULT_ECONOMICS, validateVaultEconomics } from '
 import { auditSpecState } from './audit.js';
 import { validateRoster } from './custody.js';
 import { createRosterState, roundId, type RosterEntry } from './vault.js';
-import type { PolicyCondition, TapLeaf, VaultEconomics, VaultKeyPath } from './types.js';
+import type {
+  BitcoinNetworkName,
+  PolicyCondition,
+  TapLeaf,
+  VaultEconomics,
+  VaultKeyPath,
+} from './types.js';
 
 export interface PublishedRosterArtifact {
   version: 1;
-  network: 'mainnet';
+  network: BitcoinNetworkName;
   vaultId: string;
   participants: RosterEntry[];
   economics: VaultEconomics;
@@ -25,7 +31,7 @@ export interface PublishedRosterArtifact {
     id: string;
     leaverId: string;
     roundIds: string[];
-    network: 'mainnet';
+    network: BitcoinNetworkName;
     logic: 'AND';
     keyId: string;
     conditions: PolicyCondition[];
@@ -40,7 +46,7 @@ export interface PublishedRosterArtifact {
 
 export interface RosterReview {
   digest: string;
-  network: 'mainnet';
+  network: BitcoinNetworkName;
   economics: PublishedRosterArtifact['economics'];
   participants: Array<{
     id: string;
@@ -72,7 +78,8 @@ export interface RosterReview {
 /**
  * Build the only roster shape the user-facing ceremony may publish. Unlike the
  * older offline RosterEntry fixture, this requires a validated service-created
- * mainnet Sigbash registration for every (participant, leave-round) pair.
+ * registration on the configured network for every (participant, leave-round)
+ * pair.
  */
 export function createPublishedRosterArtifact(
   vaultId: string,

@@ -98,8 +98,9 @@ export function validateVaultEconomics(input: VaultEconomics): VaultEconomics {
   if (economics.depositSatsPerParticipant < 10_000) {
     throw new Error('vault deposit must be at least 10,000 sats per participant');
   }
-  if (!Number.isSafeInteger(economics.recoveryDelayBlocks) || economics.recoveryDelayBlocks < 1) {
-    throw new Error('recovery delay must be a positive integer number of blocks');
+  if (!Number.isSafeInteger(economics.recoveryDelayBlocks) ||
+      economics.recoveryDelayBlocks < 1 || economics.recoveryDelayBlocks > 65_535) {
+    throw new Error('recovery delay must be an integer from 1 through 65535 blocks');
   }
   if (
     economics.firstWithdrawalSats + economics.secondWithdrawalSats * 2 !==

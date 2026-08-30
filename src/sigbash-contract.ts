@@ -1,10 +1,10 @@
 /**
- * Offline contract and fail-closed checks for the pinned @sigbash/sdk 0.7.1.
+ * Offline contract and fail-closed checks for the pinned @sigbash/sdk 0.8.0.
  *
  * Everything here runs without network access or WASM loading. Credential-file
  * checks use a fresh temporary directory and delete their throwaway values;
  * the remaining checks use synthetic inputs. The type imports are the SDK's
- * real published 0.7.1 declarations, so a future SDK bump that changes the
+ * real published 0.8.0 declarations, so a future SDK bump that changes the
  * verify/sign result shapes fails `tsc --noEmit` here instead of failing open
  * at signing time.
  */
@@ -16,6 +16,7 @@ import type {
   VerifyPSBTResult,
   WasmLoaderOptions,
 } from '@sigbash/sdk';
+import { BITCOIN_NETWORK_NAME } from './network.js';
 import {
   chmodSync,
   existsSync,
@@ -82,7 +83,7 @@ function thrownMessage(fn: () => unknown): string | null {
 
 // Compile-time proof (via `satisfies`) that the option shapes this repo
 // passes to `new SigbashClient(...)` and `loadWasm(...)` match the real
-// 0.7.1 types. The values are inert placeholders — never used to connect.
+// 0.8.0 types. The values are inert placeholders — never used to connect.
 const CONTRACT_CLIENT_OPTIONS = {
   serverUrl: 'https://sigbash.invalid',
   apiKey: 'contract-placeholder-api-key',
@@ -165,7 +166,7 @@ function recoveryJournalChecks(): ContractCheck[] {
     recoveryKEK,
     cekCiphertext: '22'.repeat(48),
     cekNonce: '33'.repeat(12),
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     createdAt: 1_786_000_000,
     apiKey: '44'.repeat(32),
     userKey: '55'.repeat(32),
@@ -176,7 +177,7 @@ function recoveryJournalChecks(): ContractCheck[] {
     round: 'alicebob',
     keyId: '7',
     keyIndex: 7,
-    network: 'mainnet',
+    network: BITCOIN_NETWORK_NAME,
     recoveryKit: kit,
   };
   try {
@@ -195,15 +196,16 @@ function recoveryJournalChecks(): ContractCheck[] {
     }
 
     const invalidNetworkPath = join(directory, 'invalid-network.jsonl');
+    const wrongNetwork = BITCOIN_NETWORK_NAME === 'mainnet' ? 'signet' : 'mainnet';
     let invalidNetworkRejected = false;
     try {
       appendSigbashRecoveryRecord(invalidNetworkPath, {
         ...input,
-        network: 'signet',
-        recoveryKit: { ...kit, network: 'signet' },
+        network: wrongNetwork,
+        recoveryKit: { ...kit, network: wrongNetwork },
       });
     } catch (error) {
-      invalidNetworkRejected = error instanceof Error && error.message.includes('not mainnet');
+      invalidNetworkRejected = error instanceof Error && error.message.includes(`not ${BITCOIN_NETWORK_NAME}`);
     }
 
     const invalidRoundPath = join(directory, 'invalid-round.jsonl');
@@ -237,24 +239,24 @@ function recoveryJournalChecks(): ContractCheck[] {
     const poetPolicy = { version: '1', policy: { operator: 'AND', children: [{ b: 2, a: 1 }] } };
     const listed = [{
       keyId: '7',
-      network: 'mainnet',
+      network: BITCOIN_NETWORK_NAME,
       policyRoot: 'aa'.repeat(32),
       require2FA: false,
       createdAt: null,
       bip328Xpub: 'synthetic-xpub',
       poetJSON: { policy: { children: [{ a: 1, b: 2 }], operator: 'AND' }, version: '1' },
     }] satisfies KeyListItem[];
-    const match = findMatchingSigbashKey(listed, poetPolicy, 'mainnet');
+    const match = findMatchingSigbashKey(listed, poetPolicy, BITCOIN_NETWORK_NAME);
     let ambiguityRejected = false;
     try {
-      findMatchingSigbashKey([...listed, { ...listed[0]!, keyId: '8' }], poetPolicy, 'mainnet');
+      findMatchingSigbashKey([...listed, { ...listed[0]!, keyId: '8' }], poetPolicy, BITCOIN_NETWORK_NAME);
     } catch (error) {
       ambiguityRejected = error instanceof Error && error.message.includes('ambiguous resume');
     }
 
     return [
       check(
-        'recovery journal exclusively creates a validated mainnet kit with mode 0600',
+        `recovery journal exclusively creates a validated ${BITCOIN_NETWORK_NAME} kit with mode 0600`,
         created.reused === false && (statSync(journalPath).mode & 0o777) === 0o600 &&
           readSigbashRecoveryJournal(journalPath).length === 1,
       ),
@@ -264,7 +266,7 @@ function recoveryJournalChecks(): ContractCheck[] {
           !JSON.stringify(created).includes(recoveryKEK) && !JSON.stringify(reused).includes(recoveryKEK),
       ),
       check(
-        'recovery journal refuses conflicts, non-mainnet kits, unsafe parents, and symlinks without mutation',
+        'recovery journal refuses conflicts, wrong-network kits, unsafe parents, and symlinks without mutation',
         conflictRejected && invalidNetworkRejected && noncanonicalRoundRejected &&
           permissiveRejected && symlinkRejected &&
           readFileSync(journalPath, 'utf8') === contentBefore && !existsSync(permissivePath),
@@ -359,7 +361,7 @@ async function credentialFileChecks(): Promise<ContractCheck[]> {
 
 function sdkContractChecks(sdk: typeof import('@sigbash/sdk')): ContractCheck[] {
   return [
-    check('SDK_VERSION is exactly 0.7.1', sdk.SDK_VERSION === '0.7.1', {
+    check('SDK_VERSION is exactly 0.8.0', sdk.SDK_VERSION === '0.8.0', {
       actual: sdk.SDK_VERSION ?? null,
     }),
     check('loadWasm is exported as a function', typeof sdk.loadWasm === 'function'),
@@ -373,7 +375,7 @@ function sdkContractChecks(sdk: typeof import('@sigbash/sdk')): ContractCheck[] 
       'conditionConfigToPoetPolicy is exported as a function',
       typeof sdk.conditionConfigToPoetPolicy === 'function',
     ),
-    check('client and loadWasm option shapes typecheck against the real 0.7.1 types', true, {
+    check('client and loadWasm option shapes typecheck against the real 0.8.0 types', true, {
       clientOptionKeys: Object.keys(CONTRACT_CLIENT_OPTIONS),
       wasmOptionKeys: Object.keys(CONTRACT_WASM_OPTIONS),
     }),

@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { BitcoinTransactionNotFoundError } from '../../src/bitcoin-backend-errors.js';
 import { getBlockStatus, getBlockchainInfo, getRawTransaction } from '../../src/bitcoin-rpc.js';
+import {
+  BITCOIN_CORE_CHAIN,
+  BITCOIN_GENESIS_HASH,
+  BITCOIN_NETWORK_CONFIG,
+} from '../../src/network.js';
 
 const originalFetch = globalThis.fetch;
 const previous = {
@@ -25,7 +30,7 @@ try {
     const request = JSON.parse(String(init?.body)) as { method: string; params: unknown[] };
     methods.push(request.method);
     const result = request.method === 'getblockchaininfo'
-      ? { chain: 'main', blocks: 900_002, headers: 900_002, pruned: false, initialblockdownload: false }
+      ? { chain: BITCOIN_CORE_CHAIN, blocks: 900_002, headers: 900_002, pruned: false, initialblockdownload: false }
       : request.method === 'getindexinfo'
         ? { txindex: { synced: true, best_block_height: 900_002 } }
       : request.method === 'getrawtransaction'
@@ -79,7 +84,7 @@ try {
   }) as typeof fetch;
   await assert.rejects(
     () => getBlockStatus('22'.repeat(32)),
-    /not mainnet/u,
+    new RegExp(`not ${BITCOIN_NETWORK_CONFIG.addressLabel}`, 'u'),
   );
 
   process.env.BITCOIN_RPC_URL = 'https://bitcoin-rpc-pruned.test';
@@ -88,7 +93,7 @@ try {
     if (request.method === 'getblockchaininfo') {
       return Response.json({
         result: {
-          chain: 'main', blocks: 900_002, headers: 900_002,
+          chain: BITCOIN_CORE_CHAIN, blocks: 900_002, headers: 900_002,
           pruned: true, initialblockdownload: false,
         },
         error: null,
@@ -107,7 +112,7 @@ try {
     if (request.method === 'getblockchaininfo') {
       return Response.json({
         result: {
-          chain: 'main', blocks: 900_002, headers: 900_002,
+          chain: BITCOIN_CORE_CHAIN, blocks: 900_002, headers: 900_002,
           pruned: false, initialblockdownload: false,
         },
         error: null,
@@ -129,7 +134,7 @@ try {
     if (request.method === 'getblockchaininfo') {
       return Response.json({
         result: {
-          chain: 'main', blocks: 900_002, headers: 900_002,
+          chain: BITCOIN_CORE_CHAIN, blocks: 900_002, headers: 900_002,
           pruned: false, initialblockdownload: false,
         },
         error: null,
@@ -159,7 +164,7 @@ try {
   process.env.BITCOIN_ESPLORA_URL = 'https://esplora-block-status.test';
   globalThis.fetch = (async (resource) => {
     const url = String(resource);
-    if (url.endsWith('/block-height/0')) return new Response('000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f');
+    if (url.endsWith('/block-height/0')) return new Response(BITCOIN_GENESIS_HASH);
     if (url.endsWith(`/block/${'44'.repeat(32)}/status`)) {
       return Response.json({ in_best_chain: true });
     }
@@ -182,13 +187,13 @@ try {
   }) as typeof fetch;
   await assert.rejects(
     () => getBlockStatus('44'.repeat(32)),
-    /not Bitcoin mainnet/u,
+    new RegExp(`not ${BITCOIN_NETWORK_CONFIG.addressLabel}`, 'u'),
   );
 
   process.env.BITCOIN_ESPLORA_URL = 'https://esplora-not-found.test';
   globalThis.fetch = (async (resource) => {
     const url = String(resource);
-    if (url.endsWith('/block-height/0')) return new Response('000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f');
+    if (url.endsWith('/block-height/0')) return new Response(BITCOIN_GENESIS_HASH);
     if (url.includes(`/tx/${'66'.repeat(32)}`)) return new Response('not found', { status: 404 });
     throw new Error(`unexpected Esplora URL ${url}`);
   }) as typeof fetch;
@@ -200,7 +205,7 @@ try {
   process.env.BITCOIN_ESPLORA_URL = 'https://esplora-failed.test';
   globalThis.fetch = (async (resource) => {
     const url = String(resource);
-    if (url.endsWith('/block-height/0')) return new Response('000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f');
+    if (url.endsWith('/block-height/0')) return new Response(BITCOIN_GENESIS_HASH);
     if (url.includes(`/tx/${'77'.repeat(32)}`)) return new Response('failed', { status: 503 });
     throw new Error(`unexpected Esplora URL ${url}`);
   }) as typeof fetch;

@@ -27,6 +27,7 @@ import {
   storedCooperativePubnonce,
 } from '../lib/client/musig2-nonce-vault';
 import { assertPasskey } from '../lib/client/webauthn';
+import { BITCOIN_NETWORK_CONFIG } from '../../src/network.js';
 
 interface PasskeyChoice { id: string; name: string }
 interface RecoveryShareStatus { participantId: string }
@@ -72,7 +73,7 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
   async function refresh() {
     const next = await postJson('/api/vault/runtime', {}) as unknown as RuntimeStatus;
     setRuntime(next);
-    setMessage(next.coin ? 'Current mainnet coin loaded' : 'No confirmed vault coin yet');
+    setMessage(next.coin ? `Current ${BITCOIN_NETWORK_CONFIG.addressLabel} coin loaded` : 'No confirmed vault coin yet');
   }
 
   useEffect(() => {
@@ -86,7 +87,7 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
     try {
       const source = runtime.chainObservationOrigins[0];
       if (!source) throw new Error('no independent chain observation source is configured');
-      setMessage('Checking the exact coin directly against Bitcoin mainnet…');
+      setMessage(`Checking the exact coin directly against Bitcoin ${BITCOIN_NETWORK_CONFIG.addressLabel}…`);
       const observed = await observeVaultCoin(source, runtime.coin);
       const options = await postJson('/api/vault/observe/options', {
         credentialId,
@@ -99,7 +100,7 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
         response,
       });
       await refresh();
-      setMessage(`Mainnet coin verified with your passkey (${observed.confirmations} confirmation(s))`);
+      setMessage(`${BITCOIN_NETWORK_CONFIG.addressLabel} coin verified with your passkey (${observed.confirmations} confirmation(s))`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Coin verification failed');
     } finally {
@@ -143,11 +144,11 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
     try {
       const source = runtime.chainObservationOrigins[0];
       if (!source) throw new Error('no independent chain observation source is configured');
-      setMessage('Checking recovery maturity directly against Bitcoin mainnet…');
+      setMessage(`Checking recovery maturity directly against Bitcoin ${BITCOIN_NETWORK_CONFIG.addressLabel}…`);
       const observed = await observeVaultCoin(source, runtime.coin);
       if (observed.confirmations <= runtime.recoveryDelayBlocks) {
         throw new Error(
-          `recovery needs more than ${runtime.recoveryDelayBlocks} confirmations; mainnet currently reports ${observed.confirmations}`,
+          `recovery needs more than ${runtime.recoveryDelayBlocks} confirmations; ${BITCOIN_NETWORK_CONFIG.addressLabel} currently reports ${observed.confirmations}`,
         );
       }
       const options = await postJson('/api/vault/observe/options', { credentialId, ...observed });
@@ -380,11 +381,11 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
       }
       const source = runtime.chainObservationOrigins[0];
       if (!source) throw new Error('no independent chain observation source is configured');
-      setMessage('Rechecking recovery maturity directly against Bitcoin mainnet…');
+      setMessage(`Rechecking recovery maturity directly against Bitcoin ${BITCOIN_NETWORK_CONFIG.addressLabel}…`);
       const observed = await observeVaultCoin(source, runtime.coin);
       if (observed.confirmations <= runtime.recoveryDelayBlocks) {
         throw new Error(
-          `recovery needs more than ${runtime.recoveryDelayBlocks} confirmations; mainnet currently reports ${observed.confirmations}`,
+          `recovery needs more than ${runtime.recoveryDelayBlocks} confirmations; ${BITCOIN_NETWORK_CONFIG.addressLabel} currently reports ${observed.confirmations}`,
         );
       }
       const options = await postJson('/api/vault/observe/options', { credentialId, ...observed });
@@ -503,7 +504,7 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
     const proposal = runtime.proposal;
     setWorking(true);
     try {
-      setMessage('Waiting for your passkey approval to broadcast this exact transaction to Bitcoin mainnet…');
+      setMessage(`Waiting for your passkey approval to broadcast this exact transaction to Bitcoin ${BITCOIN_NETWORK_CONFIG.addressLabel}…`);
       const options = await postJson('/api/vault/broadcast/options', {
         credentialId,
         proposalId: proposal.id,
@@ -524,7 +525,7 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
       });
       setBroadcastConfirmed(false);
       await refresh();
-      setMessage(`Broadcast submitted to Bitcoin mainnet as ${String(result.txid)}`);
+      setMessage(`Broadcast submitted to Bitcoin ${BITCOIN_NETWORK_CONFIG.addressLabel} as ${String(result.txid)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Mainnet broadcast failed');
     } finally {
@@ -601,7 +602,7 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
         <h2>{runtime?.coin ? 'Current Bitcoin coin' : 'Awaiting confirmed funding'}</h2>
         <p>
           Every signing attempt is rebuilt from the confirmed roster and checked against an
-          independent mainnet source. Finalization never broadcasts automatically.
+          independent {BITCOIN_NETWORK_CONFIG.addressLabel} source. Finalization never broadcasts automatically.
         </p>
       </div>
       <div className="sigbash-controls">
@@ -613,7 +614,7 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
         </label>
         {runtime?.coin && (
           <button disabled={working} onClick={verifyCurrentCoin} type="button">
-            {observed ? 'Refresh mainnet verification' : 'Verify current coin'}
+            {observed ? `Refresh ${BITCOIN_NETWORK_CONFIG.addressLabel} verification` : 'Verify current coin'}
           </button>
         )}
         {canSolo && (
@@ -638,7 +639,7 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
         )}
         {canSignRecovery && (
           <button disabled={working} onClick={signRecoveryProposal} type="button">
-            Recheck mainnet and sign recovery
+            Recheck {BITCOIN_NETWORK_CONFIG.addressLabel} and sign recovery
           </button>
         )}
         {canSignFinalSweep && (
@@ -719,8 +720,8 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
         )}
         {canApproveBroadcast && runtime?.proposal?.finalTxid && (
           <div className="activation-code">
-            <span>Ready for explicit mainnet broadcast</span>
-            <p>This sends the finalized transaction below to Bitcoin mainnet. It cannot be undone.</p>
+            <span>Ready for explicit {BITCOIN_NETWORK_CONFIG.addressLabel} broadcast</span>
+            <p>This sends the finalized transaction below to Bitcoin {BITCOIN_NETWORK_CONFIG.addressLabel}. It cannot be undone.</p>
             <code>{runtime.proposal.finalTxid}</code>
             <label>
               <input
@@ -729,17 +730,17 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
                 onChange={(event) => setBroadcastConfirmed(event.target.checked)}
                 type="checkbox"
               />
-              I reviewed this transaction and want to broadcast it to Bitcoin mainnet
+              I reviewed this transaction and want to broadcast it to Bitcoin {BITCOIN_NETWORK_CONFIG.addressLabel}
             </label>
             <button
               disabled={working || !broadcastConfirmed}
               onClick={broadcastProposal}
               type="button"
-            >Approve with passkey and broadcast to mainnet</button>
+            >Approve with passkey and broadcast to {BITCOIN_NETWORK_CONFIG.addressLabel}</button>
           </div>
         )}
         {runtime?.proposal?.status === 'broadcast' && runtime.proposal.finalTxid && (
-          <p>Broadcast to Bitcoin mainnet as <code>{runtime.proposal.finalTxid}</code>; waiting for confirmation.</p>
+          <p>Broadcast to Bitcoin {BITCOIN_NETWORK_CONFIG.addressLabel} as <code>{runtime.proposal.finalTxid}</code>; waiting for confirmation.</p>
         )}
         <p className="form-message" role="status">{working ? `Working · ${message}` : message}</p>
       </div>

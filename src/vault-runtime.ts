@@ -339,15 +339,28 @@ export function assertFreshMatureRecoveryObservation(input: {
       !Number.isSafeInteger(input.recoveryDelayBlocks) || input.recoveryDelayBlocks < 1) {
     throw new Error('recovery chain observation has invalid confirmation data');
   }
-  if (!Number.isFinite(input.observedAtMs) || !Number.isFinite(input.nowMs) ||
-      !Number.isSafeInteger(maxAgeMs) || maxAgeMs < 1 || input.observedAtMs > input.nowMs) {
-    throw new Error('recovery chain observation has invalid timing data');
-  }
+  assertFreshVaultObservation({
+    observedAtMs: input.observedAtMs,
+    nowMs: input.nowMs,
+    maxAgeMs,
+  });
   if (input.confirmations <= input.recoveryDelayBlocks) {
     throw new Error('timelocked recovery is not mature in the independent chain view');
   }
+}
+
+export function assertFreshVaultObservation(input: {
+  observedAtMs: number;
+  nowMs: number;
+  maxAgeMs?: number;
+}): void {
+  const maxAgeMs = input.maxAgeMs ?? 2 * 60 * 1000;
+  if (!Number.isFinite(input.observedAtMs) || !Number.isFinite(input.nowMs) ||
+      !Number.isSafeInteger(maxAgeMs) || maxAgeMs < 1 || input.observedAtMs > input.nowMs) {
+    throw new Error('chain observation has invalid timing data');
+  }
   if (input.observedAtMs <= input.nowMs - maxAgeMs) {
-    throw new Error('timelocked recovery chain observation is stale');
+    throw new Error('chain observation is stale');
   }
 }
 

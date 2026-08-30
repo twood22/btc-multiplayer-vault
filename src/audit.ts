@@ -23,7 +23,7 @@ export function auditSpecState(state: VaultState): AuditReport {
         PARTICIPANTS.map((participant) => participant.id),
       ),
     ),
-    check('participant deposit is above the tiny-mainnet floor', state.economics.depositSatsPerParticipant >= 10_000),
+    check('participant deposit is above the tiny-vault floor', state.economics.depositSatsPerParticipant >= 10_000),
     check('first withdrawal is the committed haircut amount', state.economics.firstWithdrawalSats < state.economics.depositSatsPerParticipant),
     check('second withdrawal is the committed bonus amount', state.economics.secondWithdrawalSats > state.economics.depositSatsPerParticipant),
     check(
@@ -31,8 +31,8 @@ export function auditSpecState(state: VaultState): AuditReport {
       payoutScheduleTotal(state) === state.economics.depositSatsPerParticipant * 3,
     ),
     check('precomputed vault tree has 1 round-one and 3 round-two vaults', state.vaults.size === 4),
-    check('all payout and vault addresses are mainnet taproot addresses', allAddressesAreMainnetTaproot(state)),
-    check('all solo policies and destination conditions declare mainnet', allPoliciesAreMainnet(state)),
+    check(`all payout and vault addresses are ${NETWORK} taproot addresses`, allAddressesAreConfiguredTaproot(state)),
+    check(`all solo policies and destination conditions declare ${NETWORK}`, allPoliciesUseConfiguredNetwork(state)),
     check('all vault scriptPubKeys are v1 P2TR outputs', allVaultScriptsAreP2tr(state)),
     check('all cooperative key-paths exclude Sigbash keys', allKeyPathsExcludeSigbash(state)),
     check('all cooperative key-paths use standard BIP-327 KeyAgg', allKeyPathsUseBip327(state)),
@@ -70,14 +70,15 @@ function payoutScheduleTotal(state: VaultState): number {
   return state.economics.firstWithdrawalSats + state.economics.secondWithdrawalSats * 2;
 }
 
-function allAddressesAreMainnetTaproot(state: VaultState): boolean {
+function allAddressesAreConfiguredTaproot(state: VaultState): boolean {
+  const prefix = NETWORK === 'mainnet' ? 'bc1p' : 'tb1p';
   return (
-    state.participants.every((participant) => participant.payoutAddress.startsWith('bc1p')) &&
-    [...state.vaults.values()].every((vault) => vault.address.startsWith('bc1p'))
+    state.participants.every((participant) => participant.payoutAddress.startsWith(prefix)) &&
+    [...state.vaults.values()].every((vault) => vault.address.startsWith(prefix))
   );
 }
 
-function allPoliciesAreMainnet(state: VaultState): boolean {
+function allPoliciesUseConfiguredNetwork(state: VaultState): boolean {
   return [...state.policies.values()].every(
     (policy) =>
       policy.network === NETWORK &&

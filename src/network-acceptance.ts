@@ -2,10 +2,11 @@ import { AMOUNTS, NETWORK } from './config.js';
 import { auditSpecState } from './audit.js';
 import {
   BITCOIN_CORE_CHAIN,
+  BITCOIN_GENESIS_HASH,
   BITCOIN_NETWORK,
+  BITCOIN_NETWORK_CONFIG,
   BITCOIN_NETWORK_NAME,
-  MAINNET_GENESIS_HASH,
-  assertMainnetChain,
+  assertConfiguredChain,
 } from './network.js';
 import { buildSoloWithdrawalPsbt, inspectPsbt } from './psbt.js';
 import { createDemoState } from './vault.js';
@@ -22,34 +23,39 @@ const solo = buildSoloWithdrawalPsbt({
   valueSats: AMOUNTS.deposit * roundOneIds.length,
 });
 const inspection = inspectPsbt(solo.psbtBase64);
-let rejectedNonMainnet = false;
+const wrongChain = BITCOIN_CORE_CHAIN === 'main' ? 'signet' : 'main';
+let rejectedWrongChain = false;
 try {
-  assertMainnetChain('signet');
+  assertConfiguredChain(wrongChain);
 } catch {
-  rejectedNonMainnet = true;
+  rejectedWrongChain = true;
 }
+const addressPrefix = BITCOIN_NETWORK_NAME === 'mainnet' ? 'bc1p' : 'tb1p';
 
 const checks = [
-  ['product network literal is mainnet', NETWORK === 'mainnet'],
-  ['shared service network literal is mainnet', BITCOIN_NETWORK_NAME === 'mainnet'],
-  ['shared BitcoinJS network uses the bc human-readable prefix', BITCOIN_NETWORK.bech32 === 'bc'],
-  ['shared Bitcoin Core chain name is main', BITCOIN_CORE_CHAIN === 'main'],
-  ['backend identity is pinned to the Bitcoin mainnet genesis block', MAINNET_GENESIS_HASH === '000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f'],
-  ['a non-mainnet backend is rejected before use', rejectedNonMainnet],
-  ['audit proves every payout and vault address is bc1p', audit.checks.some(
-    (check) => check.name === 'all payout and vault addresses are mainnet taproot addresses' && check.ok,
+  ['config and shared network names match', NETWORK === BITCOIN_NETWORK_NAME],
+  ['BitcoinJS network prefix matches the selected profile', BITCOIN_NETWORK.bech32 === addressPrefix.slice(0, -2)],
+  ['Bitcoin Core chain name matches the selected profile', BITCOIN_CORE_CHAIN === BITCOIN_NETWORK_CONFIG.coreChain],
+  ['backend identity is pinned to the selected genesis block', BITCOIN_GENESIS_HASH === BITCOIN_NETWORK_CONFIG.genesisHash],
+  ['a backend from the other network is rejected before use', rejectedWrongChain],
+  ['audit proves every payout and vault address uses the selected taproot prefix', audit.checks.some(
+    (check) => check.name === `all payout and vault addresses are ${BITCOIN_NETWORK_NAME} taproot addresses` && check.ok,
   )],
-  ['audit proves every policy destination declares mainnet', audit.checks.some(
-    (check) => check.name === 'all solo policies and destination conditions declare mainnet' && check.ok,
+  ['audit proves every policy destination declares the selected network', audit.checks.some(
+    (check) => check.name === `all solo policies and destination conditions declare ${BITCOIN_NETWORK_NAME}` && check.ok,
   )],
-  ['a mainnet solo PSBT round-trips through the shared parser', inspection.outputs.length === 2],
-  ['every parsed solo output is a mainnet taproot address', inspection.outputs.every(
-    (output) => output.address.startsWith('bc1p'),
+  ['a solo PSBT round-trips through the shared parser', inspection.outputs.length === 2],
+  ['every parsed solo output uses the selected taproot prefix', inspection.outputs.every(
+    (output) => output.address.startsWith(addressPrefix),
   )],
 ] as const;
 
 if (!checks.every(([, ok]) => ok)) {
-  throw new Error(`mainnet acceptance failed: ${checks.filter(([, ok]) => !ok).map(([name]) => name).join(', ')}`);
+  throw new Error(`${BITCOIN_NETWORK_NAME} acceptance failed: ${checks.filter(([, ok]) => !ok).map(([name]) => name).join(', ')}`);
 }
 
-console.log(JSON.stringify({ passed: true, checks: checks.map(([name, ok]) => ({ name, ok })) }, null, 2));
+console.log(JSON.stringify({
+  passed: true,
+  network: BITCOIN_NETWORK_NAME,
+  checks: checks.map(([name, ok]) => ({ name, ok })),
+}, null, 2));

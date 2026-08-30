@@ -4,7 +4,7 @@ export interface SigbashBrowserRuntimeConfig {
   serverUrl: string;
   wasmUrl: string;
   wasmSha384: string;
-  sdkVersion: '0.7.1';
+  sdkVersion: '0.8.0';
 }
 
 export interface LoadedSigbashBrowserRuntime {
@@ -31,7 +31,7 @@ async function load(
   onProgress?: (progress: number, stage: string) => void,
 ): Promise<LoadedSigbashBrowserRuntime> {
   const config = await postJson('/api/sigbash/runtime/config', {}) as unknown as SigbashBrowserRuntimeConfig;
-  if (config.sdkVersion !== '0.7.1') throw new Error('server selected an unsupported Sigbash SDK version');
+  if (config.sdkVersion !== '0.8.0') throw new Error('server selected an unsupported Sigbash SDK version');
   if (!/^https:\/\//u.test(config.serverUrl) || !/^https:\/\//u.test(config.wasmUrl)) {
     throw new Error('Sigbash browser runtime must use HTTPS');
   }

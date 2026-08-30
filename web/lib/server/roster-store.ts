@@ -3,6 +3,11 @@ import type { AuthenticatorTransportFuture, Base64URLString } from '@simplewebau
 import { AMOUNTS, RECOVERY_DELAY_BLOCKS } from '../../../src/config';
 import { deriveXpubChildPubkey, taprootAddress, xpubRootXonly } from '../../../src/crypto';
 import {
+  BITCOIN_NETWORK_CONFIG,
+  BITCOIN_NETWORK_NAME,
+} from '../../../src/network';
+import type { BitcoinNetworkName } from '../../../src/types';
+import {
   canonicalRosterJson,
   createPublishedRosterArtifact,
   publishedRosterDigest,
@@ -120,7 +125,7 @@ export async function recordLiveSigbashRegistration(input: {
       bip328_xpub, policy_leaf_xonly, identification_leaf_xonly, policy_root, policy_id
     ) VALUES (
       ${membership.vault_id}::uuid, ${input.userId}::uuid, ${membership.participant_id},
-      ${input.round}, 'mainnet', ${registration.keyId}, ${registration.keyIndex},
+      ${input.round}, ${BITCOIN_NETWORK_NAME}, ${registration.keyId}, ${registration.keyIndex},
       ${registration.bip328Xpub}, ${Buffer.from(registration.policyLeafXonlyPubkey, 'hex')},
       ${Buffer.from(registration.identificationLeafXonlyPubkey, 'hex')},
       ${Buffer.from(registration.policyRoot, 'hex')}, ${registration.policyId}
@@ -350,7 +355,7 @@ async function getOrCreateRoster(vaultId: string): Promise<{
     user_id: string;
     participant_id: string;
     round_id: string;
-    network: 'mainnet';
+    network: BitcoinNetworkName;
     key_id: string;
     key_index: number;
     bip328_xpub: string;
@@ -379,7 +384,9 @@ async function getOrCreateRoster(vaultId: string): Promise<{
       .filter((item) => item.participant_id === expectedId && item.user_id === member.user_id)
       .map((item) => item.round_id);
     for (const round of expectedRounds) {
-      if (!actualRounds.includes(round)) missing.push(`${expectedId} is missing live Sigbash mainnet key ${round}`);
+      if (!actualRounds.includes(round)) {
+        missing.push(`${expectedId} is missing live Sigbash ${BITCOIN_NETWORK_CONFIG.addressLabel} key ${round}`);
+      }
     }
   }
   if (missing.length) return { artifact: null, missing };
@@ -413,7 +420,7 @@ async function getOrCreateRoster(vaultId: string): Promise<{
     INSERT INTO vault_rosters (
       vault_id, version, network, artifact_json, digest, funding_address
     ) VALUES (
-      ${vaultId}::uuid, 1, 'mainnet', ${db().json(JSON.parse(canonicalRosterJson(artifact)))},
+      ${vaultId}::uuid, 1, ${BITCOIN_NETWORK_NAME}, ${db().json(JSON.parse(canonicalRosterJson(artifact)))},
       ${Buffer.from(digest, 'hex')}, ${artifact.funding.address}
     )
     ON CONFLICT (vault_id) DO NOTHING
@@ -466,9 +473,13 @@ export function validateLiveRegistration(
   round: string,
   registration: SigbashRosterRegistration,
 ): SigbashRosterRegistration {
-  if (registration.network !== 'mainnet') throw new Error('Sigbash registration is not mainnet');
+  if (registration.network !== BITCOIN_NETWORK_NAME) {
+    throw new Error(`Sigbash registration is not ${BITCOIN_NETWORK_CONFIG.addressLabel}`);
+  }
   const stripped = registration.bip328Xpub.replace(/^\[[0-9a-fA-F/h']*\]/u, '');
-  if (!stripped.startsWith('xpub')) throw new Error('Sigbash registration does not carry a mainnet xpub');
+  if (!stripped.startsWith(BITCOIN_NETWORK_CONFIG.bip32PublicPrefix)) {
+    throw new Error(`Sigbash registration does not carry a ${BITCOIN_NETWORK_CONFIG.bip32PublicPrefix}`);
+  }
   const policyLeaf = deriveXpubChildPubkey(registration.bip328Xpub, [0, 0]).xonlyPubKeyHex;
   const identificationLeaf = xpubRootXonly(registration.bip328Xpub);
   if (registration.policyLeafXonlyPubkey !== policyLeaf) {

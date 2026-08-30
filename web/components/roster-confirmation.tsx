@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { RosterReview } from '@/src/roster-ceremony';
 import { assertPasskey } from '../lib/client/webauthn';
+import { BITCOIN_NETWORK_CONFIG } from '../../src/network.js';
 
 interface PasskeyChoice {
   id: string;
@@ -64,7 +65,7 @@ export function RosterConfirmation({
     <section className={review.unanimous ? 'roster-card confirmed-roster' : 'roster-card'}>
       <div className="roster-title-row">
         <div>
-          <p className="eyebrow">Immutable mainnet roster</p>
+          <p className="eyebrow">Immutable {BITCOIN_NETWORK_CONFIG.addressLabel} roster</p>
           <h2>{review.unanimous ? 'All three friends confirmed' : 'Review the same vault together'}</h2>
         </div>
         <span>{review.confirmations.length} / 3 confirmed</span>
@@ -107,9 +108,9 @@ export function RosterConfirmation({
       </details>
       {review.fundingAddress ? (
         <div className="funding-reveal">
-          <strong>Round-one mainnet address</strong>
+          <strong>Round-one {BITCOIN_NETWORK_CONFIG.addressLabel} address</strong>
           <code>{review.fundingAddress}</code>
-          <p>Roster agreement is complete. Funding is still disabled until live Sigbash signing and the remaining mainnet release checks pass.</p>
+          <p>Roster agreement is complete. Funding is still disabled until live Sigbash signing and the remaining {BITCOIN_NETWORK_CONFIG.addressLabel} release checks pass.</p>
         </div>
       ) : participantConfirmed ? (
         <p className="safety-note">Your passkey confirmation is recorded. The funding address stays hidden until both other friends confirm this exact fingerprint.</p>

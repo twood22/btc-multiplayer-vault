@@ -30,6 +30,7 @@ import {
   type RecoveryShare,
 } from '../../../src/custody';
 import { verifyVaultTransaction } from '../../../src/consensus';
+import { BITCOIN_NETWORK_CONFIG } from '../../../src/network';
 import {
   ceremonyAggregate,
   ceremonyStart,
@@ -42,6 +43,7 @@ import {
   buildVaultProposal,
   deriveNextVaultCoin,
   assertFreshMatureRecoveryObservation,
+  assertFreshVaultObservation,
   validateVaultCoin,
   vaultCoinSnapshotDigest,
   type BuiltVaultProposal,
@@ -791,6 +793,10 @@ export async function createStoredVaultProposal(
     if (observation.length !== 1) {
       throw new Error('verify the exact current coin against an independent chain source before proposing a spend');
     }
+    assertFreshVaultObservation({
+      observedAtMs: observation[0]!.observed_at.getTime(),
+      nowMs: Date.now(),
+    });
     if (input.kind === 'recovery') {
       assertFreshMatureRecoveryObservation({
         confirmations: observation[0]!.confirmations,
@@ -1673,7 +1679,7 @@ export async function recordConfirmedFundingCoin(input: {
       SELECT status FROM vaults WHERE id = ${input.vaultId}::uuid FOR UPDATE
     `;
     if (vaults[0]?.status !== 'ready') {
-      throw new Error('vault has not passed the live Sigbash mainnet readiness gate');
+      throw new Error(`vault has not passed the live Sigbash ${BITCOIN_NETWORK_CONFIG.addressLabel} readiness gate`);
     }
     const finalRows = await sql<Array<{
       status: string;
@@ -1769,7 +1775,7 @@ export async function recordConfirmedFundingCoin(input: {
       RETURNING id
     `;
     if (activated.length !== 1) {
-      throw new Error('vault has not passed the live Sigbash mainnet readiness gate');
+      throw new Error(`vault has not passed the live Sigbash ${BITCOIN_NETWORK_CONFIG.addressLabel} readiness gate`);
     }
     return {
       id: coinId,
