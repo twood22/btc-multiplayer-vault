@@ -34,10 +34,10 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Cooperative exit (interactive BIP-327 MuSig2 ceremony) | ✅ verified, no single machine holds all keys |
 | Timelocked recovery (N−1 multi_a) | ✅ consensus + distributed passkey-browser verified |
 | Final sweep | ✅ consensus + owner-only passkey-browser verified |
-| Mainnet + default-global-Signet address, PSBT, policy, RPC, explorer, and database boundary | ✅ both offline suites; real Signet Core syncing |
-| Sigbash policy enforcement + tamper rejection | ⚠️ exact Signet PSBT accepted and three hostile forms rejected by the hosted verifier; registration provenance remains unverified |
-| Sigbash co-signing a live Signet withdrawal | ⛔ hosted pipeline reaches the signing service, which returns `server_error: Signing service error` |
-| Real standard-Signet coins | ⏳ isolated Core is syncing; the no-CAPTCHA PoW claim was stopped after the host reached 94–96 °C, so one manual faucet CAPTCHA is required |
+| Mainnet + default-global-Signet address, PSBT, policy, RPC, explorer, and database boundary | ✅ both offline suites; fully synced Signet Core plus confirmed real-chain checkpoint |
+| Sigbash policy enforcement + tamper rejection | ⚠️ hosted verifier accepted the exact spend of a real confirmed 30,000-sat Signet vault and rejected wrong amount, wrong address, and extra output; registration provenance remains unverified |
+| Sigbash co-signing a live Signet withdrawal | ⛔ hosted verification passes, but signing the real confirmed vault coin still returns `server_error: Signing service error` |
+| Real standard-Signet coins | ✅ faucet coin confirmed, split into three separately controlled wallet inputs, exact three-wallet funding confirmed, and cooperative vault spend confirmed |
 | Per-participant key custody | ✅ browser-distributed and passkey protected |
 | Recoverable passkey custody + encrypted Sigbash credentials/kits | ✅ implemented; real authenticator run still required |
 | Browser PRF setup/recovery/sign-in/unlock | ✅ Chromium + two virtual authenticators; physical devices still required |
@@ -48,7 +48,7 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Immutable three-passkey roster gate | ✅ implemented; PostgreSQL 16 migrations verified, real authenticator run still required |
 | User-facing solo/cooperative/recovery/final signing | ✅ implemented and server re-authorized |
 | Passkey-bound three-wallet funding, external signatures, final approval, and unanimous restart | ✅ implemented; real wallets/authenticators still required |
-| Operator-gated initial funding broadcast + private confirmation watcher | ✅ implemented; real Bitcoin Core execution still required |
+| Operator-gated initial funding broadcast + private confirmation watcher | ✅ implemented; isolated CLI/Core three-wallet funding confirmed on Signet, user-facing passkey-gated execution still required |
 | PostgreSQL funding/broadcast replay, concurrency, and restart checks | ✅ verified on disposable PostgreSQL 16 |
 | Disposable Core reorganization drill against PostgreSQL state | ✅ Bitcoin Core 31.1 runner exercised locally; not live-mainnet proof |
 | Database-atomic sensitive-operation rate limits | ✅ implemented and concurrency-verified |

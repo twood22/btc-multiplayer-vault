@@ -1,6 +1,6 @@
 # Current project status
 
-Last updated: 2026-08-29
+Last updated: 2026-08-31
 Reviewed baseline: `5dde338eba32aea11f5208fbb720007fbd79fe32`
 
 This is the current operational status and roadmap for the Bitcoin multiplayer
@@ -14,9 +14,10 @@ deployment gates remain in [`PASSKEY-PRODUCT.md`](./PASSKEY-PRODUCT.md) and
 
 ## Verdict
 
-**The typed standard-Signet product profile and its offline, PostgreSQL, build,
-and optimized-browser gates now pass. Real hosted signing and the real on-chain
-product lifecycle remain blocked or unproven; mainnet is still unauthorized.**
+**The typed standard-Signet profile, offline/PostgreSQL/build/browser gates, and
+a real three-wallet funding plus cooperative-spend checkpoint now pass. Hosted
+Sigbash signing and the complete user-facing lifecycle remain blocked or
+unproven; mainnet is still unauthorized.**
 
 The repository implements the intended round-based game: Sigbash-enforced solo
 withdrawals, participant-only BIP-327 MuSig2 cooperative exits, distributed
@@ -24,9 +25,10 @@ passkey-protected participant custody, timelocked recovery, final sweep, and
 three-wallet funding preparation. Remaining blockers include Sigbash-registration
 provenance, fee adaptation, final-sweep destination semantics, and external
 operational proof. Sigbash declined mainnet SDK enablement for the current
-experimental project but permits SDK testing on Signet. No complete
-standard-Signet on-chain run or live Sigbash signature has been obtained, and
-no real mainnet transaction has been authorized. See the
+experimental project but permits SDK testing on Signet. A real standard-Signet
+vault was funded and cooperatively spent, but no hosted Sigbash signature or
+complete user-facing run has been obtained, and no real mainnet transaction has
+been authorized. See the
 [`current code review`](./CODE-REVIEW-2026-08-17.md) for evidence and severity.
 
 ## Proven on this baseline
@@ -43,15 +45,31 @@ no real mainnet transaction has been authorized. See the
   non-fundable historical setup evidence. Hosted
   `verifyPSBT` accepted the exact allowed transaction and rejected wrong-value,
   wrong-destination, and extra-output variants.
+- Against the real confirmed vault outpoint
+  `46fa0c249d7ccef642ef8b7d248c5fada161a571443e0b4721e03d7b7a518220:0`,
+  hosted `verifyPSBT` accepted Alice's exact 9,500-sat first exit with 20,200
+  sats re-vaulted and explicitly rejected wrong-amount, wrong-address, and
+  extra-output PSBTs. The signing nullifier was reported available.
 - Funding rejects non-canonical 65-byte Taproot signatures with an explicit zero
   sighash byte; all proposal types require fresh observations; recovery delay is
   bounded to the CSV-encodable range 1 through 65,535.
-- Bitcoin Core 31.1 is running against default global Signet in an isolated
-  datadir with `txindex=1`; synchronization is progressing. A current unspent
-  PoW-faucet output was independently located and a difficulty-32 claim was
-  attempted, but sustained hashing drove the host to 94–96 °C even after CPU
-  throttling. The claim was stopped before the thermal limit; obtaining coins
-  now requires one manual public-faucet CAPTCHA rather than risking the host.
+- Bitcoin Core 31.1 is fully synchronized against default global Signet in an
+  isolated datadir with `txindex=1`. A faucet paid 82,132 sats in
+  `c80ae308b476f73d6844aa75e713d33b9cb20428eca2d73c9917a58b5bcd8833`;
+  `3bd606154ba8c7d6651861ff72f9a862f4b63fa13c1feba91d7e7bbcf193bc2c`
+  split it into confirmed 20,000-sat Alice, Bob, and Carol wallet outputs.
+- The exact three-wallet funding builder consumed one independently signed
+  Taproot input from each Core wallet and confirmed transaction
+  `46fa0c249d7ccef642ef8b7d248c5fada161a571443e0b4721e03d7b7a518220`,
+  with one 30,000-sat round-one vault output, three 9,000-sat change outputs,
+  and a 3,000-sat fee.
+- The confirmed vault output was spent through its participant-only MuSig2
+  key path by
+  `ef01cb2027ca35b64e7d5390ffb7cd0b3b35e950658cfcc42684e35a57cad9f4`.
+  The live audit verified the selected outpoint, Taproot key-path witness, no
+  Sigbash keys in the cooperative path, three exact 9,900-sat refunds, and one
+  confirmation. This isolated CLI signing checkpoint proves the consensus
+  path, not three-device/passkey custody.
 - `npm audit --audit-level=low` reports zero known vulnerabilities.
 - The manual `Exact container acceptance` GitHub Actions run passed for the
   merged baseline: [run 32064526120](https://github.com/twood22/btc-multiplayer-vault/actions/runs/32064526120).
@@ -69,19 +87,21 @@ item, not evidence that the application ran under the wrong Node version.
 
 ## Explicitly unproven
 
-- A complete real hosted-Sigbash signing flow on standard Signet, including the
-  current `server_error: Signing service error` after proof transport parsing.
-- Nine live readiness signatures, three physical-passkey
-  identities, three real Signet wallets, and the complete on-chain state machine.
+- A complete real hosted-Sigbash signing flow on standard Signet. The hosted
+  verifier accepts the real confirmed coin, but `signPSBT` still returns
+  `server_error: Signing service error` from the signing service.
+- Nine live readiness signatures, three physical-passkey identities, and the
+  complete user-facing on-chain state machine.
 - Sigbash mainnet enablement and one real, locally authorized mainnet signature.
 - The nine participant-and-round readiness proofs using three independently
   owned Sigbash organizations and physical passkeys.
 - Production HTTPS/RP configuration, encrypted database operations and restore,
-  private Bitcoin Core operations, real external-wallet signing, and real
-  browser/device recovery drills.
+  user-facing private Bitcoin Core operation, physical external-wallet signing,
+  and real browser/device recovery drills.
 - A published and independently reviewed registry manifest digest.
-- Any deployment, funding, relay acceptance of the final real transaction, or
-  broadcast.
+- Any deployment, mainnet funding/broadcast, or user-facing passkey-approved
+  Signet funding/broadcast. The confirmed CLI checkpoint is operational evidence,
+  not deployment authorization.
 
 ## Current code blockers before deployment or funding
 

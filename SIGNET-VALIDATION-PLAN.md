@@ -120,7 +120,7 @@ deployment-digest, fee, recovery-delay, and tiny-value funding reviews using
 new mainnet-scoped material. No Signet key, receipt, database state, wallet, or
 success flag may be promoted into the mainnet release evidence.
 
-## Progress snapshot — 2026-08-29
+## Progress snapshot — 2026-08-31
 
 - Complete: typed mainnet/default-global-Signet boundary, cross-network rejection,
   Signet migration, network-specific browser/operator text, offline/web/database
@@ -131,14 +131,29 @@ success flag may be promoted into the mainnet release evidence.
   default-amount key set is explicitly non-fundable and not reused.
 - Complete: explicit-zero Taproot sighash rejection, CSV upper bound, and fresh
   observation enforcement for every proposal type.
-- In progress: isolated fully validating Signet Core synchronization.
-- Needs one user action: submit the isolated Alice wallet address to a public
-  standard-Signet faucet and complete its CAPTCHA. The no-CAPTCHA PoW route
-  reached a current unspent difficulty-32 output, but sustained hashing drove
-  this host to 94–96 °C even after CPU throttling and was stopped for safety.
-- Blocked externally: hosted `signPSBT` proceeds past local policy verification,
-  proof generation, and proof transport parsing, then returns
-  `server_error: Signing service error` from the signing service.
-- Still open: provider-signed key/policy provenance, fee adaptation, final-sweep
-  destination semantics, real coins/wallets, physical passkeys, and the complete
-  on-chain lifecycle.
+- Complete: fully validating default-Signet Core 31.1 synchronization with
+  `txindex=1`, an independent public explorer check, and isolated Alice, Bob,
+  Carol, and watch-only vault wallets.
+- Complete: a confirmed 82,132-sat faucet payment was split into three confirmed
+  20,000-sat participant-wallet outputs. The exact funding builder then consumed
+  one independently signed input per wallet and confirmed the 30,000-sat vault
+  output in transaction
+  `46fa0c249d7ccef642ef8b7d248c5fada161a571443e0b4721e03d7b7a518220`.
+- Complete: hosted `verifyPSBT` accepted Alice's exact first-exit PSBT against
+  that real confirmed vault coin and rejected wrong amount, wrong address, and
+  extra output. The nullifier was available.
+- Complete as a consensus checkpoint, not a user-facing custody proof: the
+  funded vault was cooperatively spent in
+  `ef01cb2027ca35b64e7d5390ffb7cd0b3b35e950658cfcc42684e35a57cad9f4`;
+  the live audit passed the real outpoint, Taproot key-path witness,
+  personal-key-only path, three 9,900-sat refunds, and confirmation checks.
+- Blocked externally: hosted `signPSBT` on the real confirmed vault coin proceeds
+  past local policy verification, hosted policy verification, proof generation,
+  and proof transport parsing, then returns `server_error: Signing service error`
+  from the signing service. No local signer was substituted.
+- Still open: provider-signed key/policy provenance, participant-approved fee
+  adaptation, final-sweep destination semantics, physical passkeys, PostgreSQL
+  lifecycle execution, solo orderings, both recovery thresholds, the final-owner
+  path, and the restart/outage/reorganization matrix.
+- Completion flags remain `signetValidated: false`, `mainnetValidated: false`,
+  and `mainnetFundingAuthorized: false`.
