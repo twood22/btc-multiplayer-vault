@@ -14,8 +14,14 @@ jobs:
   acceptance:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        network: [signet, mainnet]
     env:
-      CONTAINER_IMAGE_TAG: btc-multiplayer-vault:acceptance-${{ github.sha }}
+      VAULT_NETWORK: ${{ matrix.network }}
+      NEXT_PUBLIC_VAULT_NETWORK: ${{ matrix.network }}
+      CONTAINER_IMAGE_TAG: btc-multiplayer-vault:acceptance-${{ matrix.network }}-${{ github.sha }}
     steps:
       - name: Check out the selected commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

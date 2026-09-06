@@ -12,6 +12,7 @@ import {
 import { withUnlockedVaultCustody } from '../lib/client/unlocked-vault-custody';
 import { signAuthorizedSoloWithdrawal } from '../lib/client/vault-signing';
 import { BITCOIN_NETWORK_CONFIG, BITCOIN_NETWORK_NAME } from '../../src/network.js';
+import { assertSigbashKeyBinding } from '../../src/sigbash-client-guard.js';
 
 interface PasskeyChoice { id: string; name: string }
 interface ReadinessStatus {
@@ -118,6 +119,7 @@ export function SigbashReadinessProof({
             verbose: true,
             keyIndex: custodyKey.keyIndex,
           });
+          assertSigbashKeyBinding(key, { ...custodyKey, network: BITCOIN_NETWORK_NAME });
           if (key.network !== BITCOIN_NETWORK_NAME || key.keyId !== custodyKey.keyId ||
               key.keyIndex !== custodyKey.keyIndex || key.policyRoot !== custodyKey.policyRoot ||
               key.require2FA) {

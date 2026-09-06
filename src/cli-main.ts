@@ -17,6 +17,9 @@ import {
   writeProtectedFile,
 } from './operator-environment.js';
 import { createLiveSigbashProofReceipt, type LiveSigbashProofReceipt } from './live-proof-receipt.js';
+import { RELEASE_NETWORK } from './release-network.js';
+import { readProvisioningKeys } from './sigbash-provisioning-client.js';
+import { assertCompiledSigbashPolicy } from './sigbash-policy.js';
 import {
   appendSigbashRecoveryRecord,
   findMatchingSigbashKey,
@@ -2593,7 +2596,7 @@ async function livePolicyDryRun() {
   assert(!requestSignature || placeholderOutpoint,
     'the predeployment signing proof must use its deliberately unfunded placeholder outpoint');
   const proofReceiptPath = requestSignature
-    ? stringArg(args, 'receipt-output') || 'live-run/predeployment-proof-receipt.json'
+    ? stringArg(args, 'receipt-output') || RELEASE_NETWORK.proofReceiptPath
     : null;
   if (proofReceiptPath) assertFreshProtectedOutputPath(proofReceiptPath, 'live Sigbash proof receipt');
   const state = createConfiguredState();
@@ -3359,6 +3362,9 @@ async function unknownCreateResponseResumeCheck(): Promise<{
   let createCalls = 0;
   let listCalls = 0;
   const client = {
+    async assertCompiledPolicy(requested: unknown, compiled: unknown) {
+      assertCompiledSigbashPolicy(requested, compiled);
+    },
     async createKey() {
       createCalls += 1;
       throw new Error('request timed out after the server committed');
@@ -3376,9 +3382,10 @@ async function unknownCreateResponseResumeCheck(): Promise<{
       }];
     },
   } as unknown as SigbashLiveClient;
-  const result = await createKeyWithAutoIndex(client, {
+  const result = await createKeyWithReconciledOutcome(client, {
     policy,
     network: NETWORK,
+    keyIndex: 3,
     require2FA: false,
     verbose: true,
   });
@@ -3509,11 +3516,11 @@ async function sigbashLiveSetup() {
   // checkpointRegistrationToOverride() so they can never derive different
   // vault addresses; legacy/mixed/incomplete checkpoint lines abort the run.
   const checkpointPath = process.env.SIGBASH_SETUP_CHECKPOINT || (proofRound
-    ? 'live-run/predeployment-setup-checkpoint.jsonl'
-    : 'live-run/setup-checkpoint.jsonl');
+    ? `${RELEASE_NETWORK.directory}/predeployment-setup-checkpoint.jsonl`
+    : `${RELEASE_NETWORK.directory}/setup-checkpoint.jsonl`);
   const recoveryJournalPath = process.env.SIGBASH_RECOVERY_JOURNAL || (proofRound
-    ? 'live-run/predeployment-recovery-kits.jsonl'
-    : 'live-run/recovery-kits.jsonl');
+    ? `${RELEASE_NETWORK.directory}/predeployment-recovery-kits.jsonl`
+    : `${RELEASE_NETWORK.directory}/recovery-kits.jsonl`);
   const checkpointParent = dirname(checkpointPath);
   mkdirSync(checkpointParent, { recursive: true, mode: 0o700 });
   const checkpointParentStat = lstatSync(checkpointParent);
@@ -3585,27 +3592,18 @@ async function sigbashLiveSetup() {
     });
     try {
       const poetPolicy = toPoetPolicy(sdk, policy);
-      let listed: Awaited<ReturnType<SigbashLiveClient['listKeys']>> = [];
-      try {
-        listed = await client.listKeys();
-      } catch (error) {
-        // A fresh hosted-Sigbash credential has no registered proof-of-possession
-        // key yet. The first createKey call performs that registration, whereas
-        // listKeys correctly rejects the still-unknown signer. Do not treat any
-        // other authentication or transport failure as an empty key list.
-        if (!errorMessage(error).toLowerCase().includes('request signature missing or invalid')) {
-          throw error;
-        }
-        console.error('  fresh Sigbash credential detected; first key creation will register its signer');
-      }
+      const listed = await readProvisioningKeys(client,
+        !registrations.some(item => item.participantId === participantId) &&
+        !recoveryRecords.some(item => item.participantId === participantId));
       const matching = findMatchingSigbashKey(listed, poetPolicy, NETWORK);
+      if (matching) await client.assertCompiledPolicy(poetPolicy, matching.poetJSON);
       const priorRecovery = findRecoveryRecord(recoveryRecords, participantId, round);
       if (priorRecovery && matching?.keyId !== priorRecovery.keyId) {
         throw new Error(
           `protected recovery kit for ${participantId}:${round} does not match the live immutable policy key`,
         );
       }
-      const created = matching ?? await createKeyWithAutoIndex(client, {
+      const created = matching ?? await createKeyWithReconciledOutcome(client, {
         policy: poetPolicy,
         network: NETWORK,
         require2FA: false,
@@ -3685,7 +3683,7 @@ async function sigbashLiveSetup() {
       ),
     ];
     const proofEnvironment = writeProtectedEnvironmentFile(
-      proofEnvironmentOutput ?? 'live-run/predeployment.env',
+      proofEnvironmentOutput ?? `${RELEASE_NETWORK.directory}/predeployment.env`,
       [
         '# Generated from the immutable two-key Sigbash predeployment checkpoint.',
         '# This file contains identifiers, not the credential triplet; keep both files together for the proof.',
@@ -3792,7 +3790,7 @@ async function sigbashOrgId() {
 /** Create one CLI proof credential without exposing or permissively overwriting it. */
 async function sigbashBootstrap() {
   const args = parseArgs(process.argv.slice(3));
-  const output = stringArg(args, 'output') ?? 'live-run/proof-credentials.env';
+  const output = stringArg(args, 'output') ?? `${RELEASE_NETWORK.directory}/proof-credentials.env`;
   const independent = args.independent === true || args.independent === 'true';
   const created = independent
     ? await createIndependentSigbashCredentialFile(output, PARTICIPANTS.map((item) => item.id))
@@ -3815,45 +3813,23 @@ function firstUnusedSigbashKeyIndex(listed: Awaited<ReturnType<SigbashLiveClient
   throw new Error('all 64 Sigbash key indexes are already occupied for this credential');
 }
 
-async function createKeyWithAutoIndex(
+async function createKeyWithReconciledOutcome(
   client: SigbashLiveClient,
   options: Omit<Parameters<SigbashLiveClient['createKey']>[0], 'keyIndex'> & { keyIndex?: number },
 ): ReturnType<SigbashLiveClient['createKey']> {
-  let keyIndex = options.keyIndex ?? 0;
-  for (let attempt = 0; attempt < 64; attempt += 1) {
-    try {
-      return await client.createKey({ ...options, keyIndex });
-    } catch (error) {
-      // A timed-out create may still have committed remotely. Re-list before
-      // advancing or retrying so an unknown response can never strand one
-      // immutable key and silently create another for the same policy.
-      const committed = findMatchingSigbashKey(
-        await client.listKeys(),
-        options.policy,
-        options.network,
-      );
-      if (committed) return committed;
-      const nextIndex = (error as { nextAvailableIndex?: number })?.nextAvailableIndex;
-      if (nextIndex !== undefined) {
-        keyIndex = nextIndex;
-        continue;
-      }
-      // The server rate-limits key registration (~1/min) and occasionally
-      // times out a request; both are transient — wait and retry same index.
-      const message = errorMessage(error).toLowerCase();
-      if (message.includes('policy_root mismatch')) {
-        console.error(`  … hosted WASM policy compiler disagreed at keyIndex ${keyIndex}; retrying the same immutable policy`);
-        continue;
-      }
-      if (message.includes('rate limit') || message.includes('timed out') || message.includes('timeout')) {
-        console.error(`  … transient error on keyIndex ${keyIndex} (${message.slice(0, 60)}); waiting 65s`);
-        await new Promise((resolve) => setTimeout(resolve, 65_000));
-        continue;
-      }
-      throw error;
+  const keyIndex = options.keyIndex ?? 0;
+  try { return await client.createKey({ ...options, keyIndex }); }
+  catch (error) {
+    // Creation may have committed before its acknowledgement was lost. Only
+    // reconcile the exact immutable policy and slot; never advance to another
+    // index or issue another create while the first outcome is ambiguous.
+    const committed = findMatchingSigbashKey(await client.listKeys(), options.policy, options.network);
+    if (committed && committed.keyIndex === keyIndex) {
+      await client.assertCompiledPolicy(options.policy, committed.poetJSON);
+      return committed;
     }
+    throw error;
   }
-  throw new Error('could not create a Sigbash key after 64 attempts');
 }
 
 function createDeposits(ledger: Ledger, state: VaultState): void {

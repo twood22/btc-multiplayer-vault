@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { deriveXpubChildPubkey, xpubRootXonly } from '@/src/crypto';
 import { BITCOIN_NETWORK_NAME } from '@/src/network';
+import { assertCompiledSigbashPolicy } from '@/src/sigbash-policy';
 import { assertSameOrigin, jsonError } from '@/web/lib/server/http';
 import { recordLiveSigbashRegistration } from '@/web/lib/server/roster-store';
 import { assertSigbashCustodyLease } from '@/web/lib/server/sigbash-custody-store';
@@ -44,9 +45,10 @@ export async function POST(request: Request) {
     if (canonicalJson(input.requestedPoetPolicy) !== canonicalJson(manifest.next.poetPolicy)) {
       throw new Error('browser requested a Sigbash policy different from the canonical vault policy');
     }
-    if (canonicalJson(input.compiledPoetPolicy) !== canonicalJson(manifest.next.poetPolicy)) {
-      throw new Error('Sigbash returned a compiled policy different from the canonical vault policy');
-    }
+    // Preserve exact destinations/conditions and reject external or colliding
+    // list references. The browser additionally requires a pinned-WASM recompile.
+    // This consistency check is not a provider-signed key/policy attestation.
+    assertCompiledSigbashPolicy(manifest.next.poetPolicy, input.compiledPoetPolicy);
     const policyLeafXonlyPubkey = deriveXpubChildPubkey(input.bip328Xpub, [0, 0]).xonlyPubKeyHex;
     const identificationLeafXonlyPubkey = xpubRootXonly(input.bip328Xpub);
     await recordLiveSigbashRegistration({

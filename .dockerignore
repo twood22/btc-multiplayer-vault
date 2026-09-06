@@ -1,5 +1,6 @@
 .git
 .next
+vault-build-network.json
 .env
 .env.*
 !.env.example

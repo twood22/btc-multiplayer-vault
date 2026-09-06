@@ -232,9 +232,10 @@ export async function submitPasskeyApprovedFunding(input: {
       status: string;
       finalization_digest: Buffer;
       transaction_hex: string;
-      submission_started_at: Date | null;
+      submission_started_at: string | null;
     }>>`
-      SELECT status, finalization_digest, transaction_hex, submission_started_at
+      SELECT status, finalization_digest, transaction_hex,
+             submission_started_at::text AS submission_started_at
       FROM funding_finalizations WHERE vault_id = ${input.vaultId}::uuid FOR UPDATE
     `;
     const row = rows[0];
@@ -243,11 +244,11 @@ export async function submitPasskeyApprovedFunding(input: {
       throw new Error('funding finalization changed before operator submission');
     }
     if (row.status === 'approved') {
-      const claimed = await sql<Array<{ submission_started_at: Date }>>`
+      const claimed = await sql<Array<{ submission_started_at: string }>>`
         UPDATE funding_finalizations
         SET status = 'submitting', submission_started_at = now(), broadcast_failure = NULL
         WHERE vault_id = ${input.vaultId}::uuid AND status = 'approved'
-        RETURNING submission_started_at
+        RETURNING submission_started_at::text AS submission_started_at
       `;
       if (claimed.length !== 1) throw new Error('funding submission could not be claimed');
       return { resumed: false, startedAt: claimed[0]!.submission_started_at };
@@ -258,6 +259,7 @@ export async function submitPasskeyApprovedFunding(input: {
     throw new Error(`funding finalization is not submit-ready (${row.status})`);
   });
 
+  let submissionStartedAt = claim.startedAt;
   if (claim.resumed) {
     if (await fundingObservedOnBackend(finalization)) {
       await markFundingBroadcast(finalization);
@@ -268,20 +270,24 @@ export async function submitPasskeyApprovedFunding(input: {
         alreadySubmitted: true,
       };
     }
-    if (Date.now() - claim.startedAt.getTime() < 10 * 60 * 1000) {
+    if (Date.now() - Date.parse(claim.startedAt) < 10 * 60 * 1000) {
       throw new Error('another operator funding submission is still in progress');
     }
-    const reclaimed = await db()<Array<{ vault_id: string }>>`
+    const reclaimed = await db()<Array<{ submission_started_at: string }>>`
       UPDATE funding_finalizations
       SET submission_started_at = now(), broadcast_failure = NULL
       WHERE vault_id = ${input.vaultId}::uuid
         AND finalization_digest = ${Buffer.from(finalization.finalizationDigest, 'hex')}
-        AND status = 'submitting' AND submission_started_at = ${claim.startedAt}
-      RETURNING vault_id
+        AND status = 'submitting' AND submission_started_at = ${claim.startedAt}::text::timestamptz
+      RETURNING submission_started_at::text AS submission_started_at
     `;
     if (reclaimed.length !== 1) throw new Error('stale funding submission was claimed elsewhere');
+    submissionStartedAt = reclaimed[0]!.submission_started_at;
   }
 
+  // A resumed attempt inherits the original send's uncertainty. A later
+  // preflight failure cannot prove that those bytes were never accepted.
+  let broadcastMayHaveBeenSubmitted = claim.resumed;
   try {
     const mempool = await testMempoolAccept(finalization.transactionHex);
     try {
@@ -298,6 +304,7 @@ export async function submitPasskeyApprovedFunding(input: {
       }
       throw mempoolError;
     }
+    broadcastMayHaveBeenSubmitted = true;
     const returnedTxid = await sendRawTransaction(finalization.transactionHex);
     assertExactBroadcastTransaction({
       finalizedTxHex: finalization.transactionHex,
@@ -321,7 +328,10 @@ export async function submitPasskeyApprovedFunding(input: {
         alreadySubmitted: true,
       };
     }
-    await releaseFundingSubmission(finalization, error);
+    await recordFundingSubmissionFailure(finalization, error, {
+      submissionStartedAt,
+      broadcastMayHaveBeenSubmitted,
+    });
     throw error;
   }
 }
@@ -1229,18 +1239,26 @@ async function markFundingBroadcast(finalization: FinalizedFundingTransaction): 
   }
 }
 
-async function releaseFundingSubmission(
+async function recordFundingSubmissionFailure(
   finalization: FinalizedFundingTransaction,
   error: unknown,
+  attempt: { submissionStartedAt: string; broadcastMayHaveBeenSubmitted: boolean },
 ): Promise<void> {
+  // Release only a fresh attempt that failed before send, and only while it
+  // still owns the claim. An old preflight must not unlock a newer submission.
+  // Keep the timestamp as database text, including the parameter's wire type:
+  // the driver's Date serializer would otherwise truncate its microseconds.
   await db()`
     UPDATE funding_finalizations
-    SET status = 'approved', submission_started_at = NULL,
+    SET status = ${attempt.broadcastMayHaveBeenSubmitted ? 'submitting' : 'approved'},
+        submission_started_at = CASE WHEN ${attempt.broadcastMayHaveBeenSubmitted}
+          THEN submission_started_at ELSE NULL END,
         broadcast_failure = ${boundedFundingFailure(error)}
     WHERE vault_id = ${finalization.vaultId}::uuid
       AND finalization_digest = ${Buffer.from(finalization.finalizationDigest, 'hex')}
       AND transaction_hex = ${finalization.transactionHex}
       AND status = 'submitting'
+      AND submission_started_at = ${attempt.submissionStartedAt}::text::timestamptz
   `;
 }
 

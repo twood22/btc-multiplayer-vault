@@ -18,6 +18,7 @@ import type {
 import { fsyncDirectory } from './operator-environment.js';
 import { BITCOIN_NETWORK_NAME } from './network.js';
 import type { BitcoinNetworkName } from './types.js';
+import { sigbashCompiledPolicyMatches } from './sigbash-policy.js';
 
 const JOURNAL_VERSION = 'btc-multiplayer-vault-sigbash-recovery-v1' as const;
 const HEX_32_BYTES = /^[0-9a-f]{64}$/u;
@@ -107,9 +108,8 @@ export function findMatchingSigbashKey(
   requestedPolicy: PoetPolicy,
   network: string,
 ): (SigbashKeyListItem & { keyIndex: number }) | null {
-  const requested = canonicalJson(requestedPolicy);
   const matches = listed.filter((candidate) =>
-    candidate.network === network && canonicalJson(candidate.poetJSON) === requested,
+    candidate.network === network && sigbashCompiledPolicyMatches(requestedPolicy, candidate.poetJSON),
   );
   if (matches.length > 1) {
     throw new Error('multiple Sigbash keys match the requested immutable policy; refusing ambiguous resume');

@@ -42,6 +42,12 @@ interface RuntimeStatus {
     observedParticipantIds: string[];
     participantObservationConfirmations: number | null;
   }) | null;
+  proposalChoices?: Array<{
+    id: string;
+    kind: 'solo' | 'cooperative' | 'recovery' | 'final_sweep';
+    actorParticipantId: string | null;
+    status: string;
+  }>;
   proposal: {
     id: string;
     kind: 'solo' | 'cooperative' | 'recovery' | 'final_sweep';
@@ -70,10 +76,22 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
   const [browserReady, setBrowserReady] = useState(false);
   const [broadcastConfirmed, setBroadcastConfirmed] = useState(false);
 
-  async function refresh() {
-    const next = await postJson('/api/vault/runtime', {}) as unknown as RuntimeStatus;
+  async function refresh(proposalId = runtime?.proposal?.id) {
+    const next = await postJson('/api/vault/runtime', { proposalId }) as unknown as RuntimeStatus;
+    setBroadcastConfirmed(false);
     setRuntime(next);
     setMessage(next.coin ? `Current ${BITCOIN_NETWORK_CONFIG.addressLabel} coin loaded` : 'No confirmed vault coin yet');
+  }
+
+  async function selectProposal(proposalId: string) {
+    setWorking(true);
+    try {
+      await refresh(proposalId);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not load the selected proposal');
+    } finally {
+      setWorking(false);
+    }
   }
 
   useEffect(() => {
@@ -112,11 +130,11 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
     if (!runtime) return;
     setWorking(true);
     try {
-      await postJson('/api/vault/proposals', {
+      const created = await postJson('/api/vault/proposals', {
         kind: 'solo',
         actorParticipantId: runtime.participantId,
       });
-      await refresh();
+      await refresh(String(created.id));
       setMessage('Exact policy-limited solo withdrawal created; nothing has been signed or broadcast');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not create solo withdrawal');
@@ -128,8 +146,8 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
   async function createCooperativeProposal() {
     setWorking(true);
     try {
-      await postJson('/api/vault/proposals', { kind: 'cooperative' });
-      await refresh();
+      const created = await postJson('/api/vault/proposals', { kind: 'cooperative' });
+      await refresh(String(created.id));
       setMessage('Equal cooperative refund proposed; every current participant signs on their own device');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not create cooperative exit');
@@ -158,11 +176,11 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
         snapshotDigest: observed.snapshotDigest,
         response,
       });
-      await postJson('/api/vault/proposals', {
+      const created = await postJson('/api/vault/proposals', {
         kind: 'recovery',
         actorParticipantId: vanishedId,
       });
-      await refresh();
+      await refresh(String(created.id));
       setMessage(
         `Timelocked recovery for absent participant ${vanishedId} proposed; nothing has been signed or broadcast`,
       );
@@ -446,11 +464,11 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
     if (!runtime) return;
     setWorking(true);
     try {
-      await postJson('/api/vault/proposals', {
+      const created = await postJson('/api/vault/proposals', {
         kind: 'final_sweep',
         actorParticipantId: runtime.participantId,
       });
-      await refresh();
+      await refresh(String(created.id));
       setMessage('Final payout sweep created; nothing has been signed or broadcast');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not create final sweep');
@@ -535,22 +553,25 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
 
   const observed = Boolean(runtime?.coin?.observedParticipantIds.includes(runtime.participantId));
   const currentRoundIds = runtime?.coin?.roundId ? participantIdsForRound(runtime.coin.roundId) : [];
-  const canSolo = runtime?.coin?.kind === 'vault'
+  const choices = runtime?.proposalChoices ?? (runtime?.proposal ? [runtime.proposal] : []);
+  const canPropose = runtime?.coin?.kind === 'vault'
     && currentRoundIds.includes(runtime.participantId)
-    && !runtime.proposal
     && observed;
-  const canCooperate = canSolo;
+  const canSolo = canPropose && !choices.some((item) =>
+    item.kind === 'solo' && item.actorParticipantId === runtime?.participantId);
+  const canCooperate = canPropose && !choices.some((item) => item.kind === 'cooperative');
   const recoveryMature = Boolean(
     runtime?.coin?.participantObservationConfirmations !== null &&
     runtime?.coin?.participantObservationConfirmations !== undefined &&
     runtime.coin.participantObservationConfirmations > runtime.recoveryDelayBlocks,
   );
-  const recoveryCandidates = canSolo && recoveryMature
-    ? currentRoundIds.filter((participantId) => participantId !== runtime?.participantId)
+  const recoveryCandidates = canPropose && recoveryMature
+    ? currentRoundIds.filter((participantId) => participantId !== runtime?.participantId
+      && !choices.some((item) => item.kind === 'recovery' && item.actorParticipantId === participantId))
     : [];
   const canCreateFinalSweep = runtime?.coin?.kind === 'final_payout'
     && runtime.coin.ownerParticipantId === runtime.participantId
-    && !runtime.proposal
+    && !choices.some((item) => item.kind === 'final_sweep')
     && observed;
   const canSignSolo = runtime?.proposal?.kind === 'solo'
     && runtime.proposal.actorParticipantId === runtime.participantId
@@ -612,6 +633,25 @@ export function VaultRuntimePanel({ passkeys }: { passkeys: PasskeyChoice[] }) {
             {passkeys.map((passkey) => <option key={passkey.id} value={passkey.id}>{passkey.name}</option>)}
           </select>
         </label>
+        {choices.length > 0 && (
+          <label>
+            Transaction proposal
+            <select
+              value={runtime?.proposal?.id || ''}
+              disabled={working}
+              onChange={(event) => { void selectProposal(event.target.value); }}
+            >
+              {choices.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.kind}{item.actorParticipantId ? ` · ${item.actorParticipantId}` : ''} · {item.status}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {choices.length > 1 && (
+          <p>These proposals spend the same coin. Only a confirmed Bitcoin transaction advances the vault; proposing an exit does not reserve it.</p>
+        )}
         {runtime?.coin && (
           <button disabled={working} onClick={verifyCurrentCoin} type="button">
             {observed ? `Refresh ${BITCOIN_NETWORK_CONFIG.addressLabel} verification` : 'Verify current coin'}

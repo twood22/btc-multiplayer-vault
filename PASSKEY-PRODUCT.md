@@ -6,6 +6,12 @@ milestone is the isolated standard-Signet profile in
 [`SIGNET-VALIDATION-PLAN.md`](./SIGNET-VALIDATION-PLAN.md); the mainnet gates
 below remain the later production standard and are not satisfied by Signet.
 
+The active release path is now [SIGNET-OPERATOR-RUNBOOK.md](./SIGNET-OPERATOR-RUNBOOK.md).
+Physical-device testing is deferred to onboarding for the user's first friends
+vault; virtual-authenticator success does not satisfy the real two-passkey setup
+and recovery gate. The guarded SDK provisioning/recovery and exact compiler
+checks are documented in [the readiness follow-up](./SIGNET-READINESS-2026-09-05.md).
+
 This is the user-facing layer for the existing Bitcoin multiplayer vault. It
 does not replace the round-based game, the Sigbash solo-withdrawal path, the
 participant-only MuSig2 path, or the timelocked recovery path.
@@ -44,7 +50,7 @@ participant-only MuSig2 path, or the timelocked recovery path.
   secret under a credential-specific PRF salt and authenticated envelope. Either
   completed passkey can subsequently sign in and unlock the same identity.
 - An immutable roster ceremony that refuses offline Sigbash fixtures, rebuilds
-  and audits the complete mainnet vault from nine service-created public key
+  and audits the complete configured-network vault from nine service-created public key
   registrations, commits the economics, policies, Taproot trees, and funding
   output to one canonical SHA-256 digest, and binds each participant's fresh
   passkey assertion to that digest. The round-one address and script are absent
@@ -65,13 +71,14 @@ participant-only MuSig2 path, or the timelocked recovery path.
 - A passkey-authorized live-readiness ceremony issues a random, unfunded
   outpoint for each of the nine registered participant/round keys. The browser
   independently rebuilds the allowed PSBT and three hostile variants, requires
-  Sigbash to reject the hostile set, and requests one real mainnet signature.
+  local SDK/WASM verification to reject the hostile set, and requests one real
+  hosted signature on the configured network.
   The server accepts a proof only after independently verifying the finalized
   policy-leaf witness and exact transaction against the confirmed roster. Only
   nine distinct successful proofs can move the vault from `roster_confirmed`
   to `ready`.
 - Authenticated runtime coordination persists the exact current coin, each
-  participant's direct mainnet observation, deterministic proposal digest, and
+  participant's direct configured-network observation, deterministic proposal digest, and
   public protocol contributions. Browser signing is implemented for Sigbash
   solo exits, two-round distributed MuSig2 cooperative exits, CSV recovery
   shares, and the final owner's sweep. Every signer rebuilds the transaction

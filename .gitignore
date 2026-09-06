@@ -1,5 +1,6 @@
 node_modules/
 .next/
+vault-build-network.json
 web/.next/
 *.tsbuildinfo
 .env

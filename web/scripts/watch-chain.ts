@@ -14,12 +14,14 @@ try {
       reason: 'another private chain watcher invocation is active',
     }));
   } else {
+    const ok = leased.value.broadcastErrors.length === 0;
     console.log(JSON.stringify({
-      ok: true,
+      ok,
       leaseAcquired: true,
       acted: true,
       ...leased.value,
     }));
+    if (!ok) process.exitCode = 1;
   }
 } finally {
   await closeDatabase();

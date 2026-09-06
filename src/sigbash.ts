@@ -1,6 +1,7 @@
 import { assertNonDefaultSeed } from './config.js';
 import { BITCOIN_NETWORK_NAME } from './network.js';
 import { sigbashConditionConfig } from './sigbash-policy.js';
+import { createGuardedSigbashClient } from './sigbash-client-guard.js';
 import type { PolicyCondition, PolicyNode, PolicyTx, SoloPolicy } from './types.js';
 
 // The live SDK is imported dynamically (it needs WASM + credentials), so its
@@ -52,6 +53,7 @@ export interface SigbashRecoveryKit {
 }
 
 export interface SigbashLiveClient {
+  assertCompiledPolicy(requested: unknown, compiled: unknown): Promise<void>;
   createKey(options: {
     policy: PoetPolicy;
     network: string;
@@ -84,7 +86,6 @@ export interface SigbashLiveClient {
     kmcJSON: string;
     network: string;
   }): Promise<SigbashSignResult>;
-  updatePolicy(opts: { keyId: string; newPolicyJson: string }): Promise<void>;
   disconnect?(): void;
   dispose?(): void;
 }
@@ -310,12 +311,12 @@ class LiveSigbashAdapter implements SigbashAdapter {
     }
     const keyId = policy.keyId;
     const { kmcJSON } = await this.client.getKey(keyId, { verbose: true });
-    return withSigbashHexProofTransport(() => this.client.signPSBT({
+    return this.client.signPSBT({
       keyId,
       psbtBase64: tx.psbtBase64,
       kmcJSON,
       network: BITCOIN_NETWORK_NAME,
-    }));
+    });
   }
 
   dispose(): void {
@@ -470,9 +471,9 @@ export async function createLiveSigbashClient({
   // Live Sigbash keys must never be bound to client shares derived from the
   // public default demo seed — anyone could reproduce the "browser half".
   assertNonDefaultSeed();
-  let sdk: SigbashSdk;
+  let module: typeof import('@sigbash/sdk');
   try {
-    sdk = (await import('@sigbash/sdk')) as unknown as SigbashSdk;
+    module = await import('@sigbash/sdk');
   } catch (error) {
     throw new Error(
       `SIGBASH_MODE=live requires @sigbash/sdk to be installed: ${(error as Error).message}`,
@@ -485,15 +486,16 @@ export async function createLiveSigbashClient({
   // this is the defense against a swapped binary, so the pin is mandatory in
   // live mode and always passed to loadWasm.
   const expectedHash = validateWasmSha384(process.env.SIGBASH_WASM_SHA384);
-  await sdk.loadWasm({ wasmUrl, expectedHash });
-  const client = new sdk.SigbashClient({
+  await module.loadWasm({ wasmUrl, expectedHash });
+  const client = createGuardedSigbashClient(module, {
     serverUrl: process.env.SIGBASH_SERVER_URL || 'https://www.sigbash.com',
     apiKey: credentials.apiKey,
     userKey: credentials.userKey,
     userSecretKey: credentials.userSecretKey,
+    privateLogs: true,
     ...(musig2PrivateKey ? { musig2PrivateKey } : {}),
-  });
-  return { sdk, client };
+  }, withSigbashHexProofTransport);
+  return { sdk: module as unknown as SigbashSdk, client: client as unknown as SigbashLiveClient };
 }
 
 export interface SigbashCredentials {

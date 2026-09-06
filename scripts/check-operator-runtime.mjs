@@ -1,4 +1,5 @@
 import './check-runtime.mjs';
+import { assertBuildNetwork } from './check-build-network.mjs';
 import { spawnSync } from 'node:child_process';
 
 // This probe deliberately omits every required broadcast argument. Reaching
@@ -6,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 // operator source tree, and its static imports can load without allowing the
 // command to inspect release artifacts, open PostgreSQL, contact Bitcoin Core,
 // or submit a transaction.
+assertBuildNetwork();
 const result = spawnSync('npm', ['run', 'web:broadcast-funding', '--'], {
   cwd: process.cwd(),
   encoding: 'utf8',

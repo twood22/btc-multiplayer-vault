@@ -2,6 +2,8 @@ import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { sha256Hex } from './crypto.js';
 import { assertProtectedRegularFile } from './operator-environment.js';
+import { RELEASE_NETWORK, RELEASE_CHECK_PREFIXES, RELEASE_MANUAL_GATES } from './release-network.js';
+import type { BitcoinNetworkName } from './types.js';
 
 export interface FundingReleaseCheck {
   name: string;
@@ -10,9 +12,10 @@ export interface FundingReleaseCheck {
 }
 
 export interface FundingReleaseReport {
-  version: 2;
-  kind: 'mainnet-funding-release';
-  network: 'mainnet';
+  version: 3;
+  kind: typeof RELEASE_NETWORK.releaseKind;
+  network: BitcoinNetworkName;
+  genesisHash: string;
   createdAt: string;
   automatedPreflightPassed: true;
   fundingAllowed: false;
@@ -53,9 +56,10 @@ export function createFundingReleaseReport(input: {
     throw new Error('funding release report requires every automated preflight check to pass');
   }
   const body = canonicalBody({
-    version: 2,
-    kind: 'mainnet-funding-release',
-    network: 'mainnet',
+    version: 3,
+    kind: RELEASE_NETWORK.releaseKind,
+    network: RELEASE_NETWORK.network,
+    genesisHash: RELEASE_NETWORK.genesisHash,
     createdAt: input.createdAt,
     automatedPreflightPassed: true,
     fundingAllowed: false,
@@ -80,15 +84,16 @@ export function createFundingReleaseReport(input: {
 export function validateFundingReleaseReport(input: unknown): FundingReleaseReport {
   if (!isPlainObject(input)) throw new Error('funding release report is not an object');
   const allowedKeys = [
-    'version', 'kind', 'network', 'createdAt', 'automatedPreflightPassed',
+    'version', 'kind', 'network', 'genesisHash', 'createdAt', 'automatedPreflightPassed',
     'fundingAllowed', 'manualReviewAcknowledged', 'vaultId', 'fundingFinalization',
     'liveSigbashProofDigest', 'deployedImageManifestDigest', 'checks', 'manualGates', 'reportDigest',
   ];
   if (Object.keys(input).sort().join(',') !== [...allowedKeys].sort().join(',')) {
     throw new Error('funding release report has unexpected or missing fields');
   }
-  if (input.version !== 2 || input.kind !== 'mainnet-funding-release' ||
-      input.network !== 'mainnet' || input.automatedPreflightPassed !== true ||
+  if (input.version !== 3 || input.kind !== RELEASE_NETWORK.releaseKind ||
+      input.network !== RELEASE_NETWORK.network || input.genesisHash !== RELEASE_NETWORK.genesisHash ||
+      input.automatedPreflightPassed !== true ||
       input.fundingAllowed !== false || input.manualReviewAcknowledged !== true ||
       typeof input.createdAt !== 'string' || !validIsoTimestamp(input.createdAt) ||
       typeof input.vaultId !== 'string' || !UUID.test(input.vaultId) ||
@@ -115,52 +120,19 @@ export function validateFundingReleaseReport(input: unknown): FundingReleaseRepo
   if (!checks || checks.some((item) => !item.ok) || !manualGates) {
     throw new Error('funding release report does not contain passing automated and acknowledged manual gates');
   }
-  const requiredCheckPrefixes = [
-    'protected live Sigbash mainnet proof receipt',
-    'reviewed Node runtime is active',
-    'deployed service image manifest digest is explicit and immutable',
-    'production WebAuthn origin and RP ID are explicit HTTPS values',
-    'at least one independent HTTPS chain-observation origin is explicit',
-    'tiny-mainnet amount is explicit and within the private-beta cap',
-    'mainnet recovery delay is explicit and positive',
-    'confirmation depth for funding and transitions is explicit',
-    'three-wallet funding fee is explicit and cannot consume one deposit',
-    'Sigbash service origin is an explicit credential-free HTTPS origin',
-    'Sigbash WASM matches the pinned SHA-384',
-    'Sigbash Go loader matches the pinned SHA-384',
-    'production database uses a non-local TLS endpoint',
-    'protected production database restore receipt is present, fresh, and bound to this endpoint',
-    'production database is PostgreSQL 16 or newer',
-    'all required database migrations are applied',
-    'exactly one three-person private-beta vault exists',
-    'all three participants have two completed PRF passkey envelopes',
-    'the immutable roster has nine live Sigbash keys and three confirmations',
-    'all nine server-verified Sigbash readiness proofs are recorded',
-    'the pre-funding database contains no current Bitcoin coin',
-    'funding ceremony is either untouched or unanimously approved and still unbroadcast',
-    'configured Bitcoin backend identifies as mainnet',
-  ];
+  const requiredCheckPrefixes = RELEASE_CHECK_PREFIXES;
   if (requiredCheckPrefixes.some((prefix) => !checks.some((item) => item.name.startsWith(prefix)))) {
     throw new Error('funding release report is missing a mandatory automated gate');
   }
-  const requiredManualGatePrefixes = [
-    'Independently review the protected predeployment live-Sigbash receipt',
-    'Sigbash must explicitly enable mainnet for all three independent participant organization hashes',
-    'Each friend must complete setup and recovery with two real, distinct PRF-capable passkeys',
-    'Each friend must independently review the unanimous roster and tiny-mainnet economics',
-    'The deployed private service must use the independently reviewed immutable image digest',
-    'Before initial wallet signing, all three friends must review the same funding PSBT fingerprint',
-    'Three independent real wallets must sign only their own P2WPKH or P2TR funding inputs',
-    'The private Bitcoin Core path must complete rejection, retry, duplicate, interruption, mempool, confirmation, and reorganization drills',
-    'The operator has documented that this report does not authorize funding',
-  ];
+  const requiredManualGatePrefixes = RELEASE_MANUAL_GATES;
   if (requiredManualGatePrefixes.some((prefix) => !manualGates.some((item) => item.startsWith(prefix)))) {
     throw new Error('funding release report is missing a mandatory acknowledged manual gate');
   }
   const body = canonicalBody({
-    version: 2,
-    kind: 'mainnet-funding-release',
-    network: 'mainnet',
+    version: 3,
+    kind: RELEASE_NETWORK.releaseKind,
+    network: RELEASE_NETWORK.network,
+    genesisHash: RELEASE_NETWORK.genesisHash,
     createdAt: input.createdAt,
     automatedPreflightPassed: true,
     fundingAllowed: false,
@@ -236,9 +208,10 @@ export function readProtectedFundingReleaseReport(
 
 function canonicalBody(input: Omit<FundingReleaseReport, 'reportDigest'>): Omit<FundingReleaseReport, 'reportDigest'> {
   return {
-    version: 2,
-    kind: 'mainnet-funding-release',
-    network: 'mainnet',
+    version: 3,
+    kind: RELEASE_NETWORK.releaseKind,
+    network: RELEASE_NETWORK.network,
+    genesisHash: RELEASE_NETWORK.genesisHash,
     createdAt: input.createdAt,
     automatedPreflightPassed: true,
     fundingAllowed: false,

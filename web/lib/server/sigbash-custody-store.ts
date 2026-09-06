@@ -18,7 +18,7 @@ export interface SigbashCustodyAuthorization {
   participantEnvelope: { iv: Buffer; ciphertext: Buffer; aad: Buffer };
   custodyEnvelopes: StoredSigbashCustodyEnvelope[];
   nextRevision: number;
-  nextAad: Buffer;
+  nextAad: Buffer | null;
 }
 
 export async function completeSigbashCustodyAuthorization(
@@ -80,13 +80,13 @@ export async function completeSigbashCustodyAuthorization(
       ORDER BY revision
     `;
     const nextRevision = (custodyEnvelopes.at(-1)?.revision ?? 0) + 1;
-    if (nextRevision > 32) throw new Error('Sigbash custody history is full');
     return {
       leaseToken,
       participantEnvelope: participantEnvelopes[0]!,
       custodyEnvelopes,
       nextRevision,
-      nextAad: sigbashCustodyAad({
+      // A full append-only history must never prevent read/unlock/signing.
+      nextAad: nextRevision > 32 ? null : sigbashCustodyAad({
         userId: challenge.credential.userId,
         credentialId: challenge.credential.id,
         vaultId: identity.vault_id,
