@@ -5,6 +5,9 @@ This follows the [audit](./CODE-REVIEW-2026-09-05.md),
 [hosted signing investigation](./SIGNET-LIVE-TEST-2026-09-05.md).
 Baseline: `71b1bd227a5f3f3d35fb8449776747d5d88d28c7`.
 Implementation branch: `codex/signet-readiness-hardening`.
+Review: [PR 2](https://github.com/twood22/btc-multiplayer-vault/pull/2).
+Tested implementation: `3edb17c9c578eeee02b4ae1d9b68b88571b5e245`;
+subsequent documentation-only updates record these results.
 
 ## Verdict
 
@@ -73,14 +76,20 @@ accepted as proof of hosted signing or deployed security.
 | Existing live Signet keys | All three organizations enumerated correctly; all nine checkpoint, participant-share, exact-compiled-policy, and recovery checks passed, including slots 1 and 2 |
 | Local WASM using the real existing KMC | Accepted the saved valid PSBT and rejected three hostile variants; no hosted signature attempted in these checks |
 | Fresh live Signet provisioning | Two unfunded pair keys and two protected recovery kits completed after two explicit same-checkpoint retries; intermittent root mismatch is unresolved |
-| Exact Docker image | Local host has no container engine. Separate Signet/mainnet CI validation must be recorded for the pushed implementation, not inferred from the older baseline's CI |
+| Actual guarded predeployment-signing CLI | Fresh unfunded pair reached policy acceptance, server nonce exchange, the hex wrapper, and the blind signing request; reproduced `server_error: Signing service error`, created no proof receipt |
+| Exact Docker image | Both Signet and mainnet jobs passed in [run 34000624901](https://github.com/twood22/btc-multiplayer-vault/actions/runs/34000624901), including six browser cases per image, PostgreSQL 16.15 database acceptance, and the packaged operator probe. No image was published or deployed |
 
 The live key/recovery verification completed at `2026-09-05T23:46:57.537Z`.
 Fresh pair provisioning completed at `2026-09-05T23:59:55.649Z`. Credentials,
 checkpoints, recovery kits, and allowlisted summaries remain owner-only under
 ignored `live-run/signet/`; no secret material belongs in the repo or CI.
-This follow-up created two unfunded keys, obtained no hosted signature, used no
-coins, and made no broadcast, operational migration, or deployment.
+An additional actual guarded CLI signing attempt completed at
+`2026-09-06T00:11:37.852Z` (September 5 local time). It used the fresh pair,
+reviewed 10,000-sat economics, and the deliberately unfunded proof outpoint.
+It reached the hosted signing request and reproduced the signing-service error;
+no version-2 proof receipt was written. This follow-up created two unfunded keys,
+attempted one hosted signature without obtaining one, used no coins, and made
+no broadcast, operational migration, or deployment.
 
 ## Additional provider finding: identical input can yield different roots
 

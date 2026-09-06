@@ -3,6 +3,10 @@
 Last updated: 2026-09-05
 Reviewed baseline: `71b1bd227a5f3f3d35fb8449776747d5d88d28c7`; current work is on
 `codex/signet-readiness-hardening`, including liveness and Signet release fixes.
+Implementation `3edb17c` is pushed in
+[PR 2](https://github.com/twood22/btc-multiplayer-vault/pull/2), not merged or deployed.
+Both exact-container profiles passed in
+[run 34000624901](https://github.com/twood22/btc-multiplayer-vault/actions/runs/34000624901).
 
 This is the current operational status and roadmap for the Bitcoin multiplayer
 vault described in [`spec.md`](./spec.md). The production target remains
@@ -28,7 +32,7 @@ unproven; mainnet is still unauthorized.**
 The repository implements the intended round-based game: Sigbash-enforced solo
 withdrawals, participant-only BIP-327 MuSig2 cooperative exits, distributed
 passkey-protected participant custody, timelocked recovery, final sweep, and
-three-wallet funding preparation. Remaining blockers include Sigbash-registration
+three-wallet funding preparation. Remaining limitations include Sigbash-registration
 provenance, fee adaptation, final-sweep destination semantics, and external
 operational proof. Sigbash declined mainnet SDK enablement for the current
 experimental project but permits SDK testing on Signet. A real standard-Signet
@@ -141,7 +145,12 @@ checkpoint's pending provisioning/release code items, not its evidence limits.
   gates remain intact.
 - Production builds now record their network. Startup rejects a missing,
   mixed, or wrong-network runtime before listening. The exact-container CI
-  workflow builds and tests each network separately.
+  workflow passed on both profiles for implementation `3edb17c`, including
+  PostgreSQL 16.15, six browser scenarios per image, and the operator probe.
+- The actual guarded predeployment-signing CLI was then exercised with the
+  fresh unfunded pair. At `2026-09-06T00:11:37.852Z` (September 5 local time), it
+  reached policy acceptance, server nonce exchange and wrapped blind signing,
+  then reproduced `server_error: Signing service error`. No receipt was written.
 - Claude Fable performed bounded read-only SDK/release/compiler reviews. The
   compiler behavior and fixes were independently checked; details and final
   verification are in [SIGNET-READINESS-2026-09-05.md](./SIGNET-READINESS-2026-09-05.md).
@@ -264,7 +273,8 @@ a deliberately reviewed mainnet delay before any funds are approved.
 2. Can Sigbash provide a server-verifiable attestation binding organization,
    key ID/index, BIP-328 xpub, policy root, and the canonical compiled policy?
    If `policyRoot` is deterministic, how should an independent verifier
-   recompute it?
+   recompute it? The pinned compiler now has a credential-free same-input root
+   variation reproducer in `scripts/sigbash-policy-compiler-probe.mts`.
 3. Does the current Signet service support the SDK contract used here,
    including immutable `REQKEY`, output destination/value constraints,
    input/output counts, recovery-kit export, and the expected rate limits?

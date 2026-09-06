@@ -170,6 +170,11 @@ satisfy the hosted Sigbash or physical-device gates.
   recovery bindings, and tests timeout/resume behavior. All nine existing live
   keys passed read-only retrieval/share/current-envelope recovery checks.
   See [the readiness follow-up](./SIGNET-READINESS-2026-09-05.md).
+- Fresh provisioning completed two unfunded pair keys with recovery backups
+  after two same-checkpoint retries; the pinned compiler intermittently produced
+  distinct roots for identical input. The independent credential-free probe
+  reproduced that variation. The actual guarded predeployment CLI still hit the
+  hosted signing-service exception on this fresh pair and issued no receipt.
 - Still open: provider-signed key/policy provenance, participant-approved fee
   adaptation, final-sweep destination semantics, physical passkeys, PostgreSQL
   lifecycle execution, solo orderings, both recovery thresholds, the final-owner

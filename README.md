@@ -45,7 +45,7 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Browser PRF setup/recovery/sign-in/unlock | ✅ Chromium + two virtual authenticators; physical devices still required |
 | Optimized standalone user-facing bundle | ✅ passkey + cooperative/recovery/final-sweep/three-wallet-funding Chromium gate; deployed registry digest still required |
 | Packaged private operator runtime | ✅ non-mutating fail-closed probe passed in the exact local image |
-| Engine-enabled exact-image CI gate | ✅ passed for merged commit `5dde338`; local image evidence only, not deployment |
+| Engine-enabled exact-image CI gate | ✅ [both profiles passed](https://github.com/twood22/btc-multiplayer-vault/actions/runs/34000624901) for implementation `3edb17c`; local image evidence only, not deployment |
 | Immediate session revocation and vault-tab cleanup | ✅ browser + PostgreSQL verified |
 | Immutable three-passkey roster gate | ✅ implemented; PostgreSQL 16 migrations verified, real authenticator run still required |
 | User-facing solo/cooperative/recovery/final signing | ✅ implemented and server re-authorized |
@@ -56,7 +56,7 @@ not prove mainnet access or signing; see REVIEW.md "Live Sigbash findings".
 | Disposable Core reorganization drill against PostgreSQL state | ✅ Bitcoin Core 31.1 runner exercised locally; not live-mainnet proof |
 | Database-atomic sensitive-operation rate limits | ✅ implemented and concurrency-verified |
 | Predeployment live Sigbash signing proof | ✅ network-specific commands/receipts implemented; real hosted signature still blocked |
-| Guarded Sigbash provisioning and recovery | ✅ response-isolation and compiler-policy checks implemented; all nine existing Signet keys recovered read-only; fresh friends ceremony remains unproven |
+| Guarded Sigbash provisioning and recovery | ⚠️ nine existing keys verified and two fresh unfunded pair keys backed up; intermittent SDK compiler-root mismatch remains; fresh friends ceremony unproven |
 | Signet-specific release and immutable browser network | ✅ separate artifacts, approval flag, build profile, and fail-closed startup; no live release issued |
 | Read-only post-deployment funding report | ✅ implemented; currently fails closed on missing external gates |
 | Runs without local Bitcoin Core | ✅ `BITCOIN_BACKEND=esplora` |
@@ -95,8 +95,8 @@ npm test                    # full offline acceptance suite
 ```
 
 `SIGBASH_MODE=local` (the default) runs everything offline: it builds the
-vault tree, real mainnet Taproot addresses, the Sigbash policies, and real
-PSBTs; signs and finalizes them with deterministic local keys; and verifies
+vault tree, real Taproot addresses for the configured network, Sigbash policies,
+and real PSBTs; signs and finalizes them with deterministic local keys; and verifies
 the same policy constraints the live Sigbash server would enforce.
 
 ## Architecture
