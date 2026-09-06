@@ -1,6 +1,6 @@
 'use client';
 
-import type { SigbashClient } from '@sigbash/sdk';
+import { assertSigbashKeyBinding, type VaultSigbashClient } from '../../../src/sigbash-client-guard.js';
 import {
   authorizeCooperativeContext,
   ceremonyNonce,
@@ -31,7 +31,6 @@ import {
 } from '../../../src/roster-ceremony.js';
 import { evaluatePolicy } from '../../../src/sigbash.js';
 import { BITCOIN_NETWORK_CONFIG, BITCOIN_NETWORK_NAME } from '../../../src/network.js';
-import { withSigbashHexProofTransport } from '../../../src/sigbash.js';
 import type { TrustedVaultInput } from '../../../src/types.js';
 import { policyId, roundId, type SigbashRosterRegistration } from '../../../src/vault.js';
 import type { SigbashCustodyKey } from './sigbash-custody';
@@ -198,7 +197,7 @@ export async function signAuthorizedSoloWithdrawal(input: {
   currentIds: string[];
   trustedInput: TrustedVaultInput;
   custodyKey: SigbashCustodyKey;
-  client: SigbashClient;
+  client: VaultSigbashClient;
   onProgress?: (stage: string, message: string) => void;
 }) {
   const { signer } = input.unlocked;
@@ -221,6 +220,7 @@ export async function signAuthorizedSoloWithdrawal(input: {
     verbose: true,
     keyIndex: input.custodyKey.keyIndex,
   });
+  assertSigbashKeyBinding(key, { ...input.custodyKey, network: BITCOIN_NETWORK_NAME });
   if (key.network !== BITCOIN_NETWORK_NAME) {
     throw new Error(`Sigbash returned a key for a network other than ${BITCOIN_NETWORK_CONFIG.addressLabel}`);
   }
@@ -241,7 +241,7 @@ export async function signAuthorizedSoloWithdrawal(input: {
   if (verification.passed !== true || verification.error) {
     throw new Error(`Sigbash rejected the committed solo withdrawal: ${verification.error || 'policy did not pass'}`);
   }
-  const signed = await withSigbashHexProofTransport(() => input.client.signPSBT({
+  const signed = await input.client.signPSBT({
     keyId: input.custodyKey.keyId,
     psbtBase64: built.psbtBase64,
     kmcJSON: key.kmcJSON,
@@ -249,7 +249,7 @@ export async function signAuthorizedSoloWithdrawal(input: {
     require2FA: false,
     finalizePsbt: true,
     progressCallback: input.onProgress,
-  }));
+  });
   if (signed.success !== true || signed.error) {
     throw new Error(`Sigbash solo signing failed: ${signed.error || 'signer returned no success'}`);
   }

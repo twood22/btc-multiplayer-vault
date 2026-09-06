@@ -4,11 +4,13 @@ import { sha256Hex } from './crypto.js';
 import { assertProtectedRegularFile } from './operator-environment.js';
 import { BITCOIN_NETWORK_NAME } from './network.js';
 import type { BitcoinNetworkName } from './types.js';
+import { RELEASE_NETWORK } from './release-network.js';
 
 export interface LiveSigbashProofReceipt {
-  version: 1;
-  kind: 'live-sigbash-mainnet-signing-proof';
+  version: 2;
+  kind: typeof RELEASE_NETWORK.proofKind;
   network: BitcoinNetworkName;
+  genesisHash: string;
   createdAt: string;
   round: string;
   leaverId: string;
@@ -55,9 +57,10 @@ export function createLiveSigbashProofReceipt<TAuthorization extends { finalTxid
   const signedArtifacts = validateProofArtifacts(input.signedArtifacts);
   const finalTxid = String(input.authorization.finalTxid || '');
   const body = canonicalReceiptBody({
-    version: 1,
-    kind: 'live-sigbash-mainnet-signing-proof',
+    version: 2,
+    kind: RELEASE_NETWORK.proofKind,
     network: BITCOIN_NETWORK_NAME,
+    genesisHash: RELEASE_NETWORK.genesisHash,
     createdAt: input.createdAt,
     round: input.round,
     leaverId: input.leaverId,
@@ -81,7 +84,7 @@ export function validateLiveSigbashProofReceipt(input: unknown): LiveSigbashProo
   }
   const row = input as Record<string, unknown>;
   const allowedKeys = [
-    'version', 'kind', 'network', 'createdAt', 'round', 'leaverId', 'keyId',
+    'version', 'kind', 'network', 'genesisHash', 'createdAt', 'round', 'leaverId', 'keyId',
     'placeholderOutpoint', 'requestPsbtBase64', 'signedArtifacts', 'authorization',
     'requestPsbtDigest', 'signedArtifactDigest',
     'authorizationDigest', 'finalTxid', 'checkNames', 'proofDigest',
@@ -93,7 +96,8 @@ export function validateLiveSigbashProofReceipt(input: unknown): LiveSigbashProo
     typeof item === 'string' && item.length >= 3 && item.length <= 300)
     ? row.checkNames as string[]
     : null;
-  if (row.version !== 1 || row.kind !== 'live-sigbash-mainnet-signing-proof' ||
+  if (row.version !== 2 || row.kind !== RELEASE_NETWORK.proofKind ||
+      row.genesisHash !== RELEASE_NETWORK.genesisHash ||
       row.network !== BITCOIN_NETWORK_NAME || row.placeholderOutpoint !== true || !checkNames?.length ||
       typeof row.createdAt !== 'string' || !validIsoTimestamp(row.createdAt) ||
       typeof row.round !== 'string' || !['alicebob', 'alicecarol', 'bobcarol'].includes(row.round) ||
@@ -132,9 +136,10 @@ export function validateLiveSigbashProofReceipt(input: unknown): LiveSigbashProo
     throw new Error('live Sigbash proof receipt evidence does not match its committed digests');
   }
   const body = canonicalReceiptBody({
-    version: 1,
-    kind: 'live-sigbash-mainnet-signing-proof',
+    version: 2,
+    kind: RELEASE_NETWORK.proofKind,
     network: BITCOIN_NETWORK_NAME,
+    genesisHash: RELEASE_NETWORK.genesisHash,
     createdAt: row.createdAt,
     round: row.round,
     leaverId: row.leaverId,
@@ -190,9 +195,10 @@ export function readProtectedLiveSigbashProofReceipt(
 
 function canonicalReceiptBody(input: Omit<LiveSigbashProofReceipt, 'proofDigest'>): Omit<LiveSigbashProofReceipt, 'proofDigest'> {
   return {
-    version: 1,
-    kind: 'live-sigbash-mainnet-signing-proof',
+    version: 2,
+    kind: RELEASE_NETWORK.proofKind,
     network: BITCOIN_NETWORK_NAME,
+    genesisHash: RELEASE_NETWORK.genesisHash,
     createdAt: input.createdAt,
     round: input.round,
     leaverId: input.leaverId,

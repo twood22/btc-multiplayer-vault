@@ -197,6 +197,21 @@ test('three passkey-held participants complete cooperative MuSig2 with Sigbash u
     )).toBeVisible();
     for (const participant of browsers.slice(1)) await participant.page.reload();
 
+    // A shared proposal must not reserve the coin or hide an independent exit.
+    const [cooperative] = await sql<Array<{ id: string }>>`
+      SELECT id FROM vault_transaction_proposals
+      WHERE vault_id = ${vaultId}::uuid AND kind = 'cooperative'
+    `;
+    const bob = browsers[1]!;
+    await bob.page.getByRole('button', { name: 'Create my solo withdrawal' }).click();
+    await expect(bob.page.getByText(
+      'Exact policy-limited solo withdrawal created; nothing has been signed or broadcast',
+    )).toBeVisible();
+    await expect(bob.page.getByLabel('Transaction proposal').locator('option')).toHaveCount(2);
+    await expect(bob.page.getByRole('button', { name: 'Verify and sign my solo withdrawal' })).toBeVisible();
+    await bob.page.getByLabel('Transaction proposal').selectOption(cooperative!.id);
+    await expect(bob.page.getByRole('button', { name: 'Join cooperative signing · round 1' })).toBeVisible();
+
     for (const participant of browsers) {
       await participant.page.getByRole('button', {
         name: 'Join cooperative signing · round 1',
@@ -224,6 +239,7 @@ test('three passkey-held participants complete cooperative MuSig2 with Sigbash u
     // secret nonce.
     for (const participant of browsers) {
       await participant.page.reload();
+      await participant.page.getByLabel('Transaction proposal').selectOption(cooperative!.id);
       await expect(participant.page.getByRole('button', {
         name: 'Complete cooperative signing · round 2',
       })).toBeEnabled();
@@ -243,6 +259,7 @@ test('three passkey-held participants complete cooperative MuSig2 with Sigbash u
 
     for (const participant of browsers) {
       await participant.page.reload();
+      await participant.page.getByLabel('Transaction proposal').selectOption(cooperative!.id);
       await expect(participant.page.getByText(
         'Cooperative exit finalized and held for explicit broadcast approval.',
       )).toBeVisible();

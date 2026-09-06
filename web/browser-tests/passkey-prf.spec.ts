@@ -83,10 +83,13 @@ test('registers, recovers, independently PRF-unlocks, and signs out one identity
       plaintext_columns: number;
     }>>`
       SELECT
-        (SELECT count(*)::integer FROM webauthn_credentials) AS credentials,
-        (SELECT count(*)::integer FROM webauthn_credentials WHERE prf_enabled = true) AS prf_credentials,
-        (SELECT count(*)::integer FROM passkey_envelopes) AS envelopes,
-        (SELECT count(*)::integer FROM participant_key_material) AS identities,
+        (SELECT count(*)::integer FROM webauthn_credentials c JOIN vault_members m ON m.user_id = c.user_id
+          WHERE m.vault_id = ${vaultId}::uuid) AS credentials,
+        (SELECT count(*)::integer FROM webauthn_credentials c JOIN vault_members m ON m.user_id = c.user_id
+          WHERE m.vault_id = ${vaultId}::uuid AND c.prf_enabled = true) AS prf_credentials,
+        (SELECT count(*)::integer FROM passkey_envelopes e JOIN webauthn_credentials c USING (credential_id)
+          JOIN vault_members m ON m.user_id = c.user_id WHERE m.vault_id = ${vaultId}::uuid) AS envelopes,
+        (SELECT count(*)::integer FROM participant_key_material WHERE vault_id = ${vaultId}::uuid) AS identities,
         (SELECT count(*)::integer FROM information_schema.columns
           WHERE table_schema = 'public'
             AND column_name IN ('private_key', 'participant_secret', 'prf_output')) AS plaintext_columns
@@ -142,9 +145,11 @@ test('registers, recovers, independently PRF-unlocks, and signs out one identity
     await expect.poll(async () => {
       const rows = await sql<Array<{ credentials: number; envelopes: number; identities: number }>>`
         SELECT
-          (SELECT count(*)::integer FROM webauthn_credentials WHERE prf_enabled = true) AS credentials,
-          (SELECT count(*)::integer FROM passkey_envelopes) AS envelopes,
-          (SELECT count(*)::integer FROM participant_key_material) AS identities
+          (SELECT count(*)::integer FROM webauthn_credentials c JOIN vault_members m ON m.user_id = c.user_id
+            WHERE m.vault_id = ${vaultId}::uuid AND c.prf_enabled = true) AS credentials,
+          (SELECT count(*)::integer FROM passkey_envelopes e JOIN webauthn_credentials c USING (credential_id)
+            JOIN vault_members m ON m.user_id = c.user_id WHERE m.vault_id = ${vaultId}::uuid) AS envelopes,
+          (SELECT count(*)::integer FROM participant_key_material WHERE vault_id = ${vaultId}::uuid) AS identities
       `;
       return rows[0];
     }).toEqual({ credentials: 2, envelopes: 2, identities: 1 });

@@ -17,6 +17,7 @@ import {
   type FundingReleaseCheck,
 } from '../../src/funding-release-report.js';
 import { writeProtectedFile } from '../../src/operator-environment.js';
+import { BITCOIN_NETWORK_NAME, BITCOIN_GENESIS_HASH } from '../../src/network.js';
 
 const checks: Array<{ name: string; ok: true }> = [];
 const directory = mkdtempSync(join(tmpdir(), 'btc-vault-funding-release-'));
@@ -29,13 +30,13 @@ const deployedImageManifestDigest = `sha256:${'44'.repeat(32)}`;
 
 try {
   const reportChecks: FundingReleaseCheck[] = [
-    { name: 'protected live Sigbash mainnet proof receipt is present and matches its reviewed digest', ok: true },
+    { name: `protected live Sigbash ${BITCOIN_NETWORK_NAME} proof receipt is present and matches its reviewed digest`, ok: true },
     { name: 'reviewed Node runtime is active', ok: true },
     { name: 'deployed service image manifest digest is explicit and immutable', ok: true },
     { name: 'production WebAuthn origin and RP ID are explicit HTTPS values', ok: true },
     { name: 'at least one independent HTTPS chain-observation origin is explicit', ok: true },
-    { name: 'tiny-mainnet amount is explicit and within the private-beta cap', ok: true },
-    { name: 'mainnet recovery delay is explicit and positive', ok: true },
+    { name: `tiny-${BITCOIN_NETWORK_NAME} amount is explicit and within the private-beta cap`, ok: true },
+    { name: `${BITCOIN_NETWORK_NAME} recovery delay is explicit and positive`, ok: true },
     { name: 'confirmation depth for funding and transitions is explicit', ok: true },
     { name: 'three-wallet funding fee is explicit and cannot consume one deposit', ok: true },
     { name: 'Sigbash service origin is an explicit credential-free HTTPS origin', ok: true },
@@ -58,13 +59,15 @@ try {
       ok: true,
       detail: `approved finalization ${finalizationDigest}`,
     },
-    { name: 'configured Bitcoin backend identifies as mainnet', ok: true },
+    { name: `configured Bitcoin backend identifies as ${BITCOIN_NETWORK_NAME}`, ok: true },
   ];
   const manualGates = [
-    'Independently review the protected predeployment live-Sigbash receipt and its consensus-authorized mainnet signature.',
-    'Sigbash must explicitly enable mainnet for all three independent participant organization hashes.',
+    `Independently review the protected predeployment live-Sigbash receipt and its consensus-authorized ${BITCOIN_NETWORK_NAME} signature.`,
+    BITCOIN_NETWORK_NAME === 'mainnet'
+      ? 'Sigbash must explicitly enable mainnet for all three independent participant organization hashes.'
+      : 'Confirm all three independent participant organizations and their nine immutable keys are Signet-only; mainnet remains unauthorized.',
     'Each friend must complete setup and recovery with two real, distinct PRF-capable passkeys.',
-    'Each friend must independently review the unanimous roster and tiny-mainnet economics.',
+    `Each friend must independently review the unanimous roster and tiny-${BITCOIN_NETWORK_NAME} economics.`,
     'The deployed private service must use the independently reviewed immutable image digest and narrow private access control.',
     'Before initial wallet signing, all three friends must review the same funding PSBT fingerprint, inputs, change outputs, vault output, and fee.',
     'Three independent real wallets must sign only their own P2WPKH or P2TR funding inputs and all three final passkey approvals must be completed.',
@@ -83,6 +86,10 @@ try {
     manualReviewAcknowledged: true,
   });
   assert.deepEqual(validateFundingReleaseReport(report), report);
+  assert.equal(report.version, 3);
+  assert.equal(report.kind, `${BITCOIN_NETWORK_NAME}-funding-release`);
+  assert.equal(report.network, BITCOIN_NETWORK_NAME);
+  assert.equal(report.genesisHash, BITCOIN_GENESIS_HASH);
   checks.push({
     name: 'a canonical release report binds the exact vault, final transaction, live proof, deployed image, and passing gates',
     ok: true,

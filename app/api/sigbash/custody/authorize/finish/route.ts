@@ -54,7 +54,7 @@ export async function POST(request: Request) {
         aad: toBase64url(envelope.aad),
       })),
       nextRevision: authorized.nextRevision,
-      nextAad: toBase64url(authorized.nextAad),
+      nextAad: authorized.nextAad ? toBase64url(authorized.nextAad) : null,
     });
   } catch (error) {
     return jsonError(error);

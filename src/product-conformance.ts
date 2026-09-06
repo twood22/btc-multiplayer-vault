@@ -75,8 +75,12 @@ record('initial funding has no browser-accessible broadcast route', () => {
 });
 
 record('the private funding command is bound to protected live-proof and funding-release artifacts', () => {
-  const source = readFileSync(resolve(root, 'web/scripts/broadcast-funding.ts'), 'utf8');
-  const release = readFileSync(resolve(root, 'web/scripts/release-status.ts'), 'utf8');
+  const bootstrap = readFileSync(resolve(root, 'web/scripts/broadcast-funding.ts'), 'utf8');
+  const source = readFileSync(resolve(root, 'web/scripts/broadcast-funding-main.ts'), 'utf8') +
+    readFileSync(resolve(root, 'src/funding-broadcast-command.ts'), 'utf8') +
+    readFileSync(resolve(root, 'src/release-network.ts'), 'utf8');
+  const release = readFileSync(resolve(root, 'web/scripts/release-status-main.ts'), 'utf8');
+  assert.match(bootstrap, /loadOperatorEnvironment\(\);\s*await import/u);
   const artifact = readFileSync(resolve(root, 'src/funding-release-report.ts'), 'utf8');
   assert.match(source, /readProtectedLiveSigbashProofReceipt/u);
   assert.match(source, /LIVE_SIGBASH_MAINNET_PROOF_DIGEST/u);
@@ -109,7 +113,7 @@ record('live Sigbash setup stores a protected recovery kit before its public che
 record('the funding release requires executable production database restore evidence', () => {
   const packageJson = readFileSync(resolve(root, 'package.json'), 'utf8');
   const verifier = readFileSync(resolve(root, 'web/scripts/verify-database-restore.ts'), 'utf8');
-  const release = readFileSync(resolve(root, 'web/scripts/release-status.ts'), 'utf8');
+  const release = readFileSync(resolve(root, 'web/scripts/release-status-main.ts'), 'utf8');
   assert.match(packageJson, /web:verify-database-restore/u);
   assert.match(verifier, /captureDatabaseSnapshot/u);
   assert.match(verifier, /RESTORED_DATABASE_URL/u);
@@ -160,7 +164,8 @@ record('the release surface exercises the optimized standalone browser product',
   );
   assert.match(packageJson, /web:test:browser:production/u);
   assert.match(runner, /npm run web:build/u);
-  assert.match(runner, /\.next\/standalone\/server\.js/u);
+  assert.match(runner, /scripts\/start-production\.mjs/u);
+  assert.match(runner, /vault-build-network\.json/u);
   assert.match(runner, /cooperative-musig2\.spec\.ts/u);
   assert.match(runner, /recovery-final-sweep\.spec\.ts/u);
   assert.match(runner, /funding-wallet\.spec\.ts/u);
@@ -182,7 +187,7 @@ record('the release surface provides a fail-closed exact-container acceptance co
   );
   assert.match(packageJson, /web:test:browser:container/u);
   assert.match(runner, /CONTAINER_ACCEPTANCE/u);
-  assert.match(runner, /build --pull --tag/u);
+  assert.match(runner, /build --pull --build-arg "VAULT_NETWORK=\$VAULT_NETWORK" --tag/u);
   assert.match(runner, /image inspect --format/u);
   assert.match(runner, /run --rm --name/u);
   assert.match(runner, /run --rm --network none --read-only/u);
@@ -190,6 +195,8 @@ record('the release surface provides a fail-closed exact-container acceptance co
   assert.match(dockerfile, /FROM node:22\.23\.2-bookworm-slim@sha256:[0-9a-f]{64}/u);
   assert.match(dockerfile, /npm ci --omit=dev/u);
   assert.match(dockerfile, /check-operator-runtime\.mjs/u);
+  assert.match(dockerfile, /ARG VAULT_NETWORK/u);
+  assert.match(dockerfile, /vault-build-network\.json/u);
   assert.match(dockerfile, /\.next\/standalone/u);
   assert.match(dockerfile, /USER node/u);
   assert.match(dockerfile, /\/api\/health\/ready/u);

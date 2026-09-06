@@ -112,6 +112,9 @@ try {
   });
 } finally {
   await closeDatabase();
+  // The coin FK is RESTRICT; deleting the vault alone cannot clean up a spend.
+  await sql`DELETE FROM vault_transaction_proposals WHERE id = ${proposalId}::uuid`;
+  await sql`DELETE FROM vault_coins WHERE id = ${coinId}::uuid`;
   await sql`DELETE FROM vaults WHERE id = ${vaultId}::uuid`.catch(() => undefined);
   await sql`DELETE FROM users WHERE id = ANY(${Object.values(userIds)}::uuid[])`.catch(() => undefined);
   await sql.end({ timeout: 5 });

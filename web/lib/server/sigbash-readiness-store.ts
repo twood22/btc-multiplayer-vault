@@ -1,6 +1,7 @@
 import 'server-only';
 import { randomBytes } from 'node:crypto';
 import { Buffer } from 'buffer';
+import type { TransactionSql } from 'postgres';
 import { authorizeSoloSigningArtifacts } from '../../../src/psbt';
 import { sha256Hex } from '../../../src/crypto';
 import type { PublishedRosterArtifact } from '../../../src/roster-ceremony';
@@ -146,6 +147,12 @@ export async function completeSigbashReadinessProof(input: {
   const membership = await membershipForUser(input.userId);
   const confirmed = await getConfirmedVaultArtifactForVault(membership.vault_id);
   await transaction(async (sql) => {
+    // Proofs from different participants lock different challenges. Serialize
+    // their shared readiness transition before either inserts/counts receipts.
+    await sql`
+      SELECT id FROM vaults WHERE id = ${membership.vault_id}::uuid
+      FOR NO KEY UPDATE
+    `;
     const rows = await sql<ChallengeRow[]>`
       SELECT id, vault_id, user_id, participant_id, round_id, roster_digest,
              input_txid, expires_at, consumed_at
@@ -197,6 +204,7 @@ export async function completeSigbashReadinessProof(input: {
           existing[0]?.evidence_hash.toString('hex') !== evidenceHash) {
         throw new Error('readiness challenge was already consumed by different proof data');
       }
+      await markVaultReadyIfComplete(sql, membership.vault_id, confirmed.digest);
       return;
     }
     const consumed = await sql<Array<{ id: string }>>`
@@ -218,21 +226,28 @@ export async function completeSigbashReadinessProof(input: {
         ${Buffer.from(evidenceHash, 'hex')}
       )
     `;
-    const counts = await sql<Array<{ count: string }>>`
-      SELECT count(*)::text AS count FROM participant_sigbash_readiness_proofs
-      WHERE vault_id = ${membership.vault_id}::uuid
-        AND roster_digest = ${Buffer.from(confirmed.digest, 'hex')}
-    `;
-    if (Number(counts[0]?.count || 0) === 9) {
-      const ready = await sql<Array<{ id: string }>>`
-        UPDATE vaults SET status = 'ready'
-        WHERE id = ${membership.vault_id}::uuid AND status = 'roster_confirmed'
-        RETURNING id
-      `;
-      if (ready.length !== 1) throw new Error('vault could not enter live Sigbash ready state');
-    }
+    await markVaultReadyIfComplete(sql, membership.vault_id, confirmed.digest);
   });
   return getSigbashReadinessStatus(input.userId);
+}
+
+/** Also repairs a retry of the ninth receipt after an interrupted older client. */
+async function markVaultReadyIfComplete(
+  sql: TransactionSql,
+  vaultId: string,
+  digest: string,
+): Promise<void> {
+  const counts = await sql<Array<{ count: string }>>`
+    SELECT count(*)::text AS count FROM participant_sigbash_readiness_proofs
+    WHERE vault_id = ${vaultId}::uuid
+      AND roster_digest = ${Buffer.from(digest, 'hex')}
+  `;
+  if (Number(counts[0]?.count || 0) === 9) {
+    await sql`
+      UPDATE vaults SET status = 'ready'
+      WHERE id = ${vaultId}::uuid AND status = 'roster_confirmed'
+    `;
+  }
 }
 
 function materializeChallenge(

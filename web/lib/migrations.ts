@@ -12,6 +12,7 @@ export const EXPECTED_MIGRATION_VERSIONS = [
   '011_funding_restart',
   '012_chain_reorganization',
   '013_signet_network',
+  '014_runtime_liveness',
 ] as const;
 
 export const EXPECTED_MIGRATION_FILES = EXPECTED_MIGRATION_VERSIONS

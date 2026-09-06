@@ -120,14 +120,22 @@ deployment-digest, fee, recovery-delay, and tiny-value funding reviews using
 new mainnet-scoped material. No Signet key, receipt, database state, wallet, or
 success flag may be promoted into the mainnet release evidence.
 
-## Progress snapshot — 2026-08-31
+## Progress snapshot — 2026-09-05
+
+The real-chain checkpoint below is recorded evidence from 2026-08-31, not a new
+live test. The 2026-09-05 [review and implementation](./CODE-REVIEW-2026-09-05.md)
+fix readiness concurrency, independent proposal selection, broadcast recovery,
+initial-funding uncertainty/retry ownership, and full-history custody unlocks.
+Those checks use isolated databases, synthetic
+signatures, loopback chain responses, and virtual authenticators; they do not
+satisfy the hosted Sigbash or physical-device gates.
 
 - Complete: typed mainnet/default-global-Signet boundary, cross-network rejection,
-  Signet migration, network-specific browser/operator text, offline/web/database
+  Signet migration, network-specific browser text, offline/web/database
   acceptance, optimized production build, and all six optimized browser scenarios.
 - Complete: fresh three-organization Signet credentials, all nine immutable
   10,000-sat-per-participant round keys, protected recovery journals, one allowed
-  hosted `verifyPSBT`, and three hosted hostile-transaction rejections. The prior
+  SDK local WASM `verifyPSBT`, and three local WASM hostile-transaction rejections. The prior
   default-amount key set is explicitly non-fundable and not reused.
 - Complete: explicit-zero Taproot sighash rejection, CSV upper bound, and fresh
   observation enforcement for every proposal type.
@@ -139,7 +147,7 @@ success flag may be promoted into the mainnet release evidence.
   one independently signed input per wallet and confirmed the 30,000-sat vault
   output in transaction
   `46fa0c249d7ccef642ef8b7d248c5fada161a571443e0b4721e03d7b7a518220`.
-- Complete: hosted `verifyPSBT` accepted Alice's exact first-exit PSBT against
+- Complete: SDK local WASM `verifyPSBT` accepted Alice's exact first-exit PSBT against
   that real confirmed vault coin and rejected wrong amount, wrong address, and
   extra output. The nullifier was available.
 - Complete as a consensus checkpoint, not a user-facing custody proof: the
@@ -147,13 +155,33 @@ success flag may be promoted into the mainnet release evidence.
   `ef01cb2027ca35b64e7d5390ffb7cd0b3b35e950658cfcc42684e35a57cad9f4`;
   the live audit passed the real outpoint, Taproot key-path witness,
   personal-key-only path, three 9,900-sat refunds, and confirmation checks.
-- Blocked externally: hosted `signPSBT` on the real confirmed vault coin proceeds
-  past local policy verification, hosted policy verification, proof generation,
-  and proof transport parsing, then returns `server_error: Signing service error`
-  from the signing service. No local signer was substituted.
+- Still unresolved: local SDK policy verification succeeds, but the last hosted
+  `signPSBT` attempts on 2026-09-05 reproduced `server_error: Signing service error`
+  for both the saved first-round and a fresh second-round transaction. Stock SDK
+  transport instead fails proof-bundle hex parsing. SDK
+  `verifyPSBT` is not hosted-signer acceptance, and server-side logs are needed
+  to locate the failure. The integration's custom `policy_proofs` hex-transport
+  wrapper must be included in the provider reproducer. No local signer was
+  substituted for the live product path.
+- Newly demonstrated on 2026-09-05: SDK 0.8.0 concurrent `listKeys()` retrievals
+  can confuse key material and contaminate a subsequent retrieval. The live
+  diagnostic used a fresh single-key client and checkpoint bindings. The
+  follow-up browser/CLI guard now isolates retrievals, validates actual key and
+  recovery bindings, and tests timeout/resume behavior. All nine existing live
+  keys passed read-only retrieval/share/current-envelope recovery checks.
+  See [the readiness follow-up](./SIGNET-READINESS-2026-09-05.md).
 - Still open: provider-signed key/policy provenance, participant-approved fee
   adaptation, final-sweep destination semantics, physical passkeys, PostgreSQL
   lifecycle execution, solo orderings, both recovery thresholds, the final-owner
   path, and the restart/outage/reorganization matrix.
+- Implemented: the Signet-scoped private funding release/broadcast contracts,
+  network/genesis-bound versioned receipts, independent approval flags/evidence,
+  and fail-closed browser-build/runtime network binding. The complete **live**
+  operator run remains open; synthetic receipts and store tests do not prove it.
+  Follow [SIGNET-OPERATOR-RUNBOOK.md](./SIGNET-OPERATOR-RUNBOOK.md).
+- User decision: defer physical passkey testing to the first friends vault.
+  Continue virtual-authenticator tests autonomously; complete real two-passkey
+  setup and recovery during onboarding before funding, without a separate test
+  session requested now. Keep all nine actual hosted signatures mandatory.
 - Completion flags remain `signetValidated: false`, `mainnetValidated: false`,
   and `mainnetFundingAuthorized: false`.

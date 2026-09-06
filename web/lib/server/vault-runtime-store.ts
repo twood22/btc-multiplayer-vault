@@ -1,5 +1,6 @@
 import 'server-only';
 import { Buffer } from 'buffer';
+import type { TransactionSql } from 'postgres';
 import * as bitcoin from 'bitcoinjs-lib';
 import type { AuthenticatorTransportFuture, Base64URLString } from '@simplewebauthn/server';
 import type { TrustedVaultInput } from '../../../src/types';
@@ -131,6 +132,12 @@ export interface VaultRuntimeStatus {
     observedParticipantIds: string[];
     participantObservationConfirmations: number | null;
   }) | null;
+  proposalChoices: Array<{
+    id: string;
+    kind: VaultProposalKind;
+    actorParticipantId: string | null;
+    status: StoredProposalRow['status'];
+  }>;
   proposal: {
     id: string;
     kind: VaultProposalKind;
@@ -164,7 +171,7 @@ export interface CoinObservationChallenge {
   credential: StoredCredential;
 }
 
-export async function getVaultRuntimeStatus(userId: string): Promise<VaultRuntimeStatus> {
+export async function getVaultRuntimeStatus(userId: string, selectedProposalId?: string): Promise<VaultRuntimeStatus> {
   const membership = await membershipForUser(userId);
   const confirmed = await getConfirmedVaultArtifactForVault(membership.vault_id);
   const coins = await db()<StoredCoinRow[]>`
@@ -194,11 +201,16 @@ export async function getVaultRuntimeStatus(userId: string): Promise<VaultRuntim
     FROM vault_transaction_proposals
     WHERE input_coin_id = ${coin.id}::uuid
       AND status IN ('collecting', 'finalized', 'broadcast')
-      AND (status = 'broadcast' OR expires_at > now())
+      AND (status = 'broadcast' OR expires_at > now() OR EXISTS (
+        SELECT 1 FROM vault_broadcast_approvals a
+        WHERE a.proposal_id = vault_transaction_proposals.id
+          AND a.status IN ('approved', 'submitting')
+      ))
     ORDER BY created_at DESC
-    LIMIT 1
   ` : [];
-  const proposal = proposals[0];
+  const proposal = proposals.find((item) => item.id === selectedProposalId)
+    ?? proposals.find((item) => item.kind === 'solo' && item.actor_participant_id === membership.participant_id)
+    ?? proposals[0];
   const rebuiltProposal = proposal && coin ? buildVaultProposal({
     artifact: confirmed.artifact,
     coin,
@@ -258,6 +270,12 @@ export async function getVaultRuntimeStatus(userId: string): Promise<VaultRuntim
       participantObservationConfirmations: observations
         .find((item) => item.participant_id === membership.participant_id)?.confirmations ?? null,
     } : null,
+    proposalChoices: proposals.map((item) => ({
+      id: item.id,
+      kind: item.kind,
+      actorParticipantId: item.actor_participant_id,
+      status: item.status,
+    })),
     proposal: proposal ? {
       id: proposal.id,
       kind: proposal.kind,
@@ -304,6 +322,13 @@ export async function createBroadcastApprovalChallenge(input: {
   const membership = await membershipForUser(input.userId);
   const confirmed = await getConfirmedVaultArtifactForVault(membership.vault_id);
   const result = await transaction(async (sql) => {
+    // Match creation/expiry lock order: coin before proposal before approval.
+    await sql`
+      SELECT coin.id FROM vault_coins coin
+      JOIN vault_transaction_proposals p ON p.input_coin_id = coin.id
+      WHERE p.id = ${input.proposalId}::uuid AND coin.vault_id = ${membership.vault_id}::uuid
+      FOR UPDATE OF coin
+    `;
     await sql`
       DELETE FROM vault_broadcast_approvals
       WHERE proposal_id = ${input.proposalId}::uuid
@@ -474,6 +499,22 @@ export async function completeBroadcastApproval(
   newCounter: number,
 ): Promise<string> {
   return transaction(async (sql) => {
+    await sql`
+      SELECT coin.id FROM vault_coins coin
+      JOIN vault_transaction_proposals p ON p.input_coin_id = coin.id
+      WHERE p.id = ${challenge.proposalId}::uuid AND coin.vault_id = ${challenge.vaultId}::uuid
+      FOR UPDATE OF coin
+    `;
+    const proposals = await sql<Array<{ id: string }>>`
+      SELECT p.id FROM vault_transaction_proposals p
+      JOIN vault_coins coin ON coin.id = p.input_coin_id AND coin.status = 'current'
+      WHERE p.id = ${challenge.proposalId}::uuid AND p.vault_id = ${challenge.vaultId}::uuid
+        AND p.status = 'finalized' AND p.expires_at > now()
+        AND p.proposal_digest = ${Buffer.from(challenge.proposalDigest, 'hex')}
+        AND p.final_txid = ${Buffer.from(challenge.finalTxid, 'hex')}
+      FOR UPDATE OF p
+    `;
+    if (proposals.length !== 1) throw new Error('broadcast proposal changed or expired before approval');
     const credentials = await sql<Array<{ credential_id: string }>>`
       UPDATE webauthn_credentials SET counter = ${newCounter}, last_used_at = now()
       WHERE credential_id = ${challenge.credential.id}
@@ -563,9 +604,12 @@ export async function submitApprovedBroadcast(input: {
         observedTxHex: observed.hex,
       });
     } catch {
+      // A lost send response followed by an unavailable lookup is not proof
+      // that Bitcoin rejected the transaction. Preserve its exact, already-
+      // approved intent for reconciliation instead of orphaning a possible spend.
       await db()`
         UPDATE vault_broadcast_approvals
-        SET status = 'failed', failure_reason = ${boundedFailure(broadcastError)}, updated_at = now()
+        SET updated_at = now()
         WHERE id = ${row.id}::uuid AND status = 'submitting'
       `;
       throw broadcastError;
@@ -597,20 +641,29 @@ export async function pollVaultChain(): Promise<{
   resumedBroadcasts: string[];
   confirmedFundingTransactions: string[];
   confirmedTransactions: string[];
+  broadcastErrors: Array<{ approvalId?: string; txid?: string; message: string }>;
 }> {
   const reconciled = await reconcileConfirmedChainState({
     backend: { getBlockStatus, getRawTransaction },
     requiredConfirmations: chainConfirmationsRequired(),
   });
   const interrupted = await db()<Array<{ id: string }>>`
-    SELECT id FROM vault_broadcast_approvals
-    WHERE status = 'submitting' AND updated_at < now() - interval '30 seconds'
-    ORDER BY updated_at
+    SELECT a.id FROM vault_broadcast_approvals a
+    JOIN vault_transaction_proposals p ON p.id = a.proposal_id AND p.status = 'finalized'
+    JOIN vault_coins coin ON coin.id = p.input_coin_id AND coin.status = 'current'
+    WHERE a.status IN ('approved', 'submitting') AND a.updated_at < now() - interval '30 seconds'
+    ORDER BY a.updated_at
   `;
   const resumedBroadcasts: string[] = [];
+  const broadcastErrors: Array<{ approvalId?: string; txid?: string; message: string }> = [];
   for (const approval of interrupted) {
-    const submitted = await submitApprovedBroadcast({ approvalId: approval.id });
-    resumedBroadcasts.push(submitted.txid);
+    try {
+      const submitted = await submitApprovedBroadcast({ approvalId: approval.id });
+      resumedBroadcasts.push(submitted.txid);
+    } catch (error) {
+      // A rejected competing spend must not prevent observing the winner.
+      broadcastErrors.push({ approvalId: approval.id, message: boundedFailure(error) });
+    }
   }
   const fundingBroadcasts = await db()<Array<{
     vault_id: string;
@@ -664,48 +717,64 @@ export async function pollVaultChain(): Promise<{
     confirmedFundingTransactions.push(expectedTxid);
   }
   const broadcasts = await db()<Array<{
+    id: string;
     vault_id: string;
     final_txid: Buffer;
     finalized_tx_hex: string;
   }>>`
-    SELECT vault_id, final_txid, finalized_tx_hex
-    FROM vault_transaction_proposals
-    WHERE status = 'broadcast' ORDER BY updated_at DESC
+    SELECT p.id, p.vault_id, p.final_txid, p.finalized_tx_hex
+    FROM vault_transaction_proposals p
+    JOIN vault_coins coin ON coin.id = p.input_coin_id AND coin.status = 'current'
+    WHERE p.status = 'broadcast' ORDER BY p.updated_at DESC
   `;
   const confirmedTransactions: string[] = [];
   for (const proposal of broadcasts) {
     const expectedTxid = proposal.final_txid.toString('hex');
-    const observed = await observeOrResubmitExactTransaction(
-      expectedTxid,
-      proposal.finalized_tx_hex,
-      true,
-    );
-    if (!observed) continue;
-    assertExactBroadcastTransaction({
-      finalizedTxHex: proposal.finalized_tx_hex,
-      finalTxid: expectedTxid,
-      observedTxid: observed.txid,
-      observedTxHex: observed.hex,
-    });
-    const height = confirmedBlockHeight(observed);
-    if (height === null) continue;
-    const requiredConfirmations = chainConfirmationsRequired();
-    if ((observed.confirmations || 0) < requiredConfirmations) continue;
-    await recordConfirmedVaultProposal({
-      vaultId: proposal.vault_id,
-      txid: expectedTxid,
-      confirmedHeight: height,
-      confirmedBlockHash: confirmedBlockHash(observed),
-      confirmations: observed.confirmations!,
-      confirmedTransaction: observed,
-    });
-    confirmedTransactions.push(expectedTxid);
+    // A previous iteration may already have confirmed a different spend of
+    // this coin. Keep its authorized competitors as history for reorg replay,
+    // but do not retry them while their input is spent on the active chain.
+    const current = await db()`
+      SELECT 1 FROM vault_transaction_proposals p
+      JOIN vault_coins coin ON coin.id = p.input_coin_id AND coin.status = 'current'
+      WHERE p.id = ${proposal.id}::uuid AND p.status = 'broadcast'
+    `;
+    if (!current.length) continue;
+    try {
+      const observed = await observeOrResubmitExactTransaction(
+        expectedTxid,
+        proposal.finalized_tx_hex,
+        true,
+      );
+      if (!observed) continue;
+      assertExactBroadcastTransaction({
+        finalizedTxHex: proposal.finalized_tx_hex,
+        finalTxid: expectedTxid,
+        observedTxid: observed.txid,
+        observedTxHex: observed.hex,
+      });
+      const height = confirmedBlockHeight(observed);
+      if (height === null) continue;
+      const requiredConfirmations = chainConfirmationsRequired();
+      if ((observed.confirmations || 0) < requiredConfirmations) continue;
+      await recordConfirmedVaultProposal({
+        vaultId: proposal.vault_id,
+        txid: expectedTxid,
+        confirmedHeight: height,
+        confirmedBlockHash: confirmedBlockHash(observed),
+        confirmations: observed.confirmations!,
+        confirmedTransaction: observed,
+      });
+      confirmedTransactions.push(expectedTxid);
+    } catch (error) {
+      broadcastErrors.push({ txid: expectedTxid, message: boundedFailure(error) });
+    }
   }
   return {
     ...reconciled,
     resumedBroadcasts,
     confirmedFundingTransactions,
     confirmedTransactions,
+    broadcastErrors,
   };
 }
 
@@ -811,14 +880,21 @@ export async function createStoredVaultProposal(
       WHERE input_coin_id = ${coin.id}::uuid
         AND status IN ('collecting', 'finalized')
         AND expires_at <= now()
+        AND NOT EXISTS (
+          SELECT 1 FROM vault_broadcast_approvals a
+          WHERE a.proposal_id = vault_transaction_proposals.id
+            AND a.status IN ('approved', 'submitting', 'broadcast')
+        )
     `;
     const live = await sql<Array<{ id: string }>>`
       SELECT id FROM vault_transaction_proposals
       WHERE input_coin_id = ${coin.id}::uuid
         AND status IN ('collecting', 'finalized', 'broadcast')
+        AND kind = ${input.kind}
+        AND actor_participant_id IS NOT DISTINCT FROM ${input.actorParticipantId ?? null}
       LIMIT 1
     `;
-    if (live.length) throw new Error('this coin already has a live transaction proposal');
+    if (live.length) throw new Error('this coin already has a live proposal for that action and participant');
     const built = buildVaultProposal({
       artifact: confirmed.artifact,
       coin,
@@ -957,6 +1033,7 @@ export async function finalizeStoredSoloProposal(input: {
   const membership = await membershipForUser(input.userId);
   const confirmed = await getConfirmedVaultArtifactForVault(membership.vault_id);
   return transaction(async (sql) => {
+    await lockCurrentVaultCoin(sql, membership.vault_id);
     const proposals = await sql<LockedProposalRow[]>`
       SELECT id, vault_id, roster_digest, input_coin_id, kind, round_id,
              actor_participant_id, proposal_digest, unsigned_txid,
@@ -1055,6 +1132,7 @@ export async function recordCooperativeContribution(input: {
   const membership = await membershipForUser(input.userId);
   const confirmed = await getConfirmedVaultArtifactForVault(membership.vault_id);
   return transaction(async (sql) => {
+    await lockCurrentVaultCoin(sql, membership.vault_id);
     const proposals = await sql<LockedProposalRow[]>`
       SELECT id, vault_id, roster_digest, input_coin_id, kind, round_id,
              actor_participant_id, proposal_digest, unsigned_txid,
@@ -1262,6 +1340,7 @@ export async function finalizeStoredFinalSweep(input: {
   const membership = await membershipForUser(input.userId);
   const confirmed = await getConfirmedVaultArtifactForVault(membership.vault_id);
   return transaction(async (sql) => {
+    await lockCurrentVaultCoin(sql, membership.vault_id);
     const proposals = await sql<LockedProposalRow[]>`
       SELECT id, vault_id, roster_digest, input_coin_id, kind, round_id,
              actor_participant_id, proposal_digest, unsigned_txid,
@@ -1342,6 +1421,7 @@ export async function recordRecoveryContribution(input: {
   const membership = await membershipForUser(input.userId);
   const confirmed = await getConfirmedVaultArtifactForVault(membership.vault_id);
   return transaction(async (sql) => {
+    await lockCurrentVaultCoin(sql, membership.vault_id);
     const proposals = await sql<LockedProposalRow[]>`
       SELECT id, vault_id, roster_digest, input_coin_id, kind, round_id,
              actor_participant_id, proposal_digest, unsigned_txid,
@@ -1820,6 +1900,7 @@ export async function recordConfirmedVaultProposal(input: {
   }
   const confirmed = await getConfirmedVaultArtifactForVault(input.vaultId);
   return transaction(async (sql) => {
+    await lockCurrentVaultCoin(sql, input.vaultId);
     const proposals = await sql<ConfirmableProposalRow[]>`
       SELECT id, vault_id, roster_digest, input_coin_id, kind, round_id,
              actor_participant_id, proposal_digest, unsigned_txid,
@@ -1947,6 +2028,15 @@ export async function recordConfirmedVaultProposal(input: {
     if (advanced.length !== 1) throw new Error('broadcast proposal changed during confirmation');
     return { nextCoin, closed: nextCoin === null };
   });
+}
+
+/** Proposal mutations lock the current coin before individual proposals. */
+async function lockCurrentVaultCoin(sql: TransactionSql, vaultId: string): Promise<void> {
+  await sql`
+    SELECT id FROM vault_coins
+    WHERE vault_id = ${vaultId}::uuid AND status = 'current'
+    FOR UPDATE
+  `;
 }
 
 async function membershipForUser(userId: string): Promise<MembershipRow> {

@@ -5,9 +5,24 @@ not authorize deployment or funding. Do not deploy the service until an
 independent predeployment command has obtained and locally authorized a real
 Sigbash mainnet signature. All nine in-product readiness proofs remain a later
 funding gate. Funding is always a separate decision. This is the future mainnet
-runbook; it is not the Signet validation runbook. See
+runbook; it is not the Signet validation runbook. The active Signet operator path
+is [SIGNET-OPERATOR-RUNBOOK.md](./SIGNET-OPERATOR-RUNBOOK.md). See
 [`SIGNET-VALIDATION-PLAN.md`](./SIGNET-VALIDATION-PLAN.md) and
 [`STATUS.md`](./STATUS.md) for the current work order, evidence, and open risks.
+
+## Explicit mainnet profile (future, unauthorized)
+
+The tracked environment example now defaults to Signet. This future mainnet
+runbook requires explicit `VAULT_NETWORK=mainnet` and
+`NEXT_PUBLIC_VAULT_NETWORK=mainnet` in every build, service, and operator process,
+plus the actual mainnet Core endpoint and separate mainnet database/evidence.
+Do not select mainnet to work around a failed Signet gate.
+
+Next.js embeds the browser network at build time. Build this future image only
+with the deliberate `--build-arg VAULT_NETWORK=mainnet`; the current Signet image
+uses `--build-arg VAULT_NETWORK=signet`. The image packages its build profile and
+refuses a different or missing runtime network before listening. A runtime
+environment override cannot safely change an existing image's network.
 
 ## Runtime shape
 
@@ -49,7 +64,7 @@ Before building a release image, exercise the same optimized standalone output
 and static-asset layout used by the container:
 
 ```bash
-npm run web:test:browser:production
+VAULT_NETWORK=mainnet NEXT_PUBLIC_VAULT_NETWORK=mainnet npm run web:test:browser:production
 ```
 
 On a Linux host with Docker or a CLI-compatible engine, build the exact
@@ -57,7 +72,7 @@ reviewed Dockerfile and rerun the same browser suite from that unprivileged
 container:
 
 ```bash
-npm run web:test:browser:container
+VAULT_NETWORK=mainnet NEXT_PUBLIC_VAULT_NETWORK=mainnet npm run web:test:browser:container
 ```
 
 Set `CONTAINER_ENGINE` only for a compatible alternative. The command prints
@@ -67,7 +82,8 @@ artifact after CI publishes the image.
 
 If the operator workstation has no container engine, manually dispatch the
 `Exact container acceptance` GitHub Actions workflow for the exact reviewed
-commit. It uses pinned checkout/setup actions, Node 22.23.2, PostgreSQL 16, and
+commit. It tests separate mainnet and Signet images using pinned checkout/setup
+actions, Node 22.23.2, PostgreSQL 16, and
 the same command above on an engine-enabled Ubuntu runner. It has read-only
 repository permission and contains no registry login, image push, deployment,
 Sigbash credential, or mainnet operation. Its reported local image ID remains
@@ -91,6 +107,24 @@ Sigbash service, real wallets, production database, or mainnet backend.
 
 ## Required runtime configuration
 
+### Migration 014 release compatibility
+
+The 2026-09-05 liveness changes require `014_runtime_liveness`, including the
+per-action/per-participant proposal index and legacy readiness-state repair.
+Run the migration using the same release as the application. Older application
+versions assume a single live proposal and are not compatible with competing
+proposals in a newer database. Do not delete proposal or approval history to
+force a downgrade; stop writers and use the existing reviewed backup/restore
+procedure with a matching application/database version. Local acceptance is not
+authorization to migrate an operational instance.
+
+The private watcher now reports `broadcastErrors`, continues checking other
+authorized spends, and exits nonzero after reporting a partial failure. Keep
+alerts on that outcome. An absent competing transaction must not prevent the
+confirmed winner from advancing the current coin.
+
+### Environment
+
 Set the variables documented in `.env.example`, including:
 
 - exact HTTPS `WEBAUTHN_ORIGIN` and matching `APP_ORIGIN`;
@@ -108,6 +142,15 @@ environment variables. Each browser creates its own Sigbash credential triplet
 and stores only passkey-derived ciphertext in PostgreSQL. The legacy unsuffixed
 Sigbash variables remain for command-line audit tooling and must not be used as
 shared production custody.
+
+The funding release/broadcast scripts now load only an explicitly selected
+owner-only `BTC_VAULT_OPERATOR_ENV_FILE` or injected environment. They no longer
+implicitly read `.env.local`, and require both network variables before importing
+the implementation. Predeployment proof receipts are version 2; funding release
+reports are version 3. Both commit network and genesis. Regenerate and review
+old-format artifacts; never relabel them. Mainnet retains its independent
+enablement gate, `LIVE_SIGBASH_MAINNET_PROOF_*`, `FUNDING_RELEASE_REPORT_*`, and
+`--confirm-mainnet-broadcast BROADCAST_EXACT_APPROVED_FUNDING_TRANSACTION` contract.
 
 Credential generation and mainnet entitlement are separate. The application
 can generate and protect the credentials, but it cannot grant Sigbash mainnet

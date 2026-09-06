@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import type { SigbashClient } from '@sigbash/sdk';
+import type { VaultSigbashClient } from '../../src/sigbash-client-guard.js';
 import * as bitcoin from 'bitcoinjs-lib';
 import { BITCOIN_NETWORK_NAME } from '../../src/network.js';
 import { psbtUnsignedTxid } from '../../src/psbt.js';
@@ -108,7 +108,7 @@ await check('the production client boundary rejects a KMC or signature bound to 
     trustedInput: coin,
     custodyKey,
     client: signerClient({ getKeyPolicyRoot: 'aa'.repeat(32) }),
-  }), /policy root differs/u);
+  }), /decrypted key material differs/u);
   await assert.rejects(() => signAuthorizedSoloWithdrawal({
     unlocked,
     currentIds: IDS,
@@ -138,8 +138,10 @@ function signerClient(options: {
   signingPolicyRoot?: string;
   mutateTransaction?: boolean;
   onSign?: () => void;
-} = {}): SigbashClient {
+} = {}): VaultSigbashClient {
   const privateKey = fixture.policyPrivateKeys.get(`alice:${ROUND}`)!;
+  const kmcJSON = JSON.stringify({ bip328_xpub: registration.bip328Xpub,
+    poet_policy_json: custodyKey.poetJSON, isolated: 'acceptance-only' });
   let verifiedPsbtBase64: string | undefined;
   return {
     async getKey(keyId: string) {
@@ -151,13 +153,13 @@ function signerClient(options: {
         network: BITCOIN_NETWORK_NAME,
         policyRoot: options.getKeyPolicyRoot ?? registration.policyRoot,
         require2FA: false,
-        kmcJSON: '{"isolated":"acceptance-only"}',
+        kmcJSON,
       };
     },
     async verifyPSBT(input: { psbtBase64: string; kmcJSON: string; network: string }) {
       options.calls?.push('verifyPSBT');
       assert.equal(input.network, BITCOIN_NETWORK_NAME);
-      assert.equal(input.kmcJSON, '{"isolated":"acceptance-only"}');
+      assert.equal(input.kmcJSON, kmcJSON);
       assert(input.psbtBase64.length > 0);
       verifiedPsbtBase64 = input.psbtBase64;
       return options.verifyResult ?? {
@@ -179,7 +181,7 @@ function signerClient(options: {
       options.onSign?.();
       assert.equal(input.keyId, registration.keyId);
       assert.equal(input.psbtBase64, verifiedPsbtBase64);
-      assert.equal(input.kmcJSON, '{"isolated":"acceptance-only"}');
+      assert.equal(input.kmcJSON, kmcJSON);
       assert.equal(input.network, BITCOIN_NETWORK_NAME);
       assert.equal(input.require2FA, false);
       assert.equal(input.finalizePsbt, true);
@@ -199,7 +201,7 @@ function signerClient(options: {
         satisfiedClause: 'isolated exact solo policy',
       };
     },
-  } as unknown as SigbashClient;
+  } as unknown as VaultSigbashClient;
 }
 
 function custodyKeyFor(item: SigbashRosterRegistration): SigbashCustodyKey {

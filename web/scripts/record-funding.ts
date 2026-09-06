@@ -2,6 +2,7 @@ import { getRawTransaction, getTxOut } from '../../src/bitcoin-rpc';
 import { assertReviewedNodeRuntime } from '../../src/runtime-version';
 import { chainConfirmationsRequired } from '../lib/server/config';
 import { recordConfirmedFundingCoin } from '../lib/server/vault-runtime-store';
+import { BITCOIN_NETWORK_NAME } from '../../src/network';
 
 assertReviewedNodeRuntime();
 const args = parseArgs(process.argv.slice(2));
@@ -62,7 +63,7 @@ const recorded = await recordConfirmedFundingCoin({
 });
 console.log(JSON.stringify({
   ok: true,
-  network: 'mainnet',
+  network: BITCOIN_NETWORK_NAME,
   txid,
   vout,
   confirmations,
@@ -92,7 +93,7 @@ function parseArgs(values: string[]): Record<string, string> {
     const name = values[index];
     const value = values[index + 1];
     if (!name?.startsWith('--') || !value || value.startsWith('--')) {
-      throw new Error('usage: --vault-id <uuid> --txid <mainnet-txid> --vout <index>');
+      throw new Error('usage: --vault-id <uuid> --txid <configured-network-txid> --vout <index>');
     }
     parsed[name.slice(2)] = value;
     index += 1;

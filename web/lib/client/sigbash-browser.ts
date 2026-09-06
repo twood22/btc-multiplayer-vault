@@ -1,4 +1,6 @@
 import type { SigbashClient } from '@sigbash/sdk';
+import { createGuardedSigbashClient, type VaultSigbashClient } from '../../../src/sigbash-client-guard.js';
+import { withSigbashHexProofTransport } from '../../../src/sigbash.js';
 
 export interface SigbashBrowserRuntimeConfig {
   serverUrl: string;
@@ -80,15 +82,15 @@ export function createSigbashBrowserClient(
   runtime: LoadedSigbashBrowserRuntime,
   credentials: { apiKey: string; userKey: string; userSecretKey: string },
   musig2PrivateKey?: Uint8Array,
-): SigbashClient {
-  return new runtime.sdk.SigbashClient({
+): VaultSigbashClient {
+  return createGuardedSigbashClient(runtime.sdk, {
     serverUrl: runtime.config.serverUrl,
     apiKey: credentials.apiKey,
     userKey: credentials.userKey,
     userSecretKey: credentials.userSecretKey,
     privateLogs: true,
     ...(musig2PrivateKey ? { musig2PrivateKey } : {}),
-  });
+  }, withSigbashHexProofTransport);
 }
 
 /** Release sockets and overwrite the SDK's copied private-key material. */

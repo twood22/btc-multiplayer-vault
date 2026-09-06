@@ -1,5 +1,7 @@
 'use client';
 
+import { readProvisioningKeys } from '../../src/sigbash-provisioning-client.js';
+
 import { useState } from 'react';
 import { decryptParticipantSecretEnvelope, type KeyEnvelope } from '../lib/client/key-envelope';
 import {
@@ -104,6 +106,9 @@ export function SigbashCustodySetup({
         return;
       }
 
+      if (!unlocked.authorized.nextAad) {
+        throw new Error('Custody history is full; existing protected keys remain available, but no new revision can be saved');
+      }
       setStatus('Creating your independent Sigbash organization identity in this browser…');
       const credentials = await generateSigbashCredentials();
       const bundle = createEmptySigbashCustodyBundle(unlocked.authorization.participantId, credentials);
@@ -170,6 +175,10 @@ export function SigbashCustodySetup({
 
       let revision = unlocked.authorized.nextRevision as number;
       let aad = unlocked.authorized.nextAad as string;
+      // Reserve both pending and completed snapshots before contacting Sigbash.
+      if (!aad || revision > (recovered.bundle.pendingKey ? 32 : 31)) {
+        throw new Error('Custody history has no room for another registration; existing protected keys remain available');
+      }
       let workingBundle = recovered.bundle;
       if (!workingBundle.pendingKey) {
         workingBundle = {
@@ -209,7 +218,7 @@ export function SigbashCustodySetup({
       privateKey = undefined;
 
       setStatus(`Checking Sigbash for resumable key index ${next.keyIndex}…`);
-      const listed = await client.listKeys();
+      const listed = await readProvisioningKeys(client, next.keyIndex === 0 && workingBundle.keys.length === 0);
       let summary = listed.find((key) => key.keyId === String(next.keyIndex));
       if (summary && summary.network !== BITCOIN_NETWORK_NAME) {
         throw new Error(`Sigbash key index ${next.keyIndex} already exists on ${summary.network}, not ${BITCOIN_NETWORK_CONFIG.addressLabel}`);
@@ -236,9 +245,7 @@ export function SigbashCustodySetup({
         };
       }
       if (!summary.bip328Xpub || !summary.policyRoot) throw new Error('Sigbash key response is incomplete');
-      if (canonicalJson(summary.poetJSON) !== canonicalJson(rebuiltPolicy)) {
-        throw new Error('Sigbash stored a compiled policy different from the canonical round policy');
-      }
+      await client.assertCompiledPolicy(rebuiltPolicy, summary.poetJSON);
       setStatus(`Exporting the required recovery kit for ${next.round}…`);
       const recoveryKit = await client.exportRecoveryKit(summary.keyId, { keyIndex: next.keyIndex });
       if (recoveryKit.network !== BITCOIN_NETWORK_NAME) {

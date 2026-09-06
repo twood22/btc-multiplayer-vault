@@ -120,9 +120,15 @@ export RECOVERY_DELAY_BLOCKS=144
 export BROWSER_TEST_BASE_URL="$WEBAUTHN_ORIGIN"
 
 npm run web:migrate >/dev/null
+# Database acceptance includes historical fixtures that intentionally persist.
+# Do not mix those identities with the browser ceremony's independent database.
+"$postgres_bin/createdb" -h 127.0.0.1 -p "$postgres_port" vault_database_acceptance
+database_acceptance_url="postgresql://$(id -un)@127.0.0.1:${postgres_port}/vault_database_acceptance"
+DATABASE_URL="$database_acceptance_url" npm run web:migrate >/dev/null
+DATABASE_URL="$database_acceptance_url" npm run web:test:db
 if [ "$container_acceptance" = true ]; then
   container_name="btc-vault-container-acceptance-$$"
-  "$container_engine" build --pull --tag "$container_image_tag" .
+  "$container_engine" build --pull --build-arg "VAULT_NETWORK=$VAULT_NETWORK" --tag "$container_image_tag" .
   container_image_id=$("$container_engine" image inspect --format '{{.Id}}' "$container_image_tag")
   if [[ ! "$container_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
     echo 'Container engine returned an invalid local image ID' >&2
@@ -148,9 +154,14 @@ else
   npm run web:build
   mkdir -p .next/standalone/.next/static
   cp -a .next/static/. .next/standalone/.next/static/
+  mkdir -p .next/standalone/scripts
+  cp scripts/start-production.mjs scripts/check-runtime.mjs scripts/check-build-network.mjs .next/standalone/scripts/
+  cp .node-version vault-build-network.json .next/standalone/
 
-  HOSTNAME=127.0.0.1 PORT="$web_port" \
-    "$node_executable" .next/standalone/server.js >"$work_dir/web.log" 2>&1 &
+  (
+    cd .next/standalone
+    exec env HOSTNAME=127.0.0.1 PORT="$web_port" "$node_executable" scripts/start-production.mjs
+  ) >"$work_dir/web.log" 2>&1 &
 fi
 web_pid=$!
 web_started=true
