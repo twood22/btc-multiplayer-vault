@@ -69,8 +69,8 @@ This is not a privacy scanner: required rootless engine transcripts contain
 host/storage metadata, and inspected image configuration may contain environment
 metadata. Review those exact files and image build contents before approving any
 publication. Do not redact hashed transcripts or include wallet/kit directories.
-The CI now exercises packaging/restoration locally on each disposable runner,
-but **does not upload archives**; temporary archive bytes disappear when the
+All three profiles passed actual packaging/restoration on their disposable
+runners in run34150142799, but CI **does not upload archives**; temporary archive bytes disappear when the
 runner is discarded. Public test-only prerelease archive retention awaits
 separate authorization. A checksum or passing archive test is not a completed
 release dossier, a real-Signet lifecycle, or funding/deployment authority.

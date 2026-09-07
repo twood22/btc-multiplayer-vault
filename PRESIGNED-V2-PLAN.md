@@ -38,8 +38,8 @@ scripts typecheck passes. The fresh whole matrix subsequently passed below.
 | Cooperative, CSV, final sweep | Core19 confirmed cases and56 rejections; funding and all game transactions V3 | Core and actual browser signing passed; lifecycle confirmations also proven by standalone offline browser |
 | Fee adaptation with stable descendants | Funding, solo, cooperative, CSV and final payout sponsorship; TRUC/rolling-floor tests | Unified offline/database families, actual Core fee tests and clean Signet-format browser wrapper pass in the full aggregate |
 | Versioned database/runtime/watcher | Migrations015-021, exact-send journals, unknown-state preservation, reverse reorg/restore and monotonic poll revision | Lost-lease/ABA and both fair-queue regressions pass actual Core/PostgreSQL in the corrected-source full aggregate |
-| Substantive v2 readiness and release gate | Exact-image/check receipts and exact funding-state restore proof; no provider gate bypass | Evidence boundary suite has49 fail-closed negatives; native restore has22; fixed evidence/image/assembly producers implemented but end-to-end release proof pending |
-| Actual packaged app execution | Production Dockerfile, rootless Podman, all OCI bytes, immutable image, operator and real browser checks | Both network profiles passed in public CI; complete retained byte-level dossier is still missing |
+| Substantive v2 readiness and release gate | Exact-image/check receipts and exact funding-state restore proof; no provider gate bypass | Evidence boundary suite has49 fail-closed negatives plus19 archive negatives; native restore has22; end-to-end release proof remains pending |
+| Actual packaged app execution | Production Dockerfile, rootless Podman, all OCI bytes, immutable image, operator and real browser checks | Both network profiles and actual archive restoration passed in public CI; durable byte-level retention is still missing |
 | Real default-Signet full lifecycles | Isolated keys/coins, txids, confirmations, output audit | Resumable runner and read-only re-verification passed 19 isolated-Core cases; actual default-Signet wallet still unfunded |
 | Documentation and independent security review | Protocol, operator/recovery runbook, versioned historical docs; reviewer findings reproduced and fixed | Three reviews and focused independent rereviews completed; no new findings in the corrected delta |
 | Physical-device passkeys | Friends' onboarding, explicitly deferred by user | Deferred; not tested |
@@ -49,18 +49,56 @@ The preliminary Core feasibility experiment is not integration evidence and
 does not satisfy the pending requirements above. Unchecked rows block completion
 of the active development goal, except the explicit deferred/unauthorized items.
 
-## Current verified public-CI checkpoint (2026-09-07 UTC)
+## Current verified archive-CI checkpoint (2026-09-07 UTC)
 
-The subsequent local-only evidence packager is a new executable-source
-candidate, not covered by the historical run below. It adds exact allowlisting,
-private staging, bounded archives, actual archive restore/revalidation and
-no-clobber outputs; synthetic transport tests currently pass19 negative
-boundaries. Each CI profile now also packages its real successful dossier and
-restores/revalidates it on the runner. This publishes only the archive checksum
-and validation summary, not the archives themselves. The new whole-matrix and
-actual-dossier packaging results remain pending until their run finishes.
-Publication approval remains outstanding; final retained release evidence and
-all19 real default-Signet lifecycles remain incomplete.
+[Run 34150142799](https://github.com/twood22/btc-multiplayer-vault/actions/runs/34150142799)
+passed all three jobs on commit `3f0d621be4c5b78165f8856d1727382ce4c0f013`,
+executable source
+`536935c274261a11f18d9a798cc385770c878681842cfe0fc8e89aec724c2069`.
+Every profile binds the same tested offline utility
+`3afcdac5caf72eb0c03598ce8165c78961f4463f7ef50adf6f715f02b9599807`.
+
+- **Local47 passed** from18:04:57 to18:27:18 UTC, including all four typechecks,
+  both network-format crypto/legacy matrices, seven Core suites, all five
+  database suites, complete saved-file recovery and optimized browser execution.
+  Run digest `57e07e25605d1d21960f198e2908373f83b0b6b2b6174eac8400fc252af49c8a`.
+  Its102-file archive was created, restored and revalidated:1,315,244 bytes,
+  SHA256 `60eca4cd555c630f167bb3fe88e76dccaa98d046bb3f24a117e6e63540c224b5`.
+- **Signet-format exact image passed** at18:12:12 UTC, including the complete
+  isolated-Core browser game. Manifest
+  `sha256:df0986c5558685332c30bc8680840f2b4352e0e9a07066b4c79b40d9bf2124dd`;
+  receipt `a380d1166264fbb11845b5a584eca9c650bbe562c37bfa31b2c3d4b52fa20109`.
+  Its39-file archive passed actual restoration/revalidation:258,108,793 bytes,
+  SHA256 `2ffabc4405ec92919244f1eea6f610665ee7c809f001a6e9f893c327c74884c1`.
+- **Mainnet-format exact image passed** at18:07:44 UTC, including complete
+  pre-funding browser custody/backup setup and unauthorized-funding refusal.
+  Manifest `sha256:f302fc7ba70b681ad00451a71358fbda0921341040d58b961129144cc726e239`;
+  receipt `64babb9b0bd6e22a98513756b98d20fa8554a3d298b67e52d6bab1dc56be497a`.
+  Its39-file archive passed actual restoration/revalidation:258,110,251 bytes,
+  SHA256 `7ba38cd89e6414f2de9fc2e34a8963d41c058a6a900cfea7b0dc35ebb9686066`.
+
+The new local-only packager uses exact allowlists, private staging, bounded
+regular-file reads, no-clobber outputs and actual archive restoration. Its19
+synthetic negative boundaries also passed inside the full suite. Real complete
+local/image dossiers were separately validated before copying, after staging
+and after restoration, with their original committed bytes preserved.
+
+Root independently checked all actual job conclusions, fixed command plans,
+source/receipt commitments and matching archive-result bindings. Four public
+result files per profile, the read-only collector and its README are retained
+owner-only in `live-run/presigned-v2-public-ci.e7clQK/` (14 files). **These are
+log-only copies, not the archive/OCI bytes.** No archive was uploaded; runner
+disposal removes those bytes. Public test-only archive publication still needs
+approval, followed by actual durable retention and local byte-level validation.
+No content-privacy scan of the archives, completed release dossier or final
+acceptance assembly is claimed.
+
+At18:28 UTC, the isolated default-Signet wallet still had zero pending/confirmed
+test sats and no initialized lifecycle. All19 real default-Signet lifecycles
+remain outstanding. Physical-device passkeys remain explicitly deferred, and
+no mainnet spend, app deployment, public listener or outreach was authorized.
+
+## Historical initial public-CI checkpoint (source09609ca8, 2026-09-07 UTC)
 
 [Run 34146377273](https://github.com/twood22/btc-multiplayer-vault/actions/runs/34146377273)
 completed successfully with all three jobs on commit

@@ -99,8 +99,14 @@ refusal (19 negatives total), fixed the test assertion's TypeScript overload,
 and matched the CI call against its actual producer: image jobs retain the
 utility inside verified OCI layers and do not assume a host-built utility.
 The new CI call packs/restores full real dossiers only on disposable runners;
-it uploads no archive. Actual whole-dossier results for this new source remain
-pending. No artifact-content privacy scan or archive publication is claimed.
+it uploads no archive. Run34150142799 on source536935c2 subsequently passed
+the full47 local suite and both real image profiles, including actual
+creation/restoration/revalidation of all three complete evidence archives.
+Root independently checked public receipt/command/source commitments and
+archive-result bindings. The19-case synthetic suite and real dossier runs are
+separate evidence, neither a privacy scan nor archive publication. Only public
+logs/receipts remain retained outside the discarded runners; final durable
+archive retention and release assembly remain open.
 
 ## Limits retained
 

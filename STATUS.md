@@ -7,7 +7,9 @@ not the current V2 implementation verdict. The explicitly authorized
 [PRESIGNED-OPERATOR-RUNBOOK.md](./PRESIGNED-OPERATOR-RUNBOOK.md). V2 is unfinished;
 no mainnet spending, deployment or migration of an existing funded vault is authorized.
 On 2026-09-07, the public V2 branch passed the full47 local matrix and both
-genuine rootless packaged-app profiles. Real default-Signet lifecycles and a
+genuine rootless packaged-app profiles, including actual creation, restoration
+and revalidation of all three evidence archives (run34150142799, source536935c2).
+Archive bytes were not uploaded. Real default-Signet lifecycles and a
 complete retained release dossier remain outstanding; see the V2 evidence plan.
 
 Last updated: 2026-09-05

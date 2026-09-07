@@ -74,12 +74,14 @@ kits and complete private test directories are never uploaded. Retained OCI
 bytes and a complete release dossier are not supplied by this log-only workflow;
 public CI success does not authorize funding or establish real default-Signet.
 
-[Run 34146377273](https://github.com/twood22/btc-multiplayer-vault/actions/runs/34146377273)
+[Run 34150142799](https://github.com/twood22/btc-multiplayer-vault/actions/runs/34150142799)
 passed all three jobs on 2026-09-07: the full 47-command local suite and both
-exact-image profiles, on executable source `09609ca8` (commit `2177e130`).
+exact-image profiles, on executable source `536935c2` (commit `3f0d621`).
 The Signet-format image completed the full isolated-Core browser game; the
 mainnet-format image passed the complete pre-funding ceremony and authorization
-refusal. Actual default-Signet lifecycles and complete retained image/child-log
+refusal. All three complete evidence archives were created, restored and
+revalidated on the runners; the local-only `presigned:pack-evidence` command
+does not upload them. Actual default-Signet lifecycles and durably retained image/child-log
 evidence for final release assembly are still outstanding.
 
 The saved offline utility has passed the full six-ordering/four-cooperative/
