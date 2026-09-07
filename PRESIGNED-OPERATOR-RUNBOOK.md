@@ -75,6 +75,12 @@ runner is discarded. Public test-only prerelease archive retention awaits
 separate authorization. A checksum or passing archive test is not a completed
 release dossier, a real-Signet lifecycle, or funding/deployment authority.
 
+The separate current-source private local run completed all 47 commands at
+19:45 UTC on 2026-09-07. Its 102 required local files and actually restored,
+revalidated archive are now retained owner-only on the host; exact bindings and
+independent verification are recorded in the V2 evidence plan. This does not
+supply either missing image archive or the real default-Signet proof.
+
 Real default-Signet evidence is separate. On the exact fresh isolated test host,
 `presigned:signet-lifecycle` takes `status`, `init`, `fund`, `advance` or `verify`
 and the host's protected control-file path. `status` and `verify` are read-only.

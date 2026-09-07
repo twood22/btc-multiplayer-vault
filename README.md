@@ -81,8 +81,11 @@ The Signet-format image completed the full isolated-Core browser game; the
 mainnet-format image passed the complete pre-funding ceremony and authorization
 refusal. All three complete evidence archives were created, restored and
 revalidated on the runners; the local-only `presigned:pack-evidence` command
-does not upload them. Actual default-Signet lifecycles and durably retained image/child-log
-evidence for final release assembly are still outstanding.
+does not upload them. A separate current-source private run also passed all 47
+commands at 19:45 UTC; its exact 102-file local evidence set and restored,
+revalidated archive are retained owner-only on the host. Actual default-Signet
+lifecycles and durably retained image evidence for final release assembly are
+still outstanding. See the V2 evidence plan for the distinct run/archive hashes.
 
 The saved offline utility has passed the full six-ordering/four-cooperative/
 nine-recovery matrix and all ten native-wallet fee cases on one exact artifact.

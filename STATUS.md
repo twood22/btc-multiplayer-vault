@@ -9,8 +9,10 @@ no mainnet spending, deployment or migration of an existing funded vault is auth
 On 2026-09-07, the public V2 branch passed the full47 local matrix and both
 genuine rootless packaged-app profiles, including actual creation, restoration
 and revalidation of all three evidence archives (run34150142799, source536935c2).
-Archive bytes were not uploaded. Real default-Signet lifecycles and a
-complete retained release dossier remain outstanding; see the V2 evidence plan.
+Archive bytes were not uploaded. A separate same-source private run passed all
+47 commands at 19:45 UTC and retained its actual 102-file local evidence set and
+verified archive. Real default-Signet lifecycles, retained image bytes and the
+complete release dossier remain outstanding; see the V2 evidence plan.
 
 Last updated: 2026-09-05
 Reviewed baseline: `71b1bd227a5f3f3d35fb8449776747d5d88d28c7`; current work is on

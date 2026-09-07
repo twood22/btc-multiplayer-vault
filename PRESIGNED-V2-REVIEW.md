@@ -106,7 +106,21 @@ Root independently checked public receipt/command/source commitments and
 archive-result bindings. The19-case synthetic suite and real dossier runs are
 separate evidence, neither a privacy scan nor archive publication. Only public
 logs/receipts remain retained outside the discarded runners; final durable
-archive retention and release assembly remain open.
+image archive retention and release assembly remain open.
+
+A separate same-source private full 47-command run passed at 19:45 UTC, after
+which the guarded collector retained 102 local files and a 1,315,278-byte archive.
+Its independent source-only review found no blocking issue; it distinguished
+parent absence from successful exit and flagged incomplete-copy and filesystem
+flush limits. Root separately checked the original terminal exit, corrected two
+optional `process.getuid` TypeScript calls in the private collector, and verified
+its strict typecheck and active-parent refusal before collection. The collector
+then restored and revalidated the actual archive. Root reread all required bytes,
+compared copies with originals and flushed the exact retained files/directories.
+A subsequent independent read-only check accepted all 47 command records, the
+102-file/member allowlist, actual archive/utility hashes and private permissions,
+with no finding. This proves retained local evidence, not image retention,
+content-privacy approval, off-host backup, release readiness or real Signet.
 
 ## Limits retained
 

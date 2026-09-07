@@ -39,7 +39,7 @@ scripts typecheck passes. The fresh whole matrix subsequently passed below.
 | Fee adaptation with stable descendants | Funding, solo, cooperative, CSV and final payout sponsorship; TRUC/rolling-floor tests | Unified offline/database families, actual Core fee tests and clean Signet-format browser wrapper pass in the full aggregate |
 | Versioned database/runtime/watcher | Migrations015-021, exact-send journals, unknown-state preservation, reverse reorg/restore and monotonic poll revision | Lost-lease/ABA and both fair-queue regressions pass actual Core/PostgreSQL in the corrected-source full aggregate |
 | Substantive v2 readiness and release gate | Exact-image/check receipts and exact funding-state restore proof; no provider gate bypass | Evidence boundary suite has49 fail-closed negatives plus19 archive negatives; native restore has22; end-to-end release proof remains pending |
-| Actual packaged app execution | Production Dockerfile, rootless Podman, all OCI bytes, immutable image, operator and real browser checks | Both network profiles and actual archive restoration passed in public CI; durable byte-level retention is still missing |
+| Actual packaged app execution | Production Dockerfile, rootless Podman, all OCI bytes, immutable image, operator and real browser checks | Both network profiles and actual archive restoration passed in public CI; durable image-byte retention is still missing |
 | Real default-Signet full lifecycles | Isolated keys/coins, txids, confirmations, output audit | Resumable runner and read-only re-verification passed 19 isolated-Core cases; actual default-Signet wallet still unfunded |
 | Documentation and independent security review | Protocol, operator/recovery runbook, versioned historical docs; reviewer findings reproduced and fixed | Three reviews and focused independent rereviews completed; no new findings in the corrected delta |
 | Physical-device passkeys | Friends' onboarding, explicitly deferred by user | Deferred; not tested |
@@ -97,6 +97,45 @@ At18:28 UTC, the isolated default-Signet wallet still had zero pending/confirmed
 test sats and no initialized lifecycle. All19 real default-Signet lifecycles
 remain outstanding. Physical-device passkeys remain explicitly deferred, and
 no mainnet spend, app deployment, public listener or outreach was authorized.
+
+## Private retained local checkpoint (2026-09-07 UTC)
+
+A separate full local run passed all 47 commands from 18:37:59 to 19:45:12 UTC,
+with unchanged executable source `536935c2` and the same tested offline utility
+as all three public CI profiles. This includes all seven Core suites, all five
+database suites, complete saved-file recovery and the optimized browser game.
+Run digest:
+`67fbd4dcf6ac3110a735a90645437957f3e61b95aa056b5ad5e73f613868341a`.
+
+After the actual parent exited zero, the guarded private collector retained the
+101 required proof files plus the exact offline utility in
+`live-run/presigned-v2-private-local.v0XHDp/local/`. Its separate archive contains
+exactly those 102 files: 1,315,278 bytes, SHA-256
+`6120e429ad72291b3a69f6336daa03fcf88a8c0a1958de2402fef915995b933b`.
+The archive was created, restored and semantically revalidated before acceptance.
+Root additionally reread the original and copied complete runs, compared every
+copied byte, checked exact archive members, ownership and private permissions,
+and flushed the exact retained files/directories. An independent read-only
+review repeated semantic validation, archive/utility hashing and exact member
+and permission checks with no finding. The collector also passed its isolated
+TypeScript check and active-parent refusal before collection.
+
+These are actual retained local proof bytes, not CI-log substitutes. Raw proof
+files are mode 0600 under mode 0700 directories. Test wallets, cookies, child
+databases, browser profiles/downloads and participant kits were not copied.
+Original evidence remains intact. This is storage on this host, not an off-host
+backup or a power-loss recovery experiment. The test parent, browser processes,
+Core nodes and scoped PostgreSQL instances stopped; the original outbound-only
+default-Signet node remains running.
+
+Both public image archives are still unretained. Fresh host checks at 19:24 UTC
+found no local container engine or QEMU; `unshare -Ur true` was denied at
+`uid_map`. No host security setting was changed. Public test-only prerelease
+archive retention remains unapproved. At 19:30 UTC the isolated default-Signet
+wallet still had zero pending/confirmed test sats and no initialized lifecycle.
+All 19 real default-Signet lifecycles and final release assembly remain pending;
+physical passkeys remain deferred. No archive publication, mainnet spending,
+app deployment or outreach occurred.
 
 ## Historical initial public-CI checkpoint (source09609ca8, 2026-09-07 UTC)
 
