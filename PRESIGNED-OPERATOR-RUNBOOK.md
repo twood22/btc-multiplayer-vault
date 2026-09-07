@@ -3,9 +3,11 @@
 Scope: `presigned-graph-v2` only. This is an operating procedure for the requested
 product, not evidence of approval to deploy or fund it. Current results and
 remaining requirements are in [PRESIGNED-V2-PLAN.md](./PRESIGNED-V2-PLAN.md).
-Mainnet is the production target; mainnet spending, public exposure and outreach
+Mainnet is the production target; mainnet spending, public app exposure and outreach
 remain separately approval-gated. Physical passkeys are deferred to the friends'
 onboarding, not claimed by virtual-authenticator tests.
+Public source and synthetic-test publication were separately authorized; that
+does not authorize app deployment or funding.
 
 ## 1. Preserve identity and rollback
 
@@ -25,7 +27,7 @@ onboarding, not claimed by virtual-authenticator tests.
 
 ## 2. Establish actual software evidence
 
-Use a private code-only checkout with the reviewed Node runtime and test
+Use an isolated code-only checkout with the reviewed Node runtime and test
 dependencies. Acceptance intentionally refuses operational Next.js dotenv files;
 do not relocate or delete a running installation's credentials to satisfy it.
 
@@ -40,6 +42,12 @@ formats, all Core families, five PostgreSQL suites, the complete saved-file
 recovery browser and a fresh Signet-format web build. Container commands need
 working local rootless Podman and never push an image. Do not enable privileged
 containers or weaken host isolation when that prerequisite is unavailable.
+
+The authorized standard public GitHub runners have passed this complete local
+matrix and both exact-image profiles. They publish normal test logs/receipts,
+not private wallets, recovery kits or whole runtime directories. The current
+log-only CI does not retain all child transcripts and OCI layers for final
+assembly; a green run must not be supplied in place of those actual artifacts.
 
 Real default-Signet evidence is separate. On the exact fresh isolated test host,
 `presigned:signet-lifecycle` takes `status`, `init`, `fund`, `advance` or `verify`

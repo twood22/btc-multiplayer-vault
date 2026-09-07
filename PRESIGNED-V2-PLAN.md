@@ -12,9 +12,9 @@ profiles on standard Ubuntu runners. It refuses private-repository execution
 and has no paid runners, caches, artifact uploads, registry pushes or deployments.
 Normal logs contain synthetic-test progress and independently revalidated
 receipts; no wallets or recovery kits are uploaded. These CI additions change
-the source digest: the 47-pass checkpoint below remains historical evidence for
-`80460afa...`, not a claim that the new CI source has already passed. Retaining
-the full exact-image bytes for final release assembly is still separate work.
+the source digest: the earlier `80460afa...` checkpoint remains separate
+historical evidence. The new-source results are recorded below. Retaining the
+full exact-image bytes for final release assembly is still separate work.
 
 First public CI run `34145927695` on commit `cbb76642` passed both actual
 rootless preflights and built/exported both production images. Both image jobs
@@ -25,7 +25,7 @@ only its owned export directory inside its existing private evidence root using
 a no-follow directory descriptor. The verifier remains unchanged and strict.
 Sixteen OCI boundary regressions pass, including 0755 refusal, successful
 permission correction, symlink non-mutation and non-private-parent refusal;
-scripts typecheck passes. A fresh whole matrix is required for this correction.
+scripts typecheck passes. The fresh whole matrix subsequently passed below.
 
 | Requirement | Implementation / acceptance evidence | Status |
 | --- | --- | --- |
@@ -39,6 +39,7 @@ scripts typecheck passes. A fresh whole matrix is required for this correction.
 | Fee adaptation with stable descendants | Funding, solo, cooperative, CSV and final payout sponsorship; TRUC/rolling-floor tests | Unified offline/database families, actual Core fee tests and clean Signet-format browser wrapper pass in the full aggregate |
 | Versioned database/runtime/watcher | Migrations015-021, exact-send journals, unknown-state preservation, reverse reorg/restore and monotonic poll revision | Lost-lease/ABA and both fair-queue regressions pass actual Core/PostgreSQL in the corrected-source full aggregate |
 | Substantive v2 readiness and release gate | Exact-image/check receipts and exact funding-state restore proof; no provider gate bypass | Evidence boundary suite has49 fail-closed negatives; native restore has22; fixed evidence/image/assembly producers implemented but end-to-end release proof pending |
+| Actual packaged app execution | Production Dockerfile, rootless Podman, all OCI bytes, immutable image, operator and real browser checks | Both network profiles passed in public CI; complete retained byte-level dossier is still missing |
 | Real default-Signet full lifecycles | Isolated keys/coins, txids, confirmations, output audit | Resumable runner and read-only re-verification passed 19 isolated-Core cases; actual default-Signet wallet still unfunded |
 | Documentation and independent security review | Protocol, operator/recovery runbook, versioned historical docs; reviewer findings reproduced and fixed | Three reviews and focused independent rereviews completed; no new findings in the corrected delta |
 | Physical-device passkeys | Friends' onboarding, explicitly deferred by user | Deferred; not tested |
@@ -48,7 +49,49 @@ The preliminary Core feasibility experiment is not integration evidence and
 does not satisfy the pending requirements above. Unchecked rows block completion
 of the active development goal, except the explicit deferred/unauthorized items.
 
-## Current verified checkpoint (2026-09-07 UTC)
+## Current verified public-CI checkpoint (2026-09-07 UTC)
+
+[Run 34146377273](https://github.com/twood22/btc-multiplayer-vault/actions/runs/34146377273)
+completed successfully with all three jobs on commit
+`2177e1307d30ae85c22a8f21c4d8c4432323ce98`. All three bind executable source
+`09609ca81eeb29786f3a4d950a6ed895e88e99f7fdae401faf2b42cf448647aa` and exact
+offline utility `3afcdac5caf72eb0c03598ce8165c78961f4463f7ef50adf6f715f02b9599807`.
+
+- The complete **47-command local matrix passed** from 17:09:59 to 17:32:17 UTC,
+  run digest `d11f03489495c5e484829a8e57b84deb5edb5d141a57c2e5d4b0769cae0b8f2c`.
+  This includes all four typechecks, both cryptographic/legacy network-format
+  matrices, seven Core suites, five database suites, the exact offline utility
+  and optimized full-game browser.
+- Genuine rootless **Signet-format image acceptance passed** at 17:16:26 UTC,
+  OCI manifest `sha256:c97160f3321ec2b7e9b1a27ae0c9113010d3afdb961eb6c3d541ca89a0d219a5`,
+  receipt `928b2496fc2ceeff54d447738ddf293133a99ac7c19ef21d83bcbd0e020b7625`.
+  The actual immutable production image completed operator-entrypoint and
+  full browser-game checks against isolated regtest, with no mounted source.
+- Genuine rootless **mainnet-format image acceptance passed** at 17:12:18 UTC,
+  OCI manifest `sha256:ccdfc478a833a9f91195eda47f3db89e8ed0ee23afea4fd47a62bddfa427f378`,
+  receipt `5e636377bc8f8088b8b78b983a8ac411d54167de2df09c2e7cdf64387b697544`.
+  This exercised actual startup, operator imports, complete browser custody and
+  backup setup, and the unauthorized-funding refusal. It did not spend mainnet.
+
+The CI producer reread each required transcript and every OCI metadata/layer
+byte before its success receipt. Root independently downloaded the actual public
+job logs and checked the matching GitHub job conclusions, source, all fixed
+command plans and receipt commitments. Owner-only copies are retained in
+`live-run/presigned-v2-public-ci.KM6rVx/`. **This is log-only result retention,
+not a complete retained release dossier**: full child transcripts and OCI layers
+were not uploaded from the runners. The assembler still correctly refuses an
+incomplete dossier; actual image execution is now proven, but final assembly is
+not. A test-only downloadable build-archive publication requires its separate
+approval; no release, registry image, deployment or funding authorization was
+created by these jobs.
+
+At 17:32 UTC, the isolated default-Signet wallet still had zero confirmed and
+zero pending test sats, with no initialized lifecycle. The user's faucet queue
+message is not a received payment. All19 real default-Signet lifecycles remain
+outstanding; physical passkeys remain explicitly deferred. No host security
+policy was changed, and the legacy rollback/default branch is unchanged.
+
+## Historical private checkpoint (source80460afa, 2026-09-07 UTC)
 
 The corrected-source **47-command local aggregate passed** from 07:05:42 to
 08:05:09 UTC. The exact source digest is

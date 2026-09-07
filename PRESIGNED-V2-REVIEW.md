@@ -58,6 +58,28 @@ This includes both network-format custody matrices and the enhanced DB regressio
 not merely the targeted checks above. See
 [PRESIGNED-V2-PLAN.md](./PRESIGNED-V2-PLAN.md) for current whole-product status.
 
+## Public CI and export-permission follow-up
+
+The user authorized public source/test publication on 2026-09-07, with zero-cost
+testing. An independent outgoing-file review found no blocking operational
+credential exposure; root additionally checked all382 current publication
+candidates and excluded runtime evidence, wallets and dotenv files. This was
+not a Git-history or ignored-file audit.
+
+Independent CI review found no additional blocker after root fully qualified
+the unchanged-digest Docker base image. Actual first-run image exports then
+failed the existing private-owned-root check. The producer-only correction uses
+a no-follow owned-directory descriptor to tighten that export to0700 inside its
+already-private parent; the verifier was not relaxed. Root's16 OCI negatives
+exercise unsafe parent permissions, symlink non-mutation and non-directory
+refusal, followed by successful hash verification. Foreign-UID refusal was
+code-reviewed, not exercised with a foreign-owned test directory. A focused
+independent rereview found no blocking issue; that rereview was read-only.
+
+New-source `09609ca8`, commit `2177e130`, subsequently passed the full47 local
+suite and both real rootless production-image/browser profiles in public
+run34146377273. Full per-job scope and receipt digests are in the evidence plan.
+
 ## Limits retained
 
 No new payment-authorization or coordinator-data signature-release bypass was
@@ -72,6 +94,8 @@ compromised unlocked devices, the explicitly inherited N-1 recovery collusion
 tradeoff, outside sponsor liquidity and relay liveness remain limitations.
 Restoring a database still requires stopping every old writer.
 
-Real default-Signet lifecycles, exact OCI execution and final acceptance assembly
-remain unproven. Physical passkeys are explicitly deferred to friends' onboarding.
-No review or local test authorizes mainnet spending, public exposure or outreach.
+Real default-Signet lifecycles, complete retained OCI/child-log evidence and final
+acceptance assembly remain unproven. Actual OCI execution has now passed in CI.
+Physical passkeys are explicitly deferred to friends' onboarding. Public source
+and tests were separately authorized; no review or test authorizes mainnet
+spending, public app exposure/deployment or outreach.

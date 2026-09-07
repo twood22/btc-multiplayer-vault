@@ -60,10 +60,9 @@ Signet-format image exercises the full game against isolated Core; the mainnet
 image proves the complete pre-funding passkey/backup ceremony and refusal to
 release funding without separate authorization. It does not bypass the real
 mainnet release gate with fabricated evidence. The local host currently has no
-container engine, so this path is implemented but actual image execution remains
-unverified. OCI metadata tests are explicitly not container-execution evidence.
-The standalone mainnet-format browser command above has passed the same
-pre-funding refusal path, but it does not stand in for this exact-image run.
+container engine, but both genuine rootless image profiles now pass in the
+authorized public CI. The standalone browser and synthetic OCI metadata tests
+remain separately scoped; they are not substitutes for those image executions.
 
 Public CI is explicitly authorized for the existing repository. The
 `Presigned V2 acceptance` workflow runs the full local matrix and both exact-image
@@ -74,6 +73,14 @@ synthetic-test receipts in normal job logs. Wallets, cookies, encrypted recovery
 kits and complete private test directories are never uploaded. Retained OCI
 bytes and a complete release dossier are not supplied by this log-only workflow;
 public CI success does not authorize funding or establish real default-Signet.
+
+[Run 34146377273](https://github.com/twood22/btc-multiplayer-vault/actions/runs/34146377273)
+passed all three jobs on 2026-09-07: the full 47-command local suite and both
+exact-image profiles, on executable source `09609ca8` (commit `2177e130`).
+The Signet-format image completed the full isolated-Core browser game; the
+mainnet-format image passed the complete pre-funding ceremony and authorization
+refusal. Actual default-Signet lifecycles and complete retained image/child-log
+evidence for final release assembly are still outstanding.
 
 The saved offline utility has passed the full six-ordering/four-cooperative/
 nine-recovery matrix and all ten native-wallet fee cases on one exact artifact.
