@@ -51,6 +51,17 @@ of the active development goal, except the explicit deferred/unauthorized items.
 
 ## Current verified public-CI checkpoint (2026-09-07 UTC)
 
+The subsequent local-only evidence packager is a new executable-source
+candidate, not covered by the historical run below. It adds exact allowlisting,
+private staging, bounded archives, actual archive restore/revalidation and
+no-clobber outputs; synthetic transport tests currently pass19 negative
+boundaries. Each CI profile now also packages its real successful dossier and
+restores/revalidates it on the runner. This publishes only the archive checksum
+and validation summary, not the archives themselves. The new whole-matrix and
+actual-dossier packaging results remain pending until their run finishes.
+Publication approval remains outstanding; final retained release evidence and
+all19 real default-Signet lifecycles remain incomplete.
+
 [Run 34146377273](https://github.com/twood22/btc-multiplayer-vault/actions/runs/34146377273)
 completed successfully with all three jobs on commit
 `2177e1307d30ae85c22a8f21c4d8c4432323ce98`. All three bind executable source

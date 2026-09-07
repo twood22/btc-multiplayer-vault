@@ -1,11 +1,12 @@
 /** Public synthetic-test progress and receipts; never publish private test directories. */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { acceptanceJsonRecords, parseAcceptanceJson, readPrivateAcceptanceFile,
   validateLocalAcceptanceRun } from './lib/presigned-acceptance-run.js';
 import { validateRetainedImageEvidence } from './lib/presigned-image-evidence.js';
 import { presignedSourceDigest } from './presigned-build-identity.mjs';
+import { packPresignedEvidence } from './lib/presigned-evidence-archive.js';
 
 process.umask(0o077);
 const mode = process.argv[2];
@@ -42,6 +43,16 @@ if (mode === 'local') {
 const filename = mode === 'local' ? 'run.json' : 'image-acceptance.json';
 const receipt = parseAcceptanceJson(readPrivateAcceptanceFile(`${directory}/${filename}`));
 console.log(JSON.stringify({ stage: 'verified-public-ci-receipt', receipt }, null, 2));
+console.log(JSON.stringify({ stage: 'local-only-archive-round-trip', mode }));
+const archiveDirectory = mkdtempSync('/tmp/btc-presigned-archive-output.');
+try {
+  const archive = await packPresignedEvidence(mode === 'local' ? 'local' : mode === 'signet' ? 'signet-image' : 'mainnet-image',
+    directory, `${archiveDirectory}/presigned-v2-${mode}.tar.gz`);
+  console.log(JSON.stringify({ stage: 'verified-local-only-archive', ...archive }));
+} catch {
+  throw new Error('local evidence archive round-trip failed; no archive was uploaded and raw errors are omitted');
+}
 console.log(JSON.stringify({ passed: true, mode, sourceDigest, nodeVersion: readFileSync('.node-version', 'utf8').trim(),
+  archiveRoundTripVerified: true, archivesRetainedAfterRunnerExit: false,
   artifactUploads: false, caches: false, registryPush: false, deployment: false,
   completeRetainedReleaseDossier: false, realDefaultSignetVerified: false, fundingAuthorized: false }));

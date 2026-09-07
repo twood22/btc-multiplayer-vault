@@ -12,6 +12,7 @@ import { IMAGE_EXECUTION_STAGES, imageExecutionCommand } from './lib/presigned-i
 import { presignedSourceDigest } from './presigned-build-identity.mjs';
 import { commitmentDigest } from '../src/presigned/validation.js';
 import { PRESIGNED_RELEASE_CHECKS } from '../src/presigned/release.js';
+import { runEvidenceArchiveBoundaryTests } from './presigned-archive-acceptance.mjs';
 
 process.umask(0o077);
 const checks: string[] = [];
@@ -222,5 +223,7 @@ runSyntheticRelease('deployed offline recovery utility differs from the actually
 writeFileSync(`${utilityFixture}/public/offline/presigned-recovery.html`, testedUtility, { mode: 0o600 });
 runSyntheticRelease('DATABASE_URL is required for v2 funding release');
 checks.push('actual release CLI shares deployed utility/source/image validation; altered utility and absent database refuse report creation with zero network attempts');
-console.log(JSON.stringify({ passed: true, negativeBoundaries: negatives, checks,
+const archiveBoundaries = await runEvidenceArchiveBoundaryTests();
+checks.push('local-only allowlisted evidence archives preserve exact bytes through an actual private restoration; synthetic transport fixtures only');
+console.log(JSON.stringify({ passed: true, negativeBoundaries: negatives, archiveBoundaries, checks,
   realSignetEvidence: false, exactContainerEvidence: false, releaseReceiptProduced: false, fundingAuthorized: false }));

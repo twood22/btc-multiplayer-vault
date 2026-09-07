@@ -80,6 +80,28 @@ New-source `09609ca8`, commit `2177e130`, subsequently passed the full47 local
 suite and both real rootless production-image/browser profiles in public
 run34146377273. Full per-job scope and receipt digests are in the evidence plan.
 
+## Local-only evidence archive follow-up
+
+An independent source-only custody review derived the exact minimal local/image
+file sets from the retained-evidence validators. Selected successful database
+logs contain test labels/results, and runtime wallets, cookies, browser profiles,
+downloads and recovery kits are outside the required sets. Required rootless
+engine and image-inspection transcripts still contain host/configuration
+metadata: evidence-integrity validation is not a privacy scan or permission to
+publish. OCI layers are exported before browser test custody is created.
+
+A second independent reviewer inspected the local-only packager, CLI, transport
+tests and acceptance-suite import and found no actionable defect. That reviewer
+ran the synthetic archive test:17 negative boundaries and actual exact-byte
+restoration, not a complete local or OCI dossier. Root additionally exercised
+standalone offline-utility retention/digest refusal and input-root symlink
+refusal (19 negatives total), fixed the test assertion's TypeScript overload,
+and matched the CI call against its actual producer: image jobs retain the
+utility inside verified OCI layers and do not assume a host-built utility.
+The new CI call packs/restores full real dossiers only on disposable runners;
+it uploads no archive. Actual whole-dossier results for this new source remain
+pending. No artifact-content privacy scan or archive publication is claimed.
+
 ## Limits retained
 
 No new payment-authorization or coordinator-data signature-release bypass was

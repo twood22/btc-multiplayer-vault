@@ -49,6 +49,32 @@ not private wallets, recovery kits or whole runtime directories. The current
 log-only CI does not retain all child transcripts and OCI layers for final
 assembly; a green run must not be supplied in place of those actual artifacts.
 
+For complete **current-source** evidence directories, `npm run
+presigned:pack-evidence -- local|signet-image|mainnet-image /absolute/evidence
+/private/output.tar.gz` creates a new owner-only local archive. The output
+parent must already be owned/private, and the output must be outside the input
+directory. The packager takes an exact allowlist, not a recursive directory
+copy: required receipts/transcripts, five selected database logs, browser/runtime
+summary JSON, the verified OCI index/manifest/config/layers for image evidence,
+and the exact tested offline utility in the local archive (image archives retain
+it inside their OCI layers). It excludes wallets, cookies, databases,
+browser profiles/downloads, participant backups and unrelated OCI blobs.
+It validates the input, a fresh private copy and the actual restored archive,
+preserving original committed bytes and `executionDirectory`. It rejects
+symlinks, hardlinks, path traversal and overwriting an existing output. Archive
+files are regular mode0600 entries; restored evidence belongs to the current
+user. The matching source checkout remains required for semantic verification.
+
+This is not a privacy scanner: required rootless engine transcripts contain
+host/storage metadata, and inspected image configuration may contain environment
+metadata. Review those exact files and image build contents before approving any
+publication. Do not redact hashed transcripts or include wallet/kit directories.
+The CI now exercises packaging/restoration locally on each disposable runner,
+but **does not upload archives**; temporary archive bytes disappear when the
+runner is discarded. Public test-only prerelease archive retention awaits
+separate authorization. A checksum or passing archive test is not a completed
+release dossier, a real-Signet lifecycle, or funding/deployment authority.
+
 Real default-Signet evidence is separate. On the exact fresh isolated test host,
 `presigned:signet-lifecycle` takes `status`, `init`, `fund`, `advance` or `verify`
 and the host's protected control-file path. `status` and `verify` are read-only.

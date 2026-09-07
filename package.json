@@ -19,6 +19,7 @@
     "presigned:test:local": "tsx scripts/presigned-acceptance.mts local",
     "presigned:test:container": "tsx scripts/presigned-container-acceptance.mts",
     "presigned:assemble-acceptance": "tsx scripts/presigned-assemble-acceptance.mts",
+    "presigned:pack-evidence": "tsx scripts/presigned-pack-evidence.mts",
     "web:dev": "next dev --webpack",
     "web:build": "next build --webpack",
     "web:start": "node scripts/check-build-network.mjs && next start",
