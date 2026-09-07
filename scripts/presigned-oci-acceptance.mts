@@ -1,14 +1,15 @@
 /** Synthetic metadata/hash regressions, never a claim that a container ran. */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
-import { assertOciRuntimeImage, verifyOciDirectory } from './lib/presigned-oci.js';
+import { assertOciRuntimeImage, protectOwnedOciExport, verifyOciDirectory } from './lib/presigned-oci.js';
 
 process.umask(0o077);
 let negatives = 0;
 const sha256 = (bytes: Buffer) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
-const root = mkdtempSync('/tmp/btc-presigned-oci-boundary.');
+const parent = mkdtempSync('/tmp/btc-presigned-oci-boundary.');
+const root = `${parent}/oci`;
 mkdirSync(`${root}/blobs/sha256`, { recursive: true, mode: 0o700 });
 const blob = (bytes: Buffer, mediaType: string) => {
   const digest = sha256(bytes);
@@ -48,8 +49,16 @@ await assert.rejects(() => verifyOciDirectory(root)); negatives++;
 writeFileSync(path, Buffer.alloc(original.length), { mode: 0o600 });
 await assert.rejects(() => verifyOciDirectory(root)); negatives++;
 writeFileSync(path, original, { mode: 0o600 });
-chmodSync(root, 0o755); await assert.rejects(() => verifyOciDirectory(root)); negatives++; chmodSync(root, 0o700);
+chmodSync(root, 0o755); await assert.rejects(() => verifyOciDirectory(root)); negatives++;
 symlinkSync(root, `${root}-link`); await assert.rejects(() => verifyOciDirectory(`${root}-link`)); negatives++;
+assert.throws(() => protectOwnedOciExport(`${root}-link`)); negatives++;
+assert.equal(lstatSync(root).mode & 0o777, 0o755, 'symlink rejection must not chmod its target');
+chmodSync(parent, 0o755); assert.throws(() => protectOwnedOciExport(root)); negatives++; chmodSync(parent, 0o700);
+writeFileSync(`${parent}/not-a-directory`, 'synthetic', { mode: 0o600 });
+assert.throws(() => protectOwnedOciExport(`${parent}/not-a-directory`)); negatives++;
+protectOwnedOciExport(root);
+assert.equal(lstatSync(root).mode & 0o777, 0o700);
 assert.equal((await verifyOciDirectory(root)).manifestDigest, manifest.digest);
 console.log(JSON.stringify({ passed: true, negativeBoundaries: negatives, verifiedEncodedAndDecodedLayerHashes: true,
-  manifestNotConfigDigest: true, syntheticNonRunnablePayload: true, actualContainerExecution: false, releaseReceiptProduced: false }));
+  manifestNotConfigDigest: true, privateExportPermissionsRestored: true, symlinkPermissionChangeRejected: true,
+  syntheticNonRunnablePayload: true, actualContainerExecution: false, releaseReceiptProduced: false }));

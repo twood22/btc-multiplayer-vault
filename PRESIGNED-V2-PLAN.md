@@ -16,6 +16,17 @@ the source digest: the 47-pass checkpoint below remains historical evidence for
 `80460afa...`, not a claim that the new CI source has already passed. Retaining
 the full exact-image bytes for final release assembly is still separate work.
 
+First public CI run `34145927695` on commit `cbb76642` passed both actual
+rootless preflights and built/exported both production images. Both image jobs
+then failed the strict private-owned OCI-root check; neither reached immutable
+runtime/browser acceptance. The remaining local job was canceled when that
+source was superseded, not counted as a full pass. The producer now tightens
+only its owned export directory inside its existing private evidence root using
+a no-follow directory descriptor. The verifier remains unchanged and strict.
+Sixteen OCI boundary regressions pass, including 0755 refusal, successful
+permission correction, symlink non-mutation and non-private-parent refusal;
+scripts typecheck passes. A fresh whole matrix is required for this correction.
+
 | Requirement | Implementation / acceptance evidence | Status |
 | --- | --- | --- |
 | Versioned protocol, threat model, full scope | PRESIGNED-PROTOCOL.md; independently reviewed findings reproduced and corrected | Implemented and documented; three scoped internal reviews and rereviews complete, not an external audit |

@@ -1,8 +1,8 @@
 /** Verify a single-platform OCI directory without extracting a filesystem. */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { constants, closeSync, createReadStream, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { constants, closeSync, createReadStream, fchmodSync, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
@@ -47,6 +47,25 @@ function json(bytes: Buffer): any {
   try { return JSON.parse(bytes.toString('utf8')); }
   catch { throw new Error('OCI metadata is not valid JSON; no raw contents logged'); }
 }
+
+/** Podman's OCI writer may choose 0755 despite the caller's umask. Tighten only
+ * its freshly exported owned directory inside an already-private evidence root.
+ * Use a no-follow descriptor: never chmod a symlink target or accept a foreign
+ * export. The independent verifier below continues to require mode 0700. */
+export function protectOwnedOciExport(directory: string): void {
+  directory = resolve(directory);
+  const parent = lstatSync(dirname(directory));
+  assert(parent.isDirectory() && !parent.isSymbolicLink() && parent.uid === process.getuid?.() &&
+    (parent.mode & 0o077) === 0, 'OCI exports must remain inside a private owned evidence directory');
+  const fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try {
+    const stat = fstatSync(fd);
+    assert(stat.isDirectory() && stat.uid === process.getuid?.(), 'refusing to change permissions on a foreign OCI export');
+    fchmodSync(fd, 0o700);
+    assert.equal(fstatSync(fd).mode & 0o777, 0o700);
+  } finally { closeSync(fd); }
+}
+
 export async function verifyOciDirectory(directory: string): Promise<VerifiedOciImage> {
   directory = resolve(directory);
   const root = lstatSync(directory);

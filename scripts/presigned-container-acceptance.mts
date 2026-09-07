@@ -7,7 +7,7 @@ import { assertReviewedNodeRuntime } from '../src/runtime-version.js';
 import { commitmentDigest } from '../src/presigned/validation.js';
 import { acceptanceEnvironment, parseAcceptanceJson, readPrivateAcceptanceFile, validateBrowserAcceptance, writeAcceptanceJson } from './lib/presigned-acceptance-run.js';
 import { imageExecutionCommand, type ImageExecutionStage } from './lib/presigned-image-commands.js';
-import { assertOciRuntimeImage, verifyOciDirectory } from './lib/presigned-oci.js';
+import { assertOciRuntimeImage, protectOwnedOciExport, verifyOciDirectory } from './lib/presigned-oci.js';
 import { presignedSourceDigest } from './presigned-build-identity.mjs';
 
 process.umask(0o077); assertReviewedNodeRuntime();
@@ -64,6 +64,7 @@ try {
   assert(typeof rawId === 'string' && /^(?:sha256:)?[0-9a-f]{64}$/u.test(rawId));
   const imageId = `sha256:${rawId.replace(/^sha256:/u, '')}`;
   await run('export-oci', imageId);
+  protectOwnedOciExport(`${directory}/oci`);
   const image = await verifyOciDirectory(`${directory}/oci`);
   assert.equal(image.network, network); assertOciRuntimeImage(image, inspected[0]);
   assert.equal(image.architecture, process.arch === 'x64' ? 'amd64' : process.arch === 'arm64' ? 'arm64' : 'unsupported',
