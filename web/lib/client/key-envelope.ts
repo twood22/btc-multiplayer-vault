@@ -14,14 +14,15 @@ export async function createParticipantSecretEnvelope(
   aadBase64url: string,
 ): Promise<{ envelope: KeyEnvelope; participantSecret: string }> {
   const secretBytes = crypto.getRandomValues(new Uint8Array(32));
-  const participantSecret = toBase64url(secretBytes);
-  const envelope = await encryptParticipantSecretEnvelope(
-    participantSecret,
-    prfOutput,
-    aadBase64url,
-  );
-  secretBytes.fill(0);
-  return { participantSecret, envelope };
+  try {
+    const participantSecret = toBase64url(secretBytes);
+    const envelope = await encryptParticipantSecretEnvelope(
+      participantSecret,
+      prfOutput,
+      aadBase64url,
+    );
+    return { participantSecret, envelope };
+  } finally { secretBytes.fill(0); }
 }
 
 export async function encryptParticipantSecretEnvelope(
@@ -34,32 +35,36 @@ export async function encryptParticipantSecretEnvelope(
     throw new Error('participant secret has an invalid shape');
   }
   const aad = fromBase64url(aadBase64url);
-  const plaintext = new TextEncoder().encode(participantSecret);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveKey(prfOutput, aad);
-  const ciphertext = new Uint8Array(
-    await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv: asArrayBuffer(iv), additionalData: asArrayBuffer(aad), tagLength: 128 },
-      key,
-      asArrayBuffer(plaintext),
-    ),
-  );
-  const roundTrip = new Uint8Array(
-    await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: asArrayBuffer(iv), additionalData: asArrayBuffer(aad), tagLength: 128 },
-      key,
-      asArrayBuffer(ciphertext),
-    ),
-  );
-  if (!constantTimeEqual(roundTrip, plaintext)) throw new Error('encrypted key envelope failed its local round-trip check');
-  plaintext.fill(0);
-  roundTrip.fill(0);
-  return {
-    version: 1,
-    iv: toBase64url(iv),
-    ciphertext: toBase64url(ciphertext),
-    aad: aadBase64url,
-  };
+  const plaintext = new TextEncoder().encode(participantSecret).buffer;
+  let roundTrip: Uint8Array | undefined;
+  try {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await deriveKey(prfOutput, aad);
+    const ciphertext = new Uint8Array(
+      await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: asArrayBuffer(iv), additionalData: asArrayBuffer(aad), tagLength: 128 },
+        key,
+        plaintext,
+      ),
+    );
+    roundTrip = new Uint8Array(
+      await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: asArrayBuffer(iv), additionalData: asArrayBuffer(aad), tagLength: 128 },
+        key,
+        asArrayBuffer(ciphertext),
+      ),
+    );
+    if (!constantTimeEqual(roundTrip, new Uint8Array(plaintext))) throw new Error('encrypted key envelope failed its local round-trip check');
+    return {
+      version: 1,
+      iv: toBase64url(iv),
+      ciphertext: toBase64url(ciphertext),
+      aad: aadBase64url,
+    };
+  } finally {
+    new Uint8Array(plaintext).fill(0);
+    roundTrip?.fill(0);
+  }
 }
 
 export async function decryptParticipantSecretEnvelope(
@@ -79,13 +84,22 @@ export async function decryptParticipantSecretEnvelope(
     key,
     asArrayBuffer(fromBase64url(envelope.ciphertext)),
   );
-  const secret = new TextDecoder('utf-8', { fatal: true }).decode(plaintext);
-  if (!/^[A-Za-z0-9_-]{43}$/.test(secret)) throw new Error('decrypted participant secret has an invalid shape');
-  return secret;
+  try {
+    const secret = new TextDecoder('utf-8', { fatal: true }).decode(plaintext);
+    if (!/^[A-Za-z0-9_-]{43}$/.test(secret)) throw new Error('decrypted participant secret has an invalid shape');
+    return secret;
+  } finally {
+    // Best-effort cleanup of owned mutable buffers, not a guarantee about
+    // browser internals, CryptoKey storage or non-zeroizable JavaScript strings.
+    new Uint8Array(plaintext).fill(0);
+  }
 }
 
 async function deriveKey(prfOutput: Uint8Array, aad: Uint8Array): Promise<CryptoKey> {
-  const keyMaterial = await crypto.subtle.importKey('raw', asArrayBuffer(prfOutput), 'HKDF', false, ['deriveKey']);
+  const rawPrf = asArrayBuffer(prfOutput);
+  let keyMaterial: CryptoKey;
+  try { keyMaterial = await crypto.subtle.importKey('raw', rawPrf, 'HKDF', false, ['deriveKey']); }
+  finally { new Uint8Array(rawPrf).fill(0); }
   const salt = await crypto.subtle.digest('SHA-256', asArrayBuffer(aad));
   return crypto.subtle.deriveKey(
     { name: 'HKDF', hash: 'SHA-256', salt, info: INFO },

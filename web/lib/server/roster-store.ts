@@ -19,6 +19,7 @@ import { participantLeaveRounds, type RosterEntry, type SigbashRosterRegistratio
 import { db, transaction } from './db';
 import type { StoredCredential } from './webauthn-store';
 import { consumeRateLimit } from './rate-limit';
+import { assertLegacyVault } from './vault-protocol';
 
 export interface RosterCeremonyStatus {
   participantId: string;
@@ -92,6 +93,7 @@ export async function getConfirmedVaultArtifact(userId: string): Promise<Confirm
 export async function getConfirmedVaultArtifactForVault(
   vaultId: string,
 ): Promise<ConfirmedVaultArtifact> {
+  await assertLegacyVault(vaultId);
   const rows = await db()<StoredRosterRow[]>`
     SELECT vault_id, artifact_json, digest, funding_address, status
     FROM vault_rosters
@@ -317,7 +319,8 @@ export async function completeRosterConfirmation(
 
 async function membershipForUser(userId: string): Promise<MembershipRow> {
   const rows = await db()<MembershipRow[]>`
-    SELECT vault_id, participant_id FROM vault_members WHERE user_id = ${userId}::uuid
+    SELECT m.vault_id, m.participant_id FROM vault_members m JOIN vaults v ON v.id = m.vault_id
+    WHERE m.user_id = ${userId}::uuid AND v.protocol = 'sigbash-v1'
   `;
   if (rows.length !== 1) {
     throw new Error(rows.length === 0 ? 'vault membership is missing' : 'user belongs to more than one vault');
@@ -329,6 +332,7 @@ async function getOrCreateRoster(vaultId: string): Promise<{
   artifact: PublishedRosterArtifact | null;
   missing: string[];
 }> {
+  await assertLegacyVault(vaultId);
   const existing = await readStoredRoster(vaultId);
   if (existing) return { artifact: existing, missing: [] };
 

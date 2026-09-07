@@ -17,7 +17,7 @@ export interface DatabaseRuntimeIdentity {
   fingerprint: string;
 }
 
-export async function captureDatabaseRuntimeIdentity(sql: Sql): Promise<DatabaseRuntimeIdentity> {
+export async function captureDatabaseRuntimeIdentity(sql: Sql | TransactionSql): Promise<DatabaseRuntimeIdentity> {
   const rows = await sql<Array<{
     database_name: string;
     database_oid: string;
@@ -44,7 +44,11 @@ export async function captureDatabaseRuntimeIdentity(sql: Sql): Promise<Database
  * the schema objects that enforce it. Raw rows never leave this process.
  */
 export async function captureDatabaseSnapshot(sql: Sql): Promise<DatabaseSnapshotEvidence> {
-  return sql.begin('ISOLATION LEVEL REPEATABLE READ READ ONLY', async (tx) => {
+  return sql.begin('ISOLATION LEVEL REPEATABLE READ READ ONLY', captureDatabaseSnapshotInTransaction) as Promise<DatabaseSnapshotEvidence>;
+}
+
+/** Allows a protocol-specific read to share this exact database snapshot. */
+export async function captureDatabaseSnapshotInTransaction(tx: TransactionSql): Promise<DatabaseSnapshotEvidence> {
     const versions = await tx<Array<{ server_version_num: string }>>`
       SELECT current_setting('server_version_num') AS server_version_num
     `;
@@ -102,7 +106,6 @@ export async function captureDatabaseSnapshot(sql: Sql): Promise<DatabaseSnapsho
       totalRows,
       stateDigest: digest(JSON.stringify(stateBody)),
     };
-  }) as Promise<DatabaseSnapshotEvidence>;
 }
 
 export function compareDatabaseSnapshots(

@@ -9,7 +9,7 @@ import {
   completeRosterConfirmation,
   getRosterConfirmationChallenge,
 } from '@/web/lib/server/roster-store';
-import { requireSessionUser } from '@/web/lib/server/session';
+import { requireLegacySessionUser } from '@/web/lib/server/session';
 import { asWebAuthnCredential } from '@/web/lib/server/webauthn-store';
 
 export const runtime = 'nodejs';
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const input = Input.parse(await request.json());
-    const userId = await requireSessionUser();
+    const userId = await requireLegacySessionUser();
     const challenge = await getRosterConfirmationChallenge({ challengeId: input.challengeId, userId });
     if (input.digest !== challenge.digest) throw new Error('browser confirmed a different roster digest');
     const response = input.response as AuthenticationResponseJSON;

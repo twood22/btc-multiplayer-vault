@@ -1,5 +1,24 @@
 # Bitcoin Multiplayer Vault — Product Specification
 
+## Protocol versions (authorized 2026-09-06)
+
+New development targets `presigned-graph-v2`, specified in
+[`PRESIGNED-PROTOCOL.md`](./PRESIGNED-PROTOCOL.md). The user explicitly approved
+replacing Sigbash with a finite, pre-authorized Taproot/Miniscript transaction
+graph while preserving the economics, cooperative MuSig2 and CSV recovery.
+That specification governs v2 and supersedes the Sigbash-specific requirements
+below only for explicitly identified v2 vaults. The following sections remain
+the complete `sigbash-v1` contract for existing vaults; missing version fields
+must never be interpreted as v2. No existing funded vault may be migrated by
+changing metadata. The immutable rollback baseline is commit
+`202345ffd8bab35590fe15b98d966c4267f194ef`.
+
+V2 is under implementation, not released. Progress and required evidence are
+tracked in [`PRESIGNED-V2-PLAN.md`](./PRESIGNED-V2-PLAN.md). Neither protocol is
+authorized for mainnet spending or public deployment by this development goal.
+
+## Legacy sigbash-v1 specification
+
 This is the authoritative product contract. It supersedes the repository's
 original signet-demo brief. The production product remains mainnet-only. A
 separately isolated default-global-Signet profile is now permitted for real

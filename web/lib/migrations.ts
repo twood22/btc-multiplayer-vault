@@ -13,6 +13,13 @@ export const EXPECTED_MIGRATION_VERSIONS = [
   '012_chain_reorganization',
   '013_signet_network',
   '014_runtime_liveness',
+  '015_presigned_protocol',
+  '016_legacy_protocol_boundary',
+  '017_presigned_runtime',
+  '018_presigned_chain_and_broadcast',
+  '019_presigned_fee_packages',
+  '020_presigned_release_audit',
+  '021_presigned_watch_revision',
 ] as const;
 
 export const EXPECTED_MIGRATION_FILES = EXPECTED_MIGRATION_VERSIONS

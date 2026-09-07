@@ -5,7 +5,20 @@
   "type": "module",
   "scripts": {
     "runtime:check": "node scripts/check-runtime.mjs",
-    "preweb:build": "npm run runtime:check && node scripts/check-build-network.mjs --record",
+    "preweb:build": "npm run runtime:check && node scripts/check-build-network.mjs --record && npm run presigned:offline:build && node scripts/presigned-build-identity.mjs",
+    "presigned:offline:build": "node scripts/build-presigned-offline.mjs",
+    "presigned:offline:test": "npm run presigned:offline:build && tsc --noEmit -p tsconfig.offline.json && tsx scripts/presigned-offline-acceptance.mts",
+    "presigned:observe-coins": "tsx scripts/presigned-observe-coins.mts",
+    "presigned:release-status": "node --conditions=react-server --import tsx web/scripts/presigned-release-status.ts",
+    "presigned:verify-database-restore": "tsx web/scripts/presigned-verify-database-restore.ts",
+    "presigned:signet-lifecycle": "tsx scripts/presigned-signet-lifecycle.mts",
+    "presigned:test:live-runner": "tsx scripts/presigned-live-lifecycle-regtest.mts",
+    "presigned:test:db": "bash scripts/run-presigned-db-acceptance.sh all",
+    "presigned:test:browser": "bash scripts/run-presigned-browser-acceptance.sh",
+    "presigned:test:pure": "tsx scripts/presigned-acceptance.mts pure",
+    "presigned:test:local": "tsx scripts/presigned-acceptance.mts local",
+    "presigned:test:container": "tsx scripts/presigned-container-acceptance.mts",
+    "presigned:assemble-acceptance": "tsx scripts/presigned-assemble-acceptance.mts",
     "web:dev": "next dev --webpack",
     "web:build": "next build --webpack",
     "web:start": "node scripts/check-build-network.mjs && next start",
@@ -126,6 +139,7 @@
     "@types/node": "^26.1.0",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
+    "esbuild": "0.28.1",
     "typescript": "^6.0.3"
   }
 }

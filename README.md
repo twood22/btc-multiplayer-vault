@@ -1,5 +1,123 @@
 # Bitcoin Multiplayer Savings Vault
 
+## Current development: pre-signed Taproot vault v2
+
+The authorized replacement architecture is `presigned-graph-v2`: three-person
+game economics enforced by exact pre-signed transactions, Taproot/Miniscript
+spending conditions, participant-only MuSig2 cooperation and N-1 CSV recovery.
+There is no online policy signer after setup. Each leaver keeps its final exit
+signature; all participants restore complete offline and two-passkey backups
+before the honest client releases a funding signature.
+
+See [the v2 protocol and threat model](./PRESIGNED-PROTOCOL.md) and
+[the implementation/evidence ledger](./PRESIGNED-V2-PLAN.md). The
+[V2 operator/recovery runbook](./PRESIGNED-OPERATOR-RUNBOOK.md) separates this
+protocol from preserved V1 deployment instructions. The complete product
+is still being verified. Core/regtest primitives and restart/reorg drills do not
+substitute for the optimized browser and real default-Signet lifecycle gates.
+Physical passkey checks remain deferred to friends' onboarding. No mainnet
+spending, deployment, public listener or outreach is authorized by this work.
+
+New vault creation requires an explicit `--protocol presigned-graph-v2` or
+`--protocol sigbash-v1`; the durable protocol cannot be changed later. Never
+point v2 transactions or API calls at an existing v1 vault. The merged v1
+rollback baseline is `202345ffd8bab35590fe15b98d966c4267f194ef`.
+
+V2 acceptance commands (each Core/database runner uses disposable private
+resources and labels regtest evidence explicitly):
+
+```bash
+npm run presigned:test:pure
+npm run presigned:test:local
+npm run presigned:offline:test
+npm run presigned:test:db
+npm run presigned:test:live-runner
+PRESIGNED_BROWSER_BUILD_APPROVED=true npm run presigned:test:browser
+PRESIGNED_BROWSER_BUILD_APPROVED=true PRESIGNED_BROWSER_NETWORK=mainnet npm run presigned:test:browser
+```
+
+`presigned:test:pure` executes a fixed, source-bound two-network cryptographic
+and legacy-regression plan plus all four typechecks. `presigned:test:local`
+adds the complete Core, database, saved-file browser and fresh optimized-app
+matrix. It refuses changed source, failed subprocesses, partial offline results,
+or modified retained transcripts. Retained browser/database artifacts are
+rechecked for their exact required scope, not only their hashes. Its owner-only `run.json` is local evidence,
+not a software release receipt. Node22.23.2, Core31.1, PostgreSQL16 and Chromium
+are required; `BITCOIN_CORE_BIN`, `POSTGRES_BIN`, `POSTGRES_LIB` and
+`PLAYWRIGHT_BROWSERS_PATH` support reviewed private runners outside this host.
+
+An exact-image run additionally requires a functioning **local rootless Podman**:
+
+```bash
+npm run presigned:test:container -- signet
+npm run presigned:test:container -- mainnet
+```
+
+These commands build the production Dockerfile, export and hash the actual OCI
+manifest/config/layers, execute the immutable image without mounted code, and
+run its real browser and operator-entrypoint checks. Nothing is pushed. The
+Signet-format image exercises the full game against isolated Core; the mainnet
+image proves the complete pre-funding passkey/backup ceremony and refusal to
+release funding without separate authorization. It does not bypass the real
+mainnet release gate with fabricated evidence. The local host currently has no
+container engine, so this path is implemented but actual image execution remains
+unverified. OCI metadata tests are explicitly not container-execution evidence.
+The standalone mainnet-format browser command above has passed the same
+pre-funding refusal path, but it does not stand in for this exact-image run.
+
+Public CI is explicitly authorized for the existing repository. The
+`Presigned V2 acceptance` workflow runs the full local matrix and both exact-image
+profiles on standard `ubuntu-24.04` runners when this V2 branch is pushed.
+It refuses private-repository execution, uses no paid runner, cache, artifact
+upload, registry push or deployment, and publishes only progress and verified
+synthetic-test receipts in normal job logs. Wallets, cookies, encrypted recovery
+kits and complete private test directories are never uploaded. Retained OCI
+bytes and a complete release dossier are not supplied by this log-only workflow;
+public CI success does not authorize funding or establish real default-Signet.
+
+The saved offline utility has passed the full six-ordering/four-cooperative/
+nine-recovery matrix and all ten native-wallet fee cases on one exact artifact.
+The resumable runner has passed those 19 lifecycle cases, five fee families and
+lost-reply recovery against isolated Core. Neither establishes real Signet.
+For the fresh isolated default-Signet host, `presigned:signet-lifecycle` accepts
+`status`, `init`, `fund`, `advance` or `verify`, followed by that host's exact owner-only
+`control.json` path. `status` is read-only. `init` reserves fresh wallet targets;
+`fund` commits 784,000 test sats plus at most 16,000 sats of fanout fees;
+`advance` performs one resumable pass and reports pending confirmations/CSV.
+`verify` is a separate read-only check of all completed lifecycles, decrypted
+backups, active confirmations, replacements and exact payouts; it cannot prepare,
+sign or broadcast. Retain the exact source checkpoint: changing executable source
+after `init` invalidates the run binding rather than silently reinterpreting it.
+Never supply an operational wallet or deterministic fixture keys. Keep the
+entire private run directory, its separate wrapping-key files and the isolated
+Core wallet; they are recoverable test state, not publishable evidence.
+
+After every actual requirement passes on the same source, the private
+`presigned:assemble-acceptance` command requires absolute paths via `--local-run`,
+`--signet-image`, `--mainnet-image`, `--signet-control` and
+`--write-protected-receipt`, plus `--network mainnet` or `--network signet`.
+It rereads the complete artifacts and invokes the real Signet verifier now;
+there is no argument for supplying a success flag or an invented evidence hash.
+The output must not already exist and its directory must be owner-only.
+Review and retain the resulting evidence, source and exact OCI directory.
+The receipt neither authorizes mainnet activity nor claims physical passkeys.
+
+Mainnet release requires both the general database-restore receipt and a new
+`PRESIGNED_V2_FUNDING_RESTORE_RECEIPT` with its independently reviewed
+`PRESIGNED_V2_FUNDING_RESTORE_RECEIPT_DIGEST`. The read-only
+`presigned:verify-database-restore` command compares explicitly configured
+`DATABASE_URL` and `RESTORED_DATABASE_URL` (distinct, verified-TLS databases).
+It requires `--vault-id`, `--epoch-id`, two distinct output paths via
+`--write-protected-receipt` and `--write-database-receipt`, and
+`--confirm-source-quiesced SOURCE_QUIESCED_FOR_BACKUP_RESTORE`.
+It does not pause services, perform a restore, authorize spending or replace
+the outstanding real-network, exact-image and physical-device release checks.
+
+## Preserved v1 implementation and historical evidence
+
+The sections below describe the unchanged `sigbash-v1` product and its historical
+limitations. They are not v2 acceptance, release or funding authorization.
+
 A mainnet-production-target implementation of the round-based product governed
 by the [authoritative product specification](./spec.md): Alice, Bob, and Carol each
 contribute the configured deposit to a shared Taproot vault. Solo withdrawals

@@ -1,9 +1,14 @@
 node_modules/
 .next/
 vault-build-network.json
+vault-presigned-build.json
+public/offline/presigned-recovery.html
+public/offline/presigned-recovery.manifest.json
 web/.next/
 *.tsbuildinfo
 .env
+.env.*
+!.env.example
 *.env.local
 live-run/
 test-results/

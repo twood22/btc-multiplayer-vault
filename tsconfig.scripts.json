@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.web.json",
+  "compilerOptions": { "incremental": false, "plugins": [], "types": ["node"], "target": "ES2023", "lib": ["ES2023", "DOM"] },
+  "include": ["scripts/presigned-*.mts", "scripts/lib/**/*.ts"],
+  "exclude": ["node_modules"]
+}

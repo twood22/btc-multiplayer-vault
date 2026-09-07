@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { webConfig } from '@/web/lib/server/config';
 import { toBase64url } from '@/web/lib/server/encoding';
 import { assertSameOrigin, jsonError } from '@/web/lib/server/http';
-import { requireSessionUser } from '@/web/lib/server/session';
+import { requireLegacySessionUser } from '@/web/lib/server/session';
 import { completeSigbashCustodyAuthorization } from '@/web/lib/server/sigbash-custody-store';
 import { asWebAuthnCredential, getAssertionChallenge } from '@/web/lib/server/webauthn-store';
 
@@ -15,7 +15,7 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const input = Input.parse(await request.json());
-    const userId = await requireSessionUser();
+    const userId = await requireLegacySessionUser();
     const response = input.response as AuthenticationResponseJSON & {
       clientExtensionResults?: { prf?: { results?: unknown } };
     };

@@ -1,5 +1,11 @@
 # Private default-Signet friends vault
 
+Version boundary: this is the preserved `sigbash-v1` operator procedure and
+historical provider blocker. The separate user-authorized `presigned-graph-v2`
+path is [PRESIGNED-OPERATOR-RUNBOOK.md](./PRESIGNED-OPERATOR-RUNBOOK.md), with live
+evidence tracked in [PRESIGNED-V2-PLAN.md](./PRESIGNED-V2-PLAN.md). Existing V1
+vaults retain their original rules; no funded vault is silently migrated.
+
 This is the current network-specific operator path for the real multiplayer
 vault, not a replacement product. Mainnet remains unauthorized. A successful
 local test, failed hosted-signing attempt, or historical CLI funding transaction

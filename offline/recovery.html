@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="__CSP__">
+<title>Presigned vault · Offline recovery</title><style>__STYLE__</style></head>
+<body><main>
+<p class="eyebrow">Presigned graph v2 · local-file utility</p>
+<h1>Recover without the service</h1>
+<p>This file contains its own cryptographic code. It makes no network requests and never broadcasts. Open your verified saved copy as a local file on a trusted computer, ideally disconnected from the network.</p>
+<p class="warning">Keep the encrypted backup and recovery key separate. Do not send either to a helper. Anyone with both can act as you. A compromised browser, operating system, or utility file can steal keys; compare this file’s SHA-256 with the independently saved release record.</p>
+<p id="status" role="status">Loading local cryptography…</p>
+<section><h2>1. Verify your saved kit</h2>
+<label>Encrypted recovery file<input id="backup" type="file" accept="application/json,.json"></label>
+<pre id="binding">No file selected.</pre>
+<label>Graph digest from your independently saved record<input id="expected-graph" maxlength="64" autocomplete="off" spellcheck="false"></label>
+<label>Funding transaction ID from that same record<input id="expected-funding" maxlength="64" autocomplete="off" spellcheck="false"></label>
+<label>Separate recovery key (re-enter for each private-key action)<input id="secret" type="password" autocomplete="off" spellcheck="false" maxlength="43"></label>
+<button id="verify">Decrypt locally and verify all my exits</button>
+<button id="forget">Forget this session</button>
+<p>Keys are held briefly in memory only. JavaScript cannot guarantee erasure of immutable strings. Closing the page forgets the session; nothing is placed in browser storage.</p>
+</section>
+<section id="spending" hidden><h2>2. Choose the exact spend</h2>
+<p class="warning">Offline verification does not prove current chain state. With your own fully validating Bitcoin Core, check the exact network/genesis, source outpoint, active block, confirmations, unspent status and current fee policy. Recovery needs the committed CSV age. These signatures authorize only the fixed payouts shown below.</p>
+<label>Spend type<select id="spend-kind"><option value="solo">My unilateral exit</option><option value="cooperative">Unanimous cooperative exit</option><option value="recovery">Timelocked N−1 recovery</option><option value="final-sweep">Final-owner sweep</option></select></label>
+<label>Exact source / exit order<select id="source"></select></label>
+<button id="prepare">Rebuild and review spend</button>
+<pre id="review">Select a spend.</pre>
+<label><input id="reviewed" type="checkbox">I independently checked this exact source, chain age, payouts and fee. I want to release this signature.</label>
+<button id="sign-single">Sign my solo exit or final sweep</button>
+<h3>Peer exchange for cooperative exit or recovery</h3>
+<p>Start a fresh proposal, export its public peer file, and pass it to the other current participants through your chosen channel. Each person opens their own kit here, imports the same peer file, reviews it, signs locally, and returns their updated public file. No private key or secret nonce belongs in that exchange.</p>
+<label>Import a public peer file<input id="peer" type="file" accept="application/json,.json"></label>
+<button id="nonce">Create my public cooperative nonce</button>
+<button id="partial">Consume my nonce and sign cooperative partial</button>
+<button id="recovery-share">Sign my timelocked recovery contribution</button>
+<button id="export-peer">Save public peer file</button>
+<button id="finalize-peer">Verify quorum and finalize exact transaction</button>
+<p>Cooperative secret nonces exist only in this open page. A reload or failed signing attempt requires a fresh proposal with a new ID. Nonces cannot be exported or restored. A signed public partial can be downloaded again from this same session.</p>
+<pre id="peer-status">No peer exchange.</pre>
+</section>
+<section id="transactions" hidden><h2>3. Save and independently verify the transaction</h2>
+<label>Import a previously signed public transaction file<input id="transaction-file" type="file" accept="application/json,.json"></label>
+<label>Or paste the exact fully signed funding transaction hex<textarea id="funding-hex" spellcheck="false"></textarea></label>
+<button id="import-funding">Verify exact signed funding transaction</button>
+<p>Anyone who receives a signed transaction can broadcast it. Do not publish it until you intend that spend. Verify it with your own Core’s <code>decoderawtransaction</code> and <code>testmempoolaccept</code> before broadcasting. Confirm each parent before relaying its next game round.</p>
+<pre id="transaction-review">No finalized transaction.</pre>
+<button id="save-transaction">Save verified public transaction JSON</button>
+<button id="save-hex">Save raw signed transaction hex</button>
+</section>
+<section id="fees" hidden><h2>4. Optional exact-payout fee rescue</h2>
+<p>The fixed parent never changes. Your payout or wallet refund is reproduced in full; a separately confirmed external wallet coin pays the entire child fee. Do not use vault coins, unconfirmed sponsors, or a sponsor promised to another transaction.</p>
+<p>Import the observation file made with your own private Core using the supplied <code>presigned-observe-coins</code> command. Observations are not proofs: recheck their active blocks and spendability before broadcast. You can also reopen a previously saved public fee draft.</p>
+<label>Public coin observations JSON<input id="fee-observations" type="file" accept="application/json,.json"></label>
+<label>Confirmed sponsor transaction ID<input id="sponsor-txid" maxlength="64" spellcheck="false"></label>
+<label>Sponsor output number<input id="sponsor-vout" type="number" min="0" value="0"></label>
+<label>Exact additional child fee, sats<input id="child-fee" type="number" min="1" value="1000"></label>
+<label>Your maximum child fee, sats<input id="fee-cap" type="number" min="1" value="2000"></label>
+<label>Target package rate, millisats/vbyte<input id="target-rate" type="number" min="1" value="2000"></label>
+<label>Minimum relay rate, millisats/vbyte<input id="relay-rate" type="number" min="1" value="1000"></label>
+<label>Prior signed fee-child hex (only for a child-only replacement)<textarea id="previous-child" spellcheck="false"></textarea></label>
+<label>Incremental replacement relay rate, millisats/vbyte<input id="incremental-rate" type="number" min="1" value="1000"></label>
+<button id="build-fee">Build fee child for the reviewed signed parent</button>
+<label>Reopen public fee draft<input id="fee-draft-file" type="file" accept="application/json,.json"></label>
+<pre id="fee-review">No fee draft.</pre>
+<button id="save-fee-draft">Save complete public fee draft</button>
+<button id="save-fee-psbt">Save unsigned external-wallet fee PSBT</button>
+<label><input id="fee-reviewed" type="checkbox">I checked both coins, the preserved payout/refund, sponsor change, exact extra fee and rate limits. I approve this child.</label>
+<button id="sign-fee">Sign my payout portion locally</button>
+<label>External wallet’s signed fee PSBT<textarea id="wallet-fee-psbt" spellcheck="false"></textarea></label>
+<label>Wallet roles for a funding-refund child<select id="funding-roles"><option value="change,sponsor">My wallet signed refund and sponsor inputs</option><option value="change">My wallet signed only the refund input</option><option value="sponsor">My wallet signed only the sponsor input</option></select></label>
+<button id="import-fee-wallet">Verify wallet signatures</button>
+<button id="finalize-fee">Finalize and save signed parent + fee child</button>
+<p>For an unconfirmed parent, inspect both transactions and submit the exact two-transaction package with your own Core. If the parent is already confirmed, submit the child alone. Relay and mining are not guaranteed. Never substitute a newly built parent for the committed one.</p>
+</section>
+<footer>No service login, passkey origin, analytics, remote code, storage, or broadcaster is used by this utility. Mainnet spending remains your separate decision. Physical-device passkey checks remain deferred to onboarding.</footer>
+</main><script>__SCRIPT__</script></body></html>

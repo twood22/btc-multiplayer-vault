@@ -1,5 +1,11 @@
 # Passkey product status
 
+Version boundary: this document retains the original `sigbash-v1` product and
+its historical gates. Current V2 custody, portable recovery and actual test
+scope are documented in [PRESIGNED-V2-PLAN.md](./PRESIGNED-V2-PLAN.md) and
+[PRESIGNED-OPERATOR-RUNBOOK.md](./PRESIGNED-OPERATOR-RUNBOOK.md). Neither virtual
+passkey evidence nor the architecture change is funding authorization.
+
 The concise current verdict, verified baseline, open risks, and ordered hard
 gates are maintained in [`STATUS.md`](./STATUS.md). The next real integration
 milestone is the isolated standard-Signet profile in

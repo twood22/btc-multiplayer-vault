@@ -6,7 +6,7 @@ import { assertSameOrigin, jsonError } from '@/web/lib/server/http';
 import { recordLiveSigbashRegistration } from '@/web/lib/server/roster-store';
 import { assertSigbashCustodyLease } from '@/web/lib/server/sigbash-custody-store';
 import { getSigbashProvisioningManifest } from '@/web/lib/server/sigbash-provisioning-store';
-import { requireSessionUser } from '@/web/lib/server/session';
+import { requireLegacySessionUser } from '@/web/lib/server/session';
 import { consumeRateLimit } from '@/web/lib/server/rate-limit';
 
 export const runtime = 'nodejs';
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const input = Input.parse(await request.json());
-    const userId = await requireSessionUser();
+    const userId = await requireLegacySessionUser();
     await consumeRateLimit({
       action: 'sigbash_key_registration',
       subject: userId,

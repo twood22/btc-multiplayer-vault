@@ -1,0 +1,356 @@
+# V2 implementation and evidence plan
+
+Goal authorized 2026-09-06. Status: in progress; no v2 release or real-Signet funding yet.
+Rollback: merged commit `202345ffd8bab35590fe15b98d966c4267f194ef`.
+Working branch: `codex/presigned-vault-v2`. No existing vault mutation, mainnet
+spending, public listener, deployment or outreach is authorized.
+
+On 2026-09-07 the user separately authorized publishing the V2 source and tests
+to the existing public repository, using zero-cost test infrastructure. The new
+public CI runs the complete local matrix plus both genuine rootless OCI-image
+profiles on standard Ubuntu runners. It refuses private-repository execution
+and has no paid runners, caches, artifact uploads, registry pushes or deployments.
+Normal logs contain synthetic-test progress and independently revalidated
+receipts; no wallets or recovery kits are uploaded. These CI additions change
+the source digest: the 47-pass checkpoint below remains historical evidence for
+`80460afa...`, not a claim that the new CI source has already passed. Retaining
+the full exact-image bytes for final release assembly is still separate work.
+
+| Requirement | Implementation / acceptance evidence | Status |
+| --- | --- | --- |
+| Versioned protocol, threat model, full scope | PRESIGNED-PROTOCOL.md; independently reviewed findings reproduced and corrected | Implemented and documented; three scoped internal reviews and rereviews complete, not an external audit |
+| Four Miniscript trees, exact nine-transaction graph | src/presigned/graph.ts; Core drill below | Core graph and actual browser reconstruction verified |
+| Twelve preauthorizations, missing leaver signatures | src/presigned/signing.ts; eight wallet formats; Core accepts/rejects below | Core and actual browser ceremony verified |
+| Stable funding and signed-epoch retention | Native SegWit, mandatory controlled refund, retained epochs, durable wallet-start intent | Core + PostgreSQL + optimized browser verified in the passing frozen-source full aggregate |
+| Portable complete recovery before wallet signing | Authenticated encrypted kits, independent secret, all three owner exits restored | Unified exact offline artifact passed full lifecycle and ten wallet/fee cases on Core |
+| Two-passkey browser custody and signing | Full v2 ceremony, local append-only digest/backup ledger, Web Locks | Six virtual PRF passkeys passed actual optimized browser; physical checks deferred |
+| Cooperative, CSV, final sweep | Core19 confirmed cases and56 rejections; funding and all game transactions V3 | Core and actual browser signing passed; lifecycle confirmations also proven by standalone offline browser |
+| Fee adaptation with stable descendants | Funding, solo, cooperative, CSV and final payout sponsorship; TRUC/rolling-floor tests | Unified offline/database families, actual Core fee tests and clean Signet-format browser wrapper pass in the full aggregate |
+| Versioned database/runtime/watcher | Migrations015-021, exact-send journals, unknown-state preservation, reverse reorg/restore and monotonic poll revision | Lost-lease/ABA and both fair-queue regressions pass actual Core/PostgreSQL in the corrected-source full aggregate |
+| Substantive v2 readiness and release gate | Exact-image/check receipts and exact funding-state restore proof; no provider gate bypass | Evidence boundary suite has49 fail-closed negatives; native restore has22; fixed evidence/image/assembly producers implemented but end-to-end release proof pending |
+| Real default-Signet full lifecycles | Isolated keys/coins, txids, confirmations, output audit | Resumable runner and read-only re-verification passed 19 isolated-Core cases; actual default-Signet wallet still unfunded |
+| Documentation and independent security review | Protocol, operator/recovery runbook, versioned historical docs; reviewer findings reproduced and fixed | Three reviews and focused independent rereviews completed; no new findings in the corrected delta |
+| Physical-device passkeys | Friends' onboarding, explicitly deferred by user | Deferred; not tested |
+| Mainnet activation/public deployment | Separate user authority and release review | Not authorized |
+
+The preliminary Core feasibility experiment is not integration evidence and
+does not satisfy the pending requirements above. Unchecked rows block completion
+of the active development goal, except the explicit deferred/unauthorized items.
+
+## Current verified checkpoint (2026-09-07 UTC)
+
+The corrected-source **47-command local aggregate passed** from 07:05:42 to
+08:05:09 UTC. The exact source digest is
+`80460afa6fb7f6ab1568f779efceb8abc4c247622f07fb08ef67c688e1e83267`; run digest
+`c57f61311e9e4cb3d105461f689d6b90dec089e1f7c17095e431edd7e5cd90a2`.
+The parent runner exited zero. Root independently reread the complete fixed
+execution plan, every transcript and auxiliary-artifact hash, database/browser
+semantics, and the actual offline utility bytes. All four TypeScript projects,
+both explicit network-format crypto and legacy matrices, seven actual Core
+suites, all five PostgreSQL suites, the unified offline artifact and the clean
+optimized Signet-format browser full game passed.
+
+Final independent transaction review identified two P2 gaps after the passing
+earlier-source run: accepted entries can monopolize both oldest-100 retry queues, and watcher
+state hashes do not fence stale same-state or advance/reorg/return (ABA)
+publications after a lost session lease. Root reproduced both retry defects and
+three stale-publication schedules against actual Core/PostgreSQL, including
+confirmation followed by block invalidation. The corrected queues rotate by
+`updated_at, id`; migration021 adds a monotonic revision checked alongside the
+state digest on every successful and deferred watch publication.
+The targeted chain/broadcast suite passed 12 groups in
+`/tmp/btc-presigned-db.YblUsL`; all five fee families and queue fairness passed in
+`/tmp/btc-presigned-db.0SvheC`. The complete aggregate then reran both regressions
+successfully in `/tmp/btc-presigned-db.BAMASU`. Test databases and Core nodes were
+checked stopped. All three reviewers completed focused rereviews without new
+findings; exact scope and limits are in
+[PRESIGNED-V2-REVIEW.md](./PRESIGNED-V2-REVIEW.md).
+
+The other two reviews found narrower hardening issues. The report CLI now shares
+the actual funding gate's deployed-utility/source/image check. Forty-nine
+evidence-boundary tests pass, including real CLI utility-mismatch refusal and
+rejection of explicit failed Core records followed by a successful summary.
+Owned mutable key-envelope buffers are cleared in `finally` paths; 22 custody
+cases pass, including real WebCrypto success and exception cleanup. This is
+best-effort memory hygiene, not erasure of JavaScript strings or browser internals.
+
+The matching optimized mainnet-format browser passed in
+`/tmp/btc-presigned-browser.knCexA`, proving the actual pre-funding refusal before
+wallet PSBT export, signing intent, signature release or send RPC. The aggregate's
+Signet-format browser passed in `/tmp/btc-presigned-browser.KJDcJ2`, including
+four genuine passkey reauthentications and confirmed funding/solo/solo/final-sweep
+transactions. Both clean wrappers exited zero. Both browser scopes used isolated
+regtest facts, six virtual PRF credentials and zero public-network broadcasts;
+neither is real Signet, physical-device, mainnet-spending or image-execution
+evidence. All eleven aggregate Core nodes, the separate mainnet test Core, test
+PostgreSQL and both browser listeners were checked stopped.
+
+The aggregate's exact offline utility
+`3afcdac5caf72eb0c03598ce8165c78961f4463f7ef50adf6f715f02b9599807` passed 70
+complete kit restorations, 31 browser-signed lifecycle confirmations, all six
+solo orderings, four cooperative rounds, nine recovery signer subsets and ten
+native-wallet fee rescues with confirmed replacements. It made zero network
+requests and did not persist secrets. The same-source resumable Core runner
+passed all 19 lifecycles, 19 pre-funding backup gates, three lost replies without
+resending, 57 restored kits, 80 hostile rejections and five fee families. Its
+read-only verifier rejected an actually missing backup and an invalidated block;
+reconsidering the block restored successful verification. The native database
+restore recovered six encrypted key envelopes and passed 22 negative boundaries.
+
+Owner-only copies of the complete run, both browser scopes, selected public
+Core/restore summaries and the exact offline HTML/manifest are retained in
+`live-run/presigned-v2-evidence.Z5bbaY/`. The copied run was revalidated against
+the current source, each transcript and auxiliary-artifact digest, the full
+fixed execution plan and the actual utility/input bytes. The source archive
+also reproduced the exact source digest when privately extracted without
+executing it. This is a **private local evidence dossier, not a release receipt**.
+It contains no participant wallet, RPC cookie or recovery secret. The original
+outbound-only default-Signet node remains running.
+
+At 07:56 UTC the actual default-Signet wallet still had zero confirmed and zero
+pending test sats, with no initialized lifecycle. A native backup of that fresh
+test-only wallet was restored into a separate network-disabled default-Signet
+node; its reserved address remained owned and solvable, and the verification
+node stopped cleanly. That private backup is kept separately from this dossier;
+it is recoverability evidence, not a funded Signet lifecycle. Actual container
+preflights for both network profiles failed because rootless Podman is unavailable.
+Fresh read-only engine checks again found no local container engine or QEMU;
+`unshare -Ur true` failed at `uid_map` with operation not permitted. No engine was
+installed and no host policy was weakened. Finishing requires isolated
+default-Signet test coins and a suitable private container runner; actual image
+execution, real default-Signet lifecycles and final evidence assembly remain
+unproven. Mainnet spending, public exposure/deployment and outreach still require
+separate user authority. Physical-device checks remain explicitly deferred.
+
+The earlier source `49eacf7307d06c9a9d55b7f57edadb9c3dc0ca397cc15f42d100b39b1b049835`
+passed from 05:31:19 to 06:28:42 UTC with run digest
+`1617b5a6377658d1bb97fecd537b1fd245ba2d0673787efc5903791ea733c946`.
+Its private source/evidence dossier `live-run/presigned-v2-evidence.kg32fM/` is
+preserved as historical proof with the subsequently identified defects clearly
+marked; it is not evidence for the corrected source or a release.
+
+The historical entries below retain failures, superseded digests and earlier
+partial evidence. Their old in-progress statements are not the current status.
+
+## Implementation evidence history (2026-09-06 onward)
+
+- `node_modules/.bin/tsx src/presigned/acceptance.ts`: passes eight native-wallet
+  combinations with preauthorizations created before wallet signatures, all nine
+  exits, missing-leaver and transaction/graph/role/epoch mutation rejection, and
+  valid alternate-witness recognition. Offline cryptography, not browser proof.
+- `node_modules/.bin/tsx scripts/presigned-core-acceptance.mts`: actual isolated,
+  network-disabled Core 31.1 accepted 72 exit cases, rejected 144 missing-signature
+  or altered-payout cases, reproduced 32 Miniscript descriptors, and confirmed
+  all six full first/second exit orderings across eight wallet-format mixtures.
+  Latest all-V3 funding evidence: `/tmp/btc-presigned-core-aBP3kj/graph-acceptance.json`; automatic node
+  shutdown completed. No public-network broadcasts. This does not yet prove
+  cooperative/recovery/final sweeps, fee packages, browser or live Signet.
+- Independent component suites report portable-kit/passkey-contract, fee-child
+  cryptography and graph-reconciliation passes. Their actual browser/database/
+  Core integration and root review remain separate acceptance items.
+- `scripts/presigned-core-spends.mts`: Core31.1 confirmed four genuinely
+  interactive cooperative rounds, all nine N-1 recovery signer subsets (18
+  exact premature/one-block-early checks), and six final sweeps; 38 witness or
+  payout mutations rejected. Latest all-V3 funding-and-spends evidence is
+  `/tmp/btc-presigned-core-MEk0TA/spends-acceptance.json`; the node stopped cleanly.
+- Production V3 solo fee constructors passed real Core walletprocesspsbt for
+  P2TR/P2WPKH sponsorship, sibling eviction, child replacement, topology limits
+  and real rolling-floor rescue in `/tmp/btc-presigned-core-vLeo9M`.
+- Independent Core observations proved high-S, annex and low-fee funding can
+  be consensus-mined despite strict send-policy rejection, and a leaver-only
+  SIGHASH_ALL exit can confirm unchanged. Evidence `/tmp/btc-presigned-core-2niFpp`;
+  separate trusted-Core confirmed recognition is being implemented, not a
+  relaxation of wallet signing or submission rules.
+- New provider-free browser ceremony/routes, immutable V2 creation, durable
+  wallet-start intent, legacy route and database write boundaries are implemented.
+  Real production-browser acceptance, actual runtime/watch/broadcast integration,
+  independent final review and default-Signet lifecycles remain incomplete.
+- Funding-fee Core evidence `/tmp/btc-presigned-core-wquryX/funding-fees-acceptance.json`
+  verifies both native wallet roles, absent/present parent package submission,
+  child-only replacement, unchanged refunds and all descendant txids, and an
+  actual rolling mempool floor rise from0.1 to2.102 sat/vB. Separate54-child
+  cryptographic cases and10 boundary groups pass. A false caller-provided
+  confirmed-sponsor assertion is deliberately disproved by real Core; the
+  production adapter must independently observe every source and sponsor.
+- Core/PostgreSQL chain and broadcast evidence `/tmp/btc-presigned-core-EtrYwX/chain-broadcast-db-acceptance.json`
+  covers lost send replies without duplicate send, restart, pending versus
+  confirmed source availability, reverse descendant reorganization and ordered
+  restoration, retained epoch conflicts and same-txid MuSig restarts. The
+  independent reviewer reproduced a stale worker overwriting a newer accepted
+  result; attempt-count compare-and-swap now protects both success and failure
+  writes. Complete epoch-set and same-epoch snapshot digests are rechecked under
+  the vault lock before publishing a watch snapshot or vault status.
+- The isolated, fully synchronized default-Signet Core31.1 node uses a fresh
+  test-only wallet and no pre-existing participant wallet. Its test balance is
+  still zero; no v2 real-Signet transaction or lifecycle has been claimed.
+- `scripts/presigned-offline-acceptance.mts` completed the actual local-file
+  browser lifecycle with HTTP disabled and zero network requests: 44 encrypted
+  kit restorations and 31 browser-signed transactions confirmed by Core31.1,
+  covering all six solo/solo/final-sweep orderings, four cooperative rounds and
+  nine N-1 recovery signer subsets. Lost cooperative nonce restoration failed
+  closed and a fresh complete signing ceremony preserved the exact payment.
+  Evidence: `/tmp/btc-presigned-offline.EKikvj/offline-browser-acceptance.json`;
+  utility SHA256 `406a6b82dfd5d526007e06ad1709d9d77601900d05a64d07e3683f0092770252`.
+  This proves that exact utility, not later fee-UI changes, physical passkeys,
+  real Signet or production release readiness.
+- Optimized browser evidence `/tmp/btc-presigned-browser.HF8xB1/presigned-browser-acceptance.json`
+  passed three independent identities, six virtual PRF credentials, twelve
+  browser-created preauthorizations, nine restoration receipts, interrupted
+  funding-intent persistence, three wallet signatures and final approvals,
+  and actual funding/solo/solo/final-sweep API broadcast and confirmation.
+  Cooperative MuSig2 and mature recovery were genuinely browser-signed and
+  accepted by Core policy. The bridge labels real regtest facts as Signet-format
+  inputs only inside this test; it is explicitly not real Signet evidence.
+  Later utility-download, readiness and fee-import changes need a fresh build.
+- Offline fee browser evidence `/tmp/btc-presigned-offline.MR6h54/offline-browser-fees-acceptance.json`
+  passed both P2TR and P2WPKH external Core wallets for funding, solo, cooperative,
+  recovery and final-sweep parents: ten packages accepted, ten public drafts
+  restored after reload, ten child replacements confirmed with unchanged parent
+  and payout/refund. Utility SHA256
+  `3afcdac5caf72eb0c03598ce8165c78961f4463f7ef50adf6f715f02b9599807`.
+  The earlier full lifecycle artifact and this fee artifact have distinct hashes;
+  final release requires a complete rerun of the same final utility.
+- Fee PostgreSQL/Core evidence `/tmp/btc-presigned-db.9UL2WO/presigned-fee-db-acceptance.log`
+  passed all five fee families: exact authority, passkey-counter challenge replay,
+  approval versus send intent separation, lost reply recovery without resending,
+  replacement supersession, confirmed restart and owner isolation. A subsequently
+  added parent-confirmation-during-offline-signing regression reproduced a real
+  stale-source rejection. Its targeted fix passed in
+  `/tmp/btc-presigned-db.a59ur4/presigned-fee-db-acceptance.log`.
+- Unified exact offline artifact evidence
+  `/tmp/btc-presigned-offline.8kfy3x/offline-browser-acceptance.json` passed
+  70 complete encrypted-kit restorations, all six full solo orderings,
+  four cooperative rounds, nine recovery signer subsets, 31 browser-signed
+  lifecycle transactions confirmed by Core and all ten native-wallet/parent
+  fee rescues with replacement children confirmed. The utility hash is
+  `3afcdac5caf72eb0c03598ce8165c78961f4463f7ef50adf6f715f02b9599807`;
+  zero network requests and persistent secret storage. No real-Signet claim.
+- The new `scripts/presigned-signet-lifecycle.mts` verifies the exact isolated
+  default-Signet host and exposes explicit `init`, `status`, `fund` and `advance`
+  operations. Its shared orchestration passed 19 full isolated-Core cases with
+  fresh random participant keys, complete encrypted kit readback before wallet
+  signing, durable exact transaction intents, all output checks and repeated
+  resumed observations. Evidence: `/tmp/btc-presigned-live-runner.sP17kH` and
+  `/tmp/btc-presigned-core-Hof2PW/resumable-lifecycle-runner.json`.
+  Its later fee-aware and interruption-hardened runner passed in
+  `/tmp/btc-presigned-core-Jvj0hy/resumable-lifecycle-runner.json` with private
+  state `/tmp/btc-presigned-live-runner.IXoXTM`: all19 lifecycles, all five
+  fee families with confirmed child replacements, three lost successful
+  responses without duplicate sends, all19 pre-funding backup gates, retained
+  interrupted setup and complete payout/refund/sponsor-change audits.
+  Only a read-only live `status` was run; it found no initialized lifecycle,
+  zero confirmed test sats and zero pending test sats.
+- Native `pg_dump`/`pg_restore` evidence
+  `/tmp/btc-presigned-restore.vqwsYf/acceptance.json` and
+  `/tmp/btc-presigned-db.sOHtDa/presigned-restore-db-acceptance.log` passed
+  actual full-database restoration, decryption of six recovered key envelopes,
+  three owner-exit proofs per envelope and22 rejection boundaries.
+  The new exact funding-state restore receipt shares a repeatable-read snapshot
+  with the full database digest, binds every retained epoch and current custody
+  material, and is enforced separately by the mainnet release gate.
+  Counters/last-used timestamps may advance without changing restored keys.
+  Synthetic PRF transport and funding coins in this drill do not prove physical
+  devices, production TLS endpoints, real Signet or an authorized release.
+- The expanded optimized-browser assertions passed in
+  `/tmp/btc-presigned-browser.WhxHQa/presigned-browser-acceptance.json` and
+  `/tmp/btc-presigned-core-JfFKh7/optimized-browser-acceptance.json` against
+  optimized source `b4d2a9fbbd51dd60e6ca4a924f39a32ff3324958983dd07ec167cb11135153f2`.
+  All five fee parent families passed signing/approval; funding, both solo
+  exits, final sweep and their fee children were broadcast and confirmed.
+  Four genuine passkey reauthentications included a deliberately absent session
+  after final-sweep signing, without losing retained signatures or local gates.
+  The preceding run failed after the real fifteen-minute session expired;
+  production session duration was not relaxed.
+  The outer shell then failed because its source was edited while it was
+  running. Therefore this is a passed browser test, not a clean aggregate run.
+  The exact web listener, test PostgreSQL and test Core were verified stopped.
+  Browser/database wrappers now copy code-only private snapshots before starting
+  services; that correction and the new aggregate plan require a clean rerun.
+- `presigned:test:pure` and `presigned:test:local` now execute fixed matrices,
+  bind commands/transcripts to the actual source digest and reject partial
+  offline results. The graph-format suite now explicitly selects each requested
+  network; changing only the environment previously left some fixture-only
+  suites on their default Signet format. No earlier implicit second-format
+  claim is treated as new proof. The first full36-step pure run passed at
+  `/tmp/btc-presigned-acceptance.a9J3L6/run.json`, source
+  `2f633c5a0b3f862a14007fb4baa11100ead8bd17cadde73f55efb6d28c6d099f`.
+  Later evidence-reader hardening additionally verifies exact retained artifact
+  names, full-game versus mainnet-refusal scope, native restored custody and
+  every fixed image command/environment/zero exit. The updated evidence-parser
+  regressions passed42 negative boundaries, including actual assembly CLI
+  refusals with no release output; OCI metadata/hash regressions passed13.
+  These are parser tests, not genuine image or release evidence.
+- `presigned:test:container` now builds and runs the exact OCI artifact with
+  rootless Podman, without publishing or mounting code. It verifies both encoded
+  layer hashes and uncompressed filesystem digests, distinguishing a manifest
+  digest from a local config ID. Actual preflight in `/tmp/btc-presigned-image.anZEQy`
+  failed because Podman is absent; no container execution or host policy change.
+  `presigned:assemble-acceptance` rereads full local/image artifacts and runs a
+  fresh read-only live Signet verification before producing software evidence.
+  It cannot yet produce a genuine complete receipt here.
+- The fresh optimized mainnet-format browser and outer wrapper both passed in
+  `/tmp/btc-presigned-browser.sJYGUU/presigned-browser-acceptance.json`, source
+  `a25f001d5b1767f8692caf3c3e09030b2c6a0e809c9fe27dbb29ad34f206235e`.
+  Three identities, six virtual PRF passkeys, twelve counterparty signatures
+  and all portable/passkey restorations preceded an actual funding refusal.
+  Without separate authorization the server created no wallet-signing intent,
+  accepted no wallet signature, exported no wallet PSBT and made no send RPC.
+  The build used isolated Core facts; it is neither actual mainnet spending nor
+  real Signet or container execution. The web listener, test PostgreSQL pidfile
+  and Core pidfile were checked after clean completion and were stopped.
+  The initial local aggregate `/tmp/btc-presigned-acceptance.9q1cnd` was
+  intentionally stopped at21/47 after a separate read-only probe found the
+  operator import defect below. It is incomplete, not a passed aggregate.
+- The new read-only lifecycle verifier passed in
+  `/tmp/btc-presigned-core-QrEisK/resumable-lifecycle-runner.json`, source
+  `a25f001d5b1767f8692caf3c3e09030b2c6a0e809c9fe27dbb29ad34f206235e`,
+  private state `/tmp/btc-presigned-live-runner.ts7EMG`. All19 lifecycles and
+  five fee replacements confirmed; it reread57 complete encrypted kits,
+  validated80 hostile rejection records and independently rechecked active
+  confirmations and exact payouts/refunds/sponsor changes. Wrong source,
+  missing backup and actual block invalidation were rejected; reconsidering
+  the block restored successful verification. Verification created no journal
+  events and made no send requests. All19 pre-wallet backup gates and three
+  lost replies without duplicate send passed; Core stopped. This remains
+  isolated regtest, not default-Signet proof.
+- A real `presigned:release-status` invocation with valid IDs failed before
+  any prerequisite result because its dynamic server imports lacked the
+  `react-server` runtime condition. The earlier missing-argument probe did not
+  reach those imports. The supported npm command now supplies that condition;
+  new clean-environment probes reach the missing-image and missing-TLS-database
+  prerequisites without external access or any report. Updated boundary tests
+  pass43 rejection cases. Exact-image validation now requires those later
+  import probes as well as the three original argument guards.
+- Fresh optimized mainnet-format browser and clean wrapper evidence after the
+  operator fix is `/tmp/btc-presigned-browser.m2OsxO/presigned-browser-acceptance.json`,
+  source `de696f2377451352d19393c28271c937d86caf79fb79fa4c7a9de56e0b23ebbc`.
+  It passes the same complete custody/pre-funding refusal scope, not mainnet
+  spending or image execution. Test web/PostgreSQL/Core were checked stopped.
+  The local aggregate `/tmp/btc-presigned-acceptance.s051TD` passed36 fixed unit
+  steps and the Core graph/spend suites, then failed at the solo-fee test's
+  stale unconfirmed-funding expectation. It is not a passed aggregate.
+- [PRESIGNED-OPERATOR-RUNBOOK.md](./PRESIGNED-OPERATOR-RUNBOOK.md) now documents
+  V2 evidence, runtime configuration, participant funding/custody, exact database
+  restoration, separate mainnet release, fee rescue and coordinator-free recovery.
+  Preserved V1 status/deployment/passkey documents have explicit version notices.
+- The solo-fee test incorrectly expected a V3 first exit to be rejected while
+  V3 funding was unconfirmed. The old mixed-version rejection no longer applied
+  after funding itself became V3. Core correctly permits one V3 child and
+  rejects a third unconfirmed generation; the app's fee workflow separately
+  requires confirmed round inputs. The corrected test explicitly verifies all
+  three boundaries without changing production code. Full fee acceptance then
+  passed in `/tmp/btc-presigned-core-nOPWnG/fee-acceptance.json`, including an
+  actual eviction-driven floor rise from0.1 to2.102 sat/vB, unchanged payouts,
+  fee rescue and confirmed replacement. Core stopped cleanly. This matches
+  [BIP431](https://bips.dev/431/) and the
+  [Core31.1 TRUC regression tests](https://github.com/bitcoin/bitcoin/blob/v31.1/test/functional/mempool_truc.py).
+  The fresh full47-step run passed in `/tmp/btc-presigned-acceptance.LUbdiB`,
+  source `49eacf7307d06c9a9d55b7f57edadb9c3dc0ca397cc15f42d100b39b1b049835`.
+  The matching mainnet-format browser and outer wrapper passed in
+  `/tmp/btc-presigned-browser.pcRYga/presigned-browser-acceptance.json`.
+  Retained-evidence validation checked that exact source, six virtual PRF
+  credentials and actual refusal before funding; no mainnet spending, physical
+  device, full-game or image-execution claim. The exact web listener and private
+  PostgreSQL/Core pidfiles were independently checked stopped. The full47-step
+  aggregate and its copied evidence were then independently revalidated; see
+  the current checkpoint above for the exact scope and remaining blockers.

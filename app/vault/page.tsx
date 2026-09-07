@@ -14,6 +14,11 @@ import { getSigbashReadinessStatus } from '@/web/lib/server/sigbash-readiness-st
 import { requireSessionUser } from '@/web/lib/server/session';
 import { getMemberStatus } from '@/web/lib/server/webauthn-store';
 import { BITCOIN_NETWORK_CONFIG } from '@/src/network';
+import { PRESIGNED_PROTOCOL } from '@/src/presigned/types';
+import { getUserVaultProtocol } from '@/web/lib/server/vault-protocol';
+import { getPresignedCeremonyStatus } from '@/web/lib/server/presigned-store';
+import { getParticipantSummary } from '@/web/lib/server/webauthn-store';
+import { PresignedVaultDashboard } from '@/web/components/presigned-vault-dashboard';
 
 export default async function VaultPage() {
   await connection();
@@ -23,6 +28,12 @@ export default async function VaultPage() {
   try {
     const userId = await requireSessionUser();
     participant = await getMemberStatus(userId);
+    // Resolve the durable protocol before any legacy roster/provider/runtime call.
+    if (await getUserVaultProtocol(userId) === PRESIGNED_PROTOCOL) {
+      return <PresignedVaultDashboard member={participant}
+        status={await getPresignedCeremonyStatus(userId)}
+        identity={participant.setupComplete ? await getParticipantSummary(userId) : null} />;
+    }
     roster = await getRosterCeremonyStatus(userId);
     if (roster.review?.unanimous) readiness = await getSigbashReadinessStatus(userId);
   } catch {

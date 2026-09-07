@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { webConfig } from '@/web/lib/server/config';
 import { createFundingSignatureChallenge } from '@/web/lib/server/funding-signature-store';
 import { assertSameOrigin, jsonError } from '@/web/lib/server/http';
-import { requireSessionUser } from '@/web/lib/server/session';
+import { requireLegacySessionUser } from '@/web/lib/server/session';
 
 export const runtime = 'nodejs';
 
@@ -16,7 +16,7 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const input = Input.parse(await request.json());
-    const userId = await requireSessionUser();
+    const userId = await requireLegacySessionUser();
     const options = await generateAuthenticationOptions({
       rpID: webConfig().rpID,
       userVerification: 'required',

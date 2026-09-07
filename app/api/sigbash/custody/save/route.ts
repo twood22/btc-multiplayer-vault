@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { fromBase64url, toBase64url } from '@/web/lib/server/encoding';
 import { assertSameOrigin, jsonError } from '@/web/lib/server/http';
-import { requireSessionUser } from '@/web/lib/server/session';
+import { requireLegacySessionUser } from '@/web/lib/server/session';
 import { appendSigbashCustodyEnvelope } from '@/web/lib/server/sigbash-custody-store';
 
 export const runtime = 'nodejs';
@@ -22,7 +22,7 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const input = Input.parse(await request.json());
-    const userId = await requireSessionUser();
+    const userId = await requireLegacySessionUser();
     const result = await appendSigbashCustodyEnvelope({
       userId,
       leaseToken: input.leaseToken,

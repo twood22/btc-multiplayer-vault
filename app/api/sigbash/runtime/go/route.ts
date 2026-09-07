@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { requireSessionUser } from '@/web/lib/server/session';
+import { requireLegacySessionUser } from '@/web/lib/server/session';
 import { sigbashRuntimeConfig } from '@/web/lib/server/sigbash-runtime';
 
 export const runtime = 'nodejs';
@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    await requireSessionUser();
+    await requireLegacySessionUser();
     const config = sigbashRuntimeConfig();
     const upstream = await fetch(config.wasmExecUrl, { cache: 'no-store' });
     if (!upstream.ok) throw new Error(`Sigbash Go runtime fetch failed (${upstream.status})`);

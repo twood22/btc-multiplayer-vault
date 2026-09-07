@@ -1,0 +1,62 @@
+name: Presigned V2 acceptance
+
+on:
+  push:
+    branches: [codex/presigned-vault-v2]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: presigned-v2-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    # Standard public runners are free. Refuse private-repository execution.
+    # No larger runners, artifact uploads, caches, deployments or registry pushes.
+    if: github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [local, signet, mainnet]
+    name: ${{ matrix.suite }} executable acceptance
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - name: Check out the exact public commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Select the reviewed Node runtime without caching
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .node-version
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Prepare checksum-pinned Core and existing PostgreSQL 16
+        run: bash scripts/setup-presigned-ci.sh
+
+      - name: Install Chromium on this disposable runner
+        run: npx playwright install --with-deps chromium
+
+      - name: Require genuine rootless Podman for exact-image tests
+        if: matrix.suite != 'local'
+        shell: bash
+        run: |
+          set -euo pipefail
+          podman info --format json | node --input-type=module -e '
+            import assert from "node:assert/strict";
+            import { readFileSync } from "node:fs";
+            const info = JSON.parse(readFileSync(0, "utf8"));
+            assert.equal(info.host?.security?.rootless, true, "Rootless Podman is required; no security policy will be weakened.");
+            console.log(JSON.stringify({rootless: true, version: info.version?.Version}));'
+
+      - name: Execute and verify the complete selected acceptance suite
+        run: node --import tsx scripts/presigned-ci.mts '${{ matrix.suite }}'

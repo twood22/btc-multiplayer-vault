@@ -140,7 +140,7 @@ function integerEnv(name: string, fallback: number): number {
 
 export const DEFAULT_DEMO_SEED = 'btc-multiplayer-vault-public-test-fixture';
 
-export const DEMO_SEED = process.env.VAULT_DEMO_SEED || DEFAULT_DEMO_SEED;
+export const DEMO_SEED = (typeof process === 'undefined' ? undefined : process.env.VAULT_DEMO_SEED) || DEFAULT_DEMO_SEED;
 
 // Anyone can derive every "private" key produced from the default seed. That
 // is fine for offline demos and unit tests, and catastrophic for anything

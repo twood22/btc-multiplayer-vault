@@ -1,5 +1,12 @@
 # Current project status
 
+Version boundary (2026-09-06): the dated status below is preserved V1 history,
+not the current V2 implementation verdict. The explicitly authorized
+`presigned-graph-v2` replacement and its unmet acceptance requirements are in
+[PRESIGNED-V2-PLAN.md](./PRESIGNED-V2-PLAN.md). Its operating procedure is
+[PRESIGNED-OPERATOR-RUNBOOK.md](./PRESIGNED-OPERATOR-RUNBOOK.md). V2 is unfinished;
+no mainnet spending, deployment or migration of an existing funded vault is authorized.
+
 Last updated: 2026-09-05
 Reviewed baseline: `71b1bd227a5f3f3d35fb8449776747d5d88d28c7`; current work is on
 `codex/signet-readiness-hardening`, including liveness and Signet release fixes.

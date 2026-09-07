@@ -2,7 +2,7 @@ import { generateAuthenticationOptions } from '@simplewebauthn/server';
 import { z } from 'zod';
 import { webConfig } from '@/web/lib/server/config';
 import { assertSameOrigin, jsonError } from '@/web/lib/server/http';
-import { requireSessionUser } from '@/web/lib/server/session';
+import { requireLegacySessionUser } from '@/web/lib/server/session';
 import { createCoinObservationChallenge } from '@/web/lib/server/vault-runtime-store';
 import { consumeRateLimit } from '@/web/lib/server/rate-limit';
 
@@ -20,7 +20,7 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const input = Input.parse(await request.json());
-    const userId = await requireSessionUser();
+    const userId = await requireLegacySessionUser();
     await consumeRateLimit({
       action: 'coin_observation',
       subject: userId,

@@ -1,0 +1,77 @@
+# Presigned V2 independent review checkpoint
+
+Date: 2026-09-07 UTC. This is internal code review and executable regression
+evidence, not an external security audit, production release or funding approval.
+
+Three independent reviewers examined custody/signature release, chain/send/fee
+authority, and release/restore/evidence boundaries. They independently matched
+the original source digest
+`49eacf7307d06c9a9d55b7f57edadb9c3dc0ca397cc15f42d100b39b1b049835`.
+That source passed the fixed 47-command local suite, but review identified
+additional cases that the suite did not yet cover. Its source and actual evidence
+are preserved privately in `live-run/presigned-v2-evidence.kg32fM/`; they must not
+be relabeled as evidence for the corrections below.
+
+## Findings and verification
+
+| Finding | Correction | Root verification |
+| --- | --- | --- |
+| P2: accepted entries permanently occupy both oldest-100 retry queues | Order eligible records by `updated_at, id`; preserve exact authority, explicit send intent and attempt-result CAS | Before-fix chain/fee regressions failed; corrected two-batch tests reach the newer interrupted transaction/package without resending |
+| P2: state-hash CAS permits stale same-state and advance/reorg/return (ABA) publications after lease loss | Migration021 adds a monotonic poll revision; compare it with the state digest under the vault lock, and advance it on successful and deferred publications | Actual Core/PostgreSQL reproduced availability overwrite, confirmation/invalidation ABA and erased deferred status; all three corrected schedules pass |
+| Report CLI omitted the deployed offline utility check enforced by the actual funding gate | CLI, readiness and funding share the same utility/source/image inspection | Actual CLI rejects altered utility bytes before database access; a matching counterfactual fixture reaches only the missing-database prerequisite; zero network attempts and no report |
+| Core evidence reader accepted an explicit failure followed by a passing summary | Reject explicit `passed: false` or `status: failed` anywhere in Core and full offline evidence | Root reproduced the Core parser issue in memory; new mixed-result/order negatives pass |
+| Owned mutable envelope plaintext and PRF copies were not always cleared | Await crypto operations, then clear owned buffers in `finally`, including exceptional paths | Real WebCrypto buffer-reference checks pass on success, import/encryption error, round-trip mismatch, UTF-8 failure and new-secret failure; caller PRF remains unchanged |
+
+The corrected source digest is
+`80460afa6fb7f6ab1568f779efceb8abc4c247622f07fb08ef67c688e1e83267`.
+All three reviewers independently matched it and rereviewed their bounded fixes
+without new findings. Their rereviews were read-only; they did not run the root
+agent's tests or approve a release.
+
+Root test evidence for the corrections:
+
+- Pre-fix chain/broadcast: `/tmp/btc-presigned-db.wXsGSk`, Core `hCnbcz`.
+  Pre-fix fee queue: `/tmp/btc-presigned-db.XUn7CH`, Core `RsJasY`.
+  These failed at the intended new regressions, not the earlier passing cases.
+- Corrected chain/broadcast: `/tmp/btc-presigned-db.YblUsL`, Core `GHIG6Y`:
+  12 passed groups and no findings. Corrected fee suite:
+  `/tmp/btc-presigned-db.0SvheC`, Core `66xXqc`: all five fee families and fairness
+  passed. Both Core nodes and both PostgreSQL instances were checked stopped.
+- The queue-head records are deliberately invalid synthetic public metadata,
+  not 100 genuine accepted Bitcoin transactions. The later target is a genuine
+  Core-accepted transaction/package. The watcher race uses an explicit pause
+  before persistence to model a lost session lease; the ABA test really mines
+  and invalidates a Core block. Neither test claims a production outage.
+- Scripts/web type checks, 49 evidence-negative boundaries and 22 mainnet-format
+  custody cases passed. A fresh optimized mainnet-format browser passed in
+  `/tmp/btc-presigned-browser.knCexA`: six virtual PRF credentials, complete
+  pre-funding custody and actual unauthorized-funding refusal. Its test Core,
+  PostgreSQL and web listener were checked stopped.
+
+The corrected-source complete 47-command aggregate passed in
+`/tmp/btc-presigned-acceptance.2snY8Z` from 07:05:42 to 08:05:09 UTC. Its parent
+runner exited zero; root revalidated the fixed plan, retained transcripts,
+required artifacts and exact utility, then verified service cleanup. The copied
+run in `live-run/presigned-v2-evidence.Z5bbaY/local/` also revalidated with digest
+`c57f61311e9e4cb3d105461f689d6b90dec089e1f7c17095e431edd7e5cd90a2`.
+This includes both network-format custody matrices and the enhanced DB regressions,
+not merely the targeted checks above. See
+[PRESIGNED-V2-PLAN.md](./PRESIGNED-V2-PLAN.md) for current whole-product status.
+
+## Limits retained
+
+No new payment-authorization or coordinator-data signature-release bypass was
+found in the reviewed boundaries. This is a scoped finding, not proof that all
+bugs are absent. State publication and retry scheduling never substitute for
+participant signatures, exact payouts, current source observations or separate
+mainnet authorization.
+
+Buffer clearing is best-effort: JavaScript strings, CryptoKey objects and
+browser internals are not claimed erased. Malicious delivered browser code,
+compromised unlocked devices, the explicitly inherited N-1 recovery collusion
+tradeoff, outside sponsor liquidity and relay liveness remain limitations.
+Restoring a database still requires stopping every old writer.
+
+Real default-Signet lifecycles, exact OCI execution and final acceptance assembly
+remain unproven. Physical passkeys are explicitly deferred to friends' onboarding.
+No review or local test authorizes mainnet spending, public exposure or outreach.

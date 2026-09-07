@@ -1,6 +1,6 @@
 # Multi-architecture digest for the official node:22.23.2-bookworm-slim image.
 # Update the tag and digest together after reviewing a new runtime release.
-FROM node:22.23.2-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436 AS base
+FROM docker.io/library/node:22.23.2-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436 AS base
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 
@@ -33,6 +33,8 @@ COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
 COPY --from=build --chown=node:node /app/.node-version ./.node-version
 COPY --from=build --chown=node:node /app/scripts/check-runtime.mjs /app/scripts/check-build-network.mjs /app/scripts/check-operator-runtime.mjs /app/scripts/start-production.mjs ./scripts/
 COPY --from=build --chown=node:node /app/vault-build-network.json ./
+COPY --from=build --chown=node:node /app/vault-presigned-build.json ./
+COPY --from=build --chown=node:node /app/public ./public
 COPY --from=build --chown=node:node /app/db ./db
 COPY --from=build --chown=node:node /app/src ./src
 COPY --from=build --chown=node:node /app/web/lib ./web/lib

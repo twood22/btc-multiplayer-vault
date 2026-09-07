@@ -17,8 +17,8 @@ export default async function HomePage() {
         <p className="eyebrow">Three friends. One Bitcoin game.</p>
         <h1>Save together. Leave on your own terms.</h1>
         <p className="lede">
-          Each friend controls their own key. Cooperative exits never depend on Sigbash. Solo exits
-          follow the agreed haircut-and-bonus rules.
+          Each friend controls their own keys. Pre-signed solo exits follow the agreed
+          haircut-and-bonus rules; cooperative exits use the participants' personal keys.
         </p>
         <div className="status-grid">
           <article>
@@ -34,7 +34,7 @@ export default async function HomePage() {
           <article>
             <span>03</span>
             <h2>{BITCOIN_NETWORK_NAME === 'mainnet' ? 'Mainnet gated' : 'Signet validation'}</h2>
-            <p>Funding stays off until live Sigbash signing and every {BITCOIN_NETWORK_CONFIG.addressLabel} check pass.</p>
+            <p>Funding requires verified exit material, restored backups and protocol-specific {BITCOIN_NETWORK_CONFIG.addressLabel} release checks.</p>
           </article>
         </div>
         <div className="invite-callout">

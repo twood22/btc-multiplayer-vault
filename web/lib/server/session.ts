@@ -2,6 +2,8 @@ import 'server-only';
 import { cookies } from 'next/headers';
 import { db } from './db';
 import { randomToken, tokenHash } from './encoding';
+import { getUserVaultProtocol } from './vault-protocol';
+import { LEGACY_PROTOCOL } from '../../../src/presigned/types';
 
 const SESSION_SECONDS = 15 * 60;
 
@@ -36,6 +38,15 @@ export async function requireSessionUser(): Promise<string> {
   `;
   const userId = rows[0]?.user_id;
   if (!userId) throw new Error('session expired');
+  return userId;
+}
+
+/** Every legacy protocol route resolves this before invoking any V1 store or provider. */
+export async function requireLegacySessionUser(): Promise<string> {
+  const userId = await requireSessionUser();
+  if (await getUserVaultProtocol(userId) !== LEGACY_PROTOCOL) {
+    throw new Error('legacy protocol endpoint cannot operate on a presigned vault');
+  }
   return userId;
 }
 

@@ -1,5 +1,11 @@
 # Private-beta deployment runbook
 
+Version boundary: the instructions below are the preserved `sigbash-v1`
+deployment path. They do not govern the user-authorized `presigned-graph-v2`
+replacement or imply a V2 Sigbash dependency. For V2 use
+[PRESIGNED-OPERATOR-RUNBOOK.md](./PRESIGNED-OPERATOR-RUNBOOK.md) and its still-open
+acceptance ledger. Neither path currently grants deployment or funding authority.
+
 This runbook packages the real round-based Bitcoin multiplayer vault. It does
 not authorize deployment or funding. Do not deploy the service until an
 independent predeployment command has obtained and locally authorized a real
