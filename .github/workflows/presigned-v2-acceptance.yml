@@ -18,7 +18,9 @@ jobs:
     # No larger runners, artifact uploads, caches, deployments or registry pushes.
     if: github.event.repository.private == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # Includes the bounded 90-minute complete sequential-capital drill plus
+    # every other required command; successful partial runs are not accepted.
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:

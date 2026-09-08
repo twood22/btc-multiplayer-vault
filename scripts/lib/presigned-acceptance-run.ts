@@ -167,13 +167,16 @@ export function validateCommandResults(command: AcceptanceCommand, stdout: strin
       record.adequatelySponsoredFundingAndReplacementConfirmed === true && record.exactGraphAndNineExitTxidsUnchanged === true);
     if (command.id === 'presigned-live-lifecycle-regtest') {
       const capital = record.capitalAudit;
+      const csv = record.csvBoundaryAudit;
       assert(record.cases === 19 && record.feeFamilies === 5 && record.lostRepliesWithoutResending === 6 &&
         capital?.initialCapitalSats === 128_985 && capital.fixedConfirmedFeesSats === 47_000 &&
         Number.isSafeInteger(capital.allocationFeesSats) && capital.allocationFeesSats > 0 && capital.allocationFeesSats <= 45_000 &&
         capital.returnedSats + capital.fixedConfirmedFeesSats + capital.allocationFeesSats === capital.initialCapitalSats &&
         capital.confirmedAllocations === 20 && capital.recycledParticipantPayouts === 57 && capital.unrelatedWalletInputsUsed === 0 &&
-        capital.allTerminalOutputsAndReservesConsumedExactlyOnce === true,
-      'resumable Core proof omits the complete confined low-capital money trail or restart faults');
+        capital.allTerminalOutputsAndReservesConsumedExactlyOnce === true &&
+        csv?.cases === 9 && csv.delayBlocks === 12 && csv.justBeforeMaturityRejected === 9 &&
+        csv.matureTransactionsAllowed === 9 && csv.sameStoredTransactionBytes === true,
+      'resumable Core proof omits the complete confined low-capital money trail, exact CSV boundaries or restart faults');
     }
   } else if (command.id === 'offline-full') {
     assert(!records.some(item => item.passed === false || item.status === 'failed'), 'offline proof reported a failed result');

@@ -43,11 +43,18 @@ not a Bitcoin network minimum. The new lower bound is 124,680 sats.
 
 Pure signing tests pass for both configured networks (ten valid transactions,
 eight wallet-PSBT normalization forms and 96 hostile mutations each), scripts
-typecheck passes, and the evidence boundary suite now has 67 refusal checks
+typecheck passes, and the evidence boundary suite now has 73 refusal checks
 plus 19 archive negatives.
 Independent review corrections and a Core PSBT compatibility diagnosis are
 recorded in the review checkpoint. The complete low-capital Core run is being
-validated; real default-Signet allocation has not started. The required full
+validated; real default-Signet allocation has not started. An interim source
+`f889b15f` completed 44 of 49 local commands and eight lifecycle cases before a
+controlled stop to improve test-time mining. Its two actual image archives were
+independently downloaded and verified in a separate test-only draft; they do not
+certify the revised test source. The revised regtest explicitly checks every
+recovery at depth 11 and 12, avoiding repeated full-history advances at
+intermediate depths. Its execution deadline is 90 minutes (full CI: 150), without
+changing CSV12, transaction bytes, coverage or capital limits. The required full
 local plan now contains 49 commands. Current-source full local, both image
 profiles and live-Signet evidence remain required. All `536935c2` receipts and
 archives below are historical and cannot certify this changed executable source.

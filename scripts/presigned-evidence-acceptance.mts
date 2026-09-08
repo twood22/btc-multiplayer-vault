@@ -68,8 +68,10 @@ const lowCapital = acceptancePlan('local').find(item => item.id === 'presigned-l
 const capitalAudit = { initialCapitalSats: 128_985, fixedConfirmedFeesSats: 47_000, allocationFeesSats: 30_000,
   returnedSats: 51_985, confirmedAllocations: 20, recycledParticipantPayouts: 57, unrelatedWalletInputsUsed: 0,
   allTerminalOutputsAndReservesConsumedExactlyOnce: true };
+const csvBoundaryAudit = { cases: 9, delayBlocks: 12, justBeforeMaturityRejected: 9,
+  matureTransactionsAllowed: 9, sameStoredTransactionBytes: true };
 const lowCapitalSummary = { passed: true, syntheticParserFixture: true, publicNetworkBroadcasts: 0, coreVersion: 310100,
-  cases: 19, feeFamilies: 5, lostRepliesWithoutResending: 6, capitalAudit };
+  cases: 19, feeFamilies: 5, lostRepliesWithoutResending: 6, capitalAudit, csvBoundaryAudit };
 validateCommandResults(lowCapital, JSON.stringify(lowCapitalSummary));
 for (const mutation of [{ cases: 18 }, { feeFamilies: 4 }, { lostRepliesWithoutResending: 5 }])
   denied(() => validateCommandResults(lowCapital, JSON.stringify({ ...lowCapitalSummary, ...mutation })));
@@ -77,6 +79,11 @@ for (const mutation of [{ initialCapitalSats: 128_984 }, { fixedConfirmedFeesSat
   { returnedSats: 51_986 }, { confirmedAllocations: 19 }, { recycledParticipantPayouts: 56 }, { unrelatedWalletInputsUsed: 1 },
   { allTerminalOutputsAndReservesConsumedExactlyOnce: false }])
   denied(() => validateCommandResults(lowCapital, JSON.stringify({ ...lowCapitalSummary, capitalAudit: { ...capitalAudit, ...mutation } })));
+denied(() => validateCommandResults(lowCapital, JSON.stringify({ ...lowCapitalSummary, csvBoundaryAudit: undefined })));
+for (const mutation of [{ cases: 8 }, { delayBlocks: 11 }, { justBeforeMaturityRejected: 8 },
+  { matureTransactionsAllowed: 8 }, { sameStoredTransactionBytes: false }])
+  denied(() => validateCommandResults(lowCapital, JSON.stringify({ ...lowCapitalSummary,
+    csvBoundaryAudit: { ...csvBoundaryAudit, ...mutation } })));
 checks.push('pure capital signatures and complete confined Core recycling are mandatory on the exact required matrix');
 const directory = mkdtempSync('/tmp/btc-presigned-evidence-boundary.');
 const filename = `${directory}/synthetic.json`;

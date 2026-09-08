@@ -33,6 +33,24 @@ The caller now requires exact witness prevouts and exact parent identity/
 non-witness bytes when redundant parents are returned; the immutable intent
 still independently validates every original full parent, input, output, fee
 and final signature. No coin-selection fallback was introduced.
+
+The next full local invocation on interim source `f889b15f` passed 44 of 49
+commands and eight of 19 lifecycle cases, including the formerly failing mixed
+wallet boundary. It was deliberately stopped on its exact network-disabled
+regtest Core after measured 35-45 second advance intervals showed a test-deadline
+risk; this was not a reproduced 60-minute timeout or a completed acceptance run.
+All private evidence was retained, and the real Signet host was untouched. Both
+actual image archives for that interim source were downloaded, hash-checked,
+independently scanned and restored successfully, but remain draft/historical.
+
+The revised isolated mining schedule checks the same saved recovery transaction
+at depth 11 (rejected) and 12 (allowed) for all nine cases before the normal
+runner continues. The exact 12-block rule and all existing case, fee, restart and
+capital assertions remain; only redundant intermediate advances are removed.
+A bounded 90-minute test deadline and 150-minute whole-CI deadline account for
+the remaining sequential verification work. The evidence parser rejects missing
+or altered CSV boundary counts; its 73 refusal checks and 19 archive negatives
+pass. This test-source change requires fresh complete source-bound evidence.
 Complete current-source Core/49-command/image/live-Signet results remain pending;
 the dated checkpoints below retain their original historical scope.
 

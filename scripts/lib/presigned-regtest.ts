@@ -33,7 +33,10 @@ export async function withPresignedRegtest<T>(run: (core: PresignedRegtest) => P
   assert(options.maxMempoolMb === undefined || (Number.isSafeInteger(options.maxMempoolMb) &&
     options.maxMempoolMb >= 5 && options.maxMempoolMb <= 300), 'isolated mempool size must be 5-300 MB');
   const maximumMinutes = options.maximumMinutes ?? 15;
-  assert(Number.isSafeInteger(maximumMinutes) && maximumMinutes >= 1 && maximumMinutes <= 60, 'isolated test deadline must be 1-60 minutes');
+  // The complete sequential-capital drill performs substantially more signed
+  // history audits. This bounds execution time, never confirmation depth or
+  // any cryptographic, capital-conservation or acceptance requirement.
+  assert(Number.isSafeInteger(maximumMinutes) && maximumMinutes >= 1 && maximumMinutes <= 90, 'isolated test deadline must be 1-90 minutes');
   const directory = mkdtempSync('/tmp/btc-presigned-core-');
   const datadir = `${directory}/core`;
   mkdirSync(datadir, { mode: 0o700 });

@@ -9,6 +9,7 @@ import { withPresignedRegtest } from './lib/presigned-regtest.js';
 import { advanceLiveLifecycle, fundLiveLifecycle, initializeLiveLifecycle, readLifecycleFile,
   saveLifecycleFile, verifyCompletedLiveLifecycle, type LiveLifecycleCore } from './lib/presigned-live-lifecycle.js';
 import { validatePresignedFeePackage, type PresignedFeePackage } from '../src/presigned/fee-package.js';
+import type { PresignedSpendProposal } from '../src/presigned/spends.js';
 import type { PresignedPublicKit } from '../src/presigned/types.js';
 import { presignedSourceDigest } from './presigned-build-identity.mjs';
 import { coinId, MINIMUM_SEQUENTIAL_CAPITAL, RECYCLING_FEE_CAP,
@@ -29,6 +30,12 @@ interface CaseDefinition {
 interface RunEvidence {
   execution: string; initialCapitalSats: number; capitalLimitSats: number;
   initialCoin: RecyclingCoin; sourceDigest: string; cases: CaseDefinition[];
+}
+interface CsvBoundaryRecord {
+  caseId: string; delayBlocks: number; sourceTxid: string; sourceVout: number; sourceAnchor: string;
+  initialConfirmations: number; justBeforeConfirmations: number; maturityConfirmations: number;
+  transactionTxid: string; transactionSha256: string;
+  justBeforeMaturityRejected: boolean; matureTransactionAllowed: boolean; sameStoredTransactionBytes: boolean;
 }
 const inputId = (input: bitcoin.Transaction['ins'][number]) =>
   `${Buffer.from(input.hash).reverse().toString('hex')}:${input.index}`;
@@ -63,6 +70,7 @@ await withPresignedRegtest(async host => {
   const backend = createPresignedCoreBackend({ network: 'signet', genesisHash: genesisHash('signet'), rpc });
   const lost = new Set<string>(); const submissions = new Map<string, number>();
   const sendAttempts = new Map<string, number>(); const allocationSignRequests = new Map<string, number>();
+  const csvBoundaryRecords = new Map<string, CsvBoundaryRecord>();
   let backupGateChecks = 0; let walletCalls = 0; let finalReturnPendingChecks = 0; let historicalIntentRefusals = 0;
   // Hash only public allocation journals, never kits' separate wrapping keys.
   // Every later invocation must preserve the exact bytes already published.
@@ -233,6 +241,68 @@ await withPresignedRegtest(async host => {
       assert.deepEqual([...sendAttempts.entries()], attempts, 'pending final return was resubmitted');
       finalReturnPendingChecks++;
     }
+    const waitingCsv = result.statuses.filter(item => item.status === 'waiting-csv');
+    assert(waitingCsv.length <= 1, 'sequential run has multiple active CSV waits');
+    if (waitingCsv.length === 1) {
+      const waiting = waitingCsv[0]!;
+      assert(waiting.stage === 'recovery' && 'sourceConfirmations' in waiting);
+      assert(!csvBoundaryRecords.has(waiting.case), 'one recovery case repeated its maturity boundary');
+      const plan = readLifecycleFile<RunEvidence>(directory, 'run.json').cases.find(item => item.id === waiting.case);
+      assert(plan?.kind === 'recovery');
+      const kit = readLifecycleFile<PresignedPublicKit>(directory, `cases/${waiting.case}/kit.json`);
+      const delayBlocks = kit.graph.roster.economics.recoveryDelayBlocks; assert.equal(delayBlocks, 12);
+      const signedName = `cases/${waiting.case}/step-terminal.json`;
+      const signed = readLifecycleFile<StoredSigned & { proposal: PresignedSpendProposal }>(directory, signedName);
+      assert(signed.proposal.kind === 'recovery' && signed.proposal.sourceExitId === plan.source);
+      const transaction = bitcoin.Transaction.fromHex(signed.transactionHex);
+      assert.equal(transaction.getId(), signed.txid); assert.equal(transaction.version, 3);
+      assert.equal(transaction.ins.length, 1); assert.equal(transaction.ins[0]!.sequence, delayBlocks);
+      assert.equal(inputId(transaction.ins[0]!), coinId(signed.proposal.source));
+      const source = await backend.observeConfirmedCoin(signed.proposal.source);
+      assert.equal(source.confirmations, waiting.sourceConfirmations);
+      assert(source.confirmations >= 1 && source.confirmations < delayBlocks);
+      assert.equal(source.valueSats, signed.proposal.source.valueSats);
+      assert.equal(source.scriptPubKeyHex, signed.proposal.source.scriptPubKeyHex);
+      assert.equal((await host.rpc('getrawmempool')).length, 0, 'CSV batch could prematurely confirm a pending fee replacement');
+
+      // Test-only mining acceleration: the exact saved transaction has already
+      // received a genuine premature rejection from the normal advance path.
+      // Mine real blocks up to depth11, recheck those same bytes immediately
+      // before maturity, then mine one block to depth12 and check them again.
+      // Every normal maturity, signature, hostile, and broadcast gate still
+      // runs on the next unchanged advance; no public chain can be mined here.
+      const blocksToJustBefore = delayBlocks - 1 - source.confirmations;
+      if (blocksToJustBefore > 0) assert.equal((await host.mine(blocksToJustBefore)).length, blocksToJustBefore);
+      const justBefore = await backend.observeConfirmedCoin(signed.proposal.source);
+      assert.equal(justBefore.confirmations, delayBlocks - 1);
+      assert.equal(justBefore.confirmationBlockHash, source.confirmationBlockHash);
+      const beforeBytes = readLifecycleFile<StoredSigned>(directory, signedName).transactionHex;
+      assert.equal(beforeBytes, signed.transactionHex);
+      const negative = await host.rpc('testmempoolaccept', [[beforeBytes]]);
+      assert.equal(negative.length, 1); assert.equal(negative[0].txid, signed.txid);
+      assert.equal(negative[0].allowed, false); assert.equal(negative[0]['reject-reason'], 'non-BIP68-final');
+
+      assert.equal((await host.mine(1)).length, 1);
+      const mature = await backend.observeConfirmedCoin(signed.proposal.source);
+      assert.equal(mature.confirmations, delayBlocks); assert.equal(mature.confirmationBlockHash, source.confirmationBlockHash);
+      const matureBytes = readLifecycleFile<StoredSigned>(directory, signedName).transactionHex;
+      assert.equal(matureBytes, signed.transactionHex);
+      const positive = await host.rpc('testmempoolaccept', [[matureBytes]]);
+      assert.equal(positive.length, 1); assert.equal(positive[0].txid, signed.txid); assert.equal(positive[0].allowed, true);
+      const record: CsvBoundaryRecord = { caseId: waiting.case, delayBlocks, sourceTxid: source.txid, sourceVout: source.vout,
+        sourceAnchor: source.confirmationBlockHash, initialConfirmations: source.confirmations,
+        justBeforeConfirmations: justBefore.confirmations, maturityConfirmations: mature.confirmations,
+        transactionTxid: signed.txid, transactionSha256: createHash('sha256').update(Buffer.from(signed.transactionHex, 'hex')).digest('hex'),
+        justBeforeMaturityRejected: negative[0].allowed === false && negative[0]['reject-reason'] === 'non-BIP68-final',
+        matureTransactionAllowed: positive[0].allowed === true,
+        sameStoredTransactionBytes: beforeBytes === signed.transactionHex && matureBytes === signed.transactionHex };
+      saveLifecycleFile(directory, `cases/${waiting.case}/csv-boundary-test.json`, record);
+      csvBoundaryRecords.set(waiting.case, record);
+      console.log(JSON.stringify({ stage: 'exact-csv-boundary-verified', cases: csvBoundaryRecords.size,
+        delayBlocks: record.delayBlocks, justBeforeConfirmations: record.justBeforeConfirmations,
+        maturityConfirmations: record.maturityConfirmations, sameStoredTransactionBytes: record.sameStoredTransactionBytes }));
+      continue; // Remain at depth12 until the next normal advance tests/submits.
+    }
     await host.mine();
   }
   assert(result?.complete && 'soloOrderingsConfirmed' in result);
@@ -261,6 +331,22 @@ await withPresignedRegtest(async host => {
     const receipt = readLifecycleFile<{ restoredBeforeWalletSigning: boolean; proofs: Array<{ exitProofs: unknown[] }> }>(directory, `cases/${item.id}/backup-receipts.json`);
     assert(receipt.restoredBeforeWalletSigning && receipt.proofs.length === 3 && receipt.proofs.every(proof => proof.exitProofs.length === 3));
   }
+  const csvRecords = [...csvBoundaryRecords.values()];
+  assert.deepEqual([...csvBoundaryRecords.keys()].sort(), run.cases.filter(item => item.kind === 'recovery').map(item => item.id).sort());
+  assert.equal(csvRecords.length, 9);
+  for (const record of csvRecords) {
+    assert.equal(record.delayBlocks, 12); assert.equal(record.justBeforeConfirmations, 11); assert.equal(record.maturityConfirmations, 12);
+    assert.deepEqual(readLifecycleFile<CsvBoundaryRecord>(directory, `cases/${record.caseId}/csv-boundary-test.json`), record);
+    const retained = readLifecycleFile<StoredSigned>(directory, `cases/${record.caseId}/step-terminal.json`);
+    assert.equal(retained.txid, record.transactionTxid);
+    assert.equal(createHash('sha256').update(Buffer.from(retained.transactionHex, 'hex')).digest('hex'), record.transactionSha256);
+  }
+  const csvBoundaryAudit = { cases: csvRecords.length, delayBlocks: csvRecords[0]!.delayBlocks,
+    justBeforeMaturityRejected: csvRecords.filter(record => record.justBeforeMaturityRejected && record.justBeforeConfirmations === record.delayBlocks - 1).length,
+    matureTransactionsAllowed: csvRecords.filter(record => record.matureTransactionAllowed && record.maturityConfirmations === record.delayBlocks).length,
+    sameStoredTransactionBytes: csvRecords.every(record => record.sameStoredTransactionBytes) };
+  assert.deepEqual(csvBoundaryAudit, { cases: 9, delayBlocks: 12, justBeforeMaturityRejected: 9,
+    matureTransactionsAllowed: 9, sameStoredTransactionBytes: true });
 
   // Independently reconstruct the entire confirmed money trail from raw bytes.
   // Do not derive conservation from the producer's summary or its fee fields.
@@ -397,8 +483,9 @@ await withPresignedRegtest(async host => {
     lowCapitalRefusalsBeforeWalletAccess: 2, historicalIntentRefusalsBeforeRecycling: historicalIntentRefusals,
     advanceInvocations, finalReturnPendingChecks,
     immutablePublicAllocationFiles: immutableAllocationFiles.size, capitalAudit,
-    readOnlyCompletionVerification: verification, readOnlyReorganizationAndMissingBackupRejections: true, ...resumed });
+    readOnlyCompletionVerification: verification, readOnlyReorganizationAndMissingBackupRejections: true, ...resumed,
+    csvBoundaryAudit, csvBoundaryRecords: csvRecords });
   console.log(JSON.stringify({ passed: true, evidence: directory, realDefaultSignetVerified: false, cases: 19,
     publicNetworkBroadcasts: 0, coreVersion: host.coreVersion, chain: 'isolated-regtest',
-    feeFamilies: 5, lostRepliesWithoutResending: lost.size, capitalAudit }));
-}, { maximumMinutes: 60 });
+    feeFamilies: 5, lostRepliesWithoutResending: lost.size, capitalAudit, csvBoundaryAudit }));
+}, { maximumMinutes: 90 });

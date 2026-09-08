@@ -106,15 +106,17 @@ source digest. Historical test receipts cannot authorize this changed source.
 
 The saved offline utility has passed the full six-ordering/four-cooperative/
 nine-recovery matrix and all ten native-wallet fee cases on one exact artifact.
-The resumable runner has passed those 19 lifecycle cases, five fee families and
-lost-reply recovery against isolated Core. Neither establishes real Signet.
+The historical all-at-once runner passed those 19 lifecycle cases, five fee
+families and lost-reply recovery against isolated Core. Neither establishes real
+Signet or complete acceptance of the new low-capital runner.
 For the fresh isolated default-Signet host, `presigned:signet-lifecycle` accepts
 `status`, `init`, `fund`, `advance` or `verify`, followed by that host's exact owner-only
 `control.json` path. `status` is read-only. `init` additionally requires
 `--capital-limit-sats=N --initial-outpoint=TXID:VOUT`: one exact, confirmed,
 non-coinbase native output owned by the fresh isolated wallet. It reserves fresh
 wallet targets and commits that coin and budget. The lower bound is 124,680 sats;
-128,985 sats supports the unchanged complete 19-case/five-fee-family matrix.
+128,985 sats is budgeted for the unchanged complete 19-case/five-fee-family
+matrix; its complete current-source acceptance remains required.
 `fund` signs and submits only the initial bounded allocation. Each subsequent
 case receives all prior verified participant payouts, funding refunds, sponsor
 change and the unused reserve through one exact journaled allocation. Participant
@@ -126,6 +128,11 @@ fees total 47,000 sats, making total burn at most 92,000 sats and the final retu
 at least 36,985 sats from a 128,985-sat seed. No automatic fee or budget increase
 is permitted. If the exact inputs cannot meet policy or confirmation conditions,
 the run retains its state and reports the unresolved condition.
+The isolated regtest mines directly to recovery boundary heights, verifies the
+same stored transaction is rejected at depth 11 and accepted at depth 12 for
+every recovery case, then resumes the ordinary runner. Its bounded 90-minute
+execution deadline and the CI suite's 150-minute deadline change no block delay
+or substantive acceptance requirement. Real Signet still waits for real blocks.
 `advance` performs one resumable pass and reports pending confirmations/CSV.
 `verify` is a separate read-only check of all completed lifecycles, decrypted
 backups, active confirmations, replacements, exact historical payouts and the

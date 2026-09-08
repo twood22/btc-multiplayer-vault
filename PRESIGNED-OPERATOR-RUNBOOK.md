@@ -51,6 +51,12 @@ normal test logs/receipts, not private wallets, recovery kits or whole runtime
 directories. That log-only workflow does not retain all child transcripts and
 OCI layers; a green run must not replace actual artifacts. The separately
 approved test-only release route below now retains both complete image archives.
+The interim `f889b15f` image archives are also retained and verified, but its local
+run was stopped at 44/49 commands and eight lifecycle cases to revise regtest
+mining. They do not establish acceptance of the revised source. The new regtest
+checks recovery rejection at depth 11 and acceptance at depth 12 for all nine
+cases; it mines intermediate blocks together without changing CSV12. Its
+execution is bounded to 90 minutes, with 150 minutes for the complete CI suite.
 
 For complete **current-source** evidence directories, `npm run
 presigned:pack-evidence -- local|signet-image|mainnet-image /absolute/evidence
