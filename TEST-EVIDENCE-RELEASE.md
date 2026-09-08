@@ -24,6 +24,11 @@ treated as an actual private key.
 Builds use fresh hosted rootless runners, locked dependencies, no operational
 build keys, and no publication token in the build/test/review environment. Public
 third-party source/test fixtures and disposable runner metadata may be present.
+Six GnuTLS known-answer self-test keys in the immutable public Debian base are
+matched byte-for-byte to [the exact published self-test source](https://sources.debian.org/data/main/g/gnutls28/3.7.9-2%2Bdeb12u7/lib/crypto-selftests-pk.c).
+Their allowance requires the exact base-layer and library hashes, library path,
+tar offsets and matched-prefix hashes; different bytes or application-layer
+keys are not exempted. No key values are written into review diagnostics.
 Any unused framework-generated test-build key is permanently public; these
 artifacts must never be promoted into production.
 

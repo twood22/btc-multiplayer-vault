@@ -33,6 +33,24 @@ SECRET_PATTERNS = (
 COMPILED = tuple(re.compile(pattern) for pattern in SECRET_PATTERNS)
 FRAMEWORK_KEY = re.compile(rb'"(?:encryptionKey|previewModeSigningKey|previewModeEncryptionKey)"\s*:\s*"[A-Za-z0-9+/=]{32,}"')
 SCAN_LOCATION = 'archive'
+# Public known-answer test constants, independently matched byte-for-byte to
+# Debian gnutls28 3.7.9-2+deb12u7 lib/crypto-selftests-pk.c (source SHA-256
+# c3d79122e072177f55dc30a98f68b949c0f36f6159a363aae9512a22a9280ed0).
+# This is NOT a dependency/binary/PEM exemption. Each permitted prefix needs its
+# exact absolute tar offset/hash, the exact library path/data offset/full hash,
+# and the complete pinned public layer's recomputed hash before acceptance.
+PUBLIC_SELFTEST_LAYER = 'sha256:66462cc862fe2053b9863fefa3866e07bb5dfb06f6b3ce3177cc096e4021aabe'
+PUBLIC_SELFTEST_LIBRARY = 'usr/lib/x86_64-linux-gnu/libgnutls.so.30.34.3'
+PUBLIC_SELFTEST_LIBRARY_SHA = '779b25d20249988bea2c1aa6bbeb218f5ae7ea8a9d30ce4f54ea37372965cc4b'
+PUBLIC_SELFTEST_LIBRARY_OFFSET = 41243648
+PUBLIC_SELFTEST_PEMS = {
+    42830560: '44ae6697029e164bb2806e1e6451191c842135a19c0b6c8cfafcfd381c7bf6bd',
+    42830784: 'bfc3a3f38b8fc38418c7134de56ac4c0817fadcd780d1e44259a21b5f77d1562',
+    42830944: '8f44247507bf319ea32fe99e20ef0e51a29728f687d39ed5031b86f81bc97c5b',
+    42832704: '30baf071efd07da5161c8e210f8c277a17222a8bdd24675284904d061b337862',
+    42833024: '1dbd7ca4219e8deef2478cde99de95c38b604a092ca2ccf4d9ce88e4836ce283',
+    42834528: '6c928c7c99db09403dabacd8858575de4cedc2d93e5e35c5cb38c335e470405d',
+}
 
 
 class ReviewError(Exception):
@@ -175,9 +193,11 @@ def scan_path(name):
     require(not name.endswith(('.dump', '.sqlite', '.sqlite3')), 'database dump path')
 
 
-def scan_bytes(data, forbidden=()):
+def scan_bytes(data, forbidden=(), permitted_pems=None, data_offset=0):
     for index, pattern in enumerate(COMPILED):
-        if pattern.search(data):
+        for match in pattern.finditer(data):
+            if index == 0 and permitted_pems and permitted_pems.get(data_offset + match.start()) == hashlib.sha256(match[0]).hexdigest():
+                continue
             error = ReviewError('credential-like content')
             error.rule_index = index
             raise error
@@ -188,17 +208,18 @@ def scan_bytes(data, forbidden=()):
             'private operational host path')
 
 
-def scan_stream(stream, size, forbidden):
+def scan_stream(stream, size, forbidden, permitted_pems=None, file_offset=0):
     require(0 <= size <= MAX_MEMBER, 'oversized decoded member')
     digest = hashlib.sha256()
     remaining = size
     tail = b''
     while remaining:
+        read_before = size - remaining
         chunk = stream.read(min(1024 * 1024, remaining))
         require(bool(chunk), 'truncated member')
         remaining -= len(chunk)
         digest.update(chunk)
-        scan_bytes(tail + chunk, forbidden)
+        scan_bytes(tail + chunk, forbidden, permitted_pems, file_offset + read_before - len(tail))
         require(not FRAMEWORK_KEY.search(tail + chunk), 'framework key outside its exact reviewed manifest')
         tail = (tail + chunk)[-8192:]
     return digest.hexdigest()
@@ -247,23 +268,29 @@ def check_preview_manifest(data):
 
 class ReviewedLayerReader:
     """Also scan tar headers, padding, and any trailing bytes, not just files."""
-    def __init__(self, stream, forbidden, totals):
+    def __init__(self, stream, forbidden, totals, layer_digest=None):
         self.stream, self.forbidden, self.totals = stream, forbidden, totals
         self.tail = b''
+        self.position = 0
+        self.digest = hashlib.sha256()
+        self.permitted_pems = PUBLIC_SELFTEST_PEMS if layer_digest == PUBLIC_SELFTEST_LAYER else None
 
     def read(self, size=-1):
         data = self.stream.read(size)
+        offset = self.position - len(self.tail)
+        self.position += len(data)
+        self.digest.update(data)
         self.totals['decodedTarBytes'] += len(data)
         require(self.totals['decodedTarBytes'] <= MAX_DECODED, 'decoded tar exceeds limit')
-        scan_bytes(self.tail + data, self.forbidden)
+        scan_bytes(self.tail + data, self.forbidden, self.permitted_pems, offset)
         self.tail = (self.tail + data)[-8192:]
         return data
 
 
-def inspect_layer(stream, forbidden, totals):
+def inspect_layer(stream, forbidden, totals, layer_digest=None):
     # tarfile streaming mode only decodes headers and reads bytes. Symlinks and
     # hardlinks are never followed, and nothing is materialized on the host.
-    reader = ReviewedLayerReader(stream, forbidden, totals)
+    reader = ReviewedLayerReader(stream, forbidden, totals, layer_digest)
     # The frozen export command explicitly requests uncompressed OCI layers.
     # Refuse any other format rather than skipping bytes during decompression.
     with tarfile.open(fileobj=reader, mode='r|') as layer:
@@ -301,9 +328,18 @@ def inspect_layer(stream, forbidden, totals):
                     else:
                         totals['unusedTestFrameworkKeys'] += int(check_action_manifest(name, data))
                 else:
-                    scan_stream(body, member.size, forbidden)
+                    if layer_digest == PUBLIC_SELFTEST_LAYER and name == PUBLIC_SELFTEST_LIBRARY:
+                        require(member.offset_data == PUBLIC_SELFTEST_LIBRARY_OFFSET and member.size == 2209528,
+                                'public self-test library location or size changed')
+                        digest = scan_stream(body, member.size, forbidden, reader.permitted_pems, member.offset_data)
+                        require(digest == PUBLIC_SELFTEST_LIBRARY_SHA, 'public self-test library bytes changed')
+                        totals['publicSelfTestLibraries'] = totals.get('publicSelfTestLibraries', 0) + 1
+                    else:
+                        scan_stream(body, member.size, forbidden)
     while reader.read(1024 * 1024):
         pass
+    if layer_digest is not None:
+        require('sha256:' + reader.digest.hexdigest() == layer_digest, 'reviewed raw layer digest changed')
 
 
 def owned_file(path, maximum):
@@ -345,7 +381,8 @@ def review(directory):
     # review reports. Dependency authorship is public source, not host identity.
     owner = os.environ.get('GITHUB_REPOSITORY_OWNER', '')
     forbidden = (owner.encode(),) if owner else ()
-    totals = {'layerMembers': 0, 'decodedBytes': 0, 'decodedTarBytes': 0, 'unusedTestFrameworkKeys': 0, 'testPreviewManifests': 0}
+    totals = {'layerMembers': 0, 'decodedBytes': 0, 'decodedTarBytes': 0, 'unusedTestFrameworkKeys': 0,
+              'testPreviewManifests': 0, 'publicSelfTestLibraries': 0}
     names = set()
     layers = set()
     json_blobs = {}
@@ -362,7 +399,7 @@ def review(directory):
             require(body is not None, 'missing archive body')
             blob = name.removeprefix('oci/blobs/sha256/')
             if receipt and name == f'oci/blobs/sha256/{blob}' and f'sha256:{blob}' in receipt['image']['layerDigests']:
-                inspect_layer(body, forbidden, totals)
+                inspect_layer(body, forbidden, totals, f'sha256:{blob}')
                 layers.add(f'sha256:{blob}')
             else:
                 require(member.size <= 32 * 1024 * 1024, 'unexpected large non-layer archive member')
@@ -399,6 +436,7 @@ def review(directory):
             'unexpected compressed layer format')
     require(totals['unusedTestFrameworkKeys'] > 0, 'unused framework action-manifest evidence missing')
     require(totals['testPreviewManifests'] > 0, 'test preview-manifest evidence missing')
+    require(totals['publicSelfTestLibraries'] == 1, 'exact pinned public self-test library evidence missing')
     require(hash_file(archive) == digest, 'archive changed during content review')
     result = {'version': 1, 'kind': 'presigned-v2-test-archive-content-review', 'passed': True, 'network': network,
               'archiveSha256': digest, 'archiveBytes': size, 'archiveMembers': len(names), 'layers': len(layers), **totals,
@@ -407,6 +445,7 @@ def review(directory):
               'scannerSha256': hash_file(Path(__file__)),
               'historicalLayersInspected': True, 'exactArchiveMembersInspected': True,
               'canonicalOuterEnvelopeVerified': True,
+              'knownPublicSelfTestPemCount': 6, 'publicSelfTestLibrarySha256': PUBLIC_SELFTEST_LIBRARY_SHA,
               'freshCredentialFreeHostedBuildRequired': True, 'universalSecretAbsenceProven': False,
               'productionUsePermitted': False, 'fundingAuthorized': False}
     output = root / f'presigned-v2-{network}-content-review.json'

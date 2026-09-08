@@ -9,6 +9,7 @@ import sys
 import tempfile
 import zlib
 import struct
+import hashlib
 
 sys.dont_write_bytecode = True
 
@@ -59,6 +60,20 @@ class ContentReviewTests(unittest.TestCase):
         review.location(filename)
         self.assertNotIn(filename, review.SCAN_LOCATION)
         self.assertTrue(review.SCAN_LOCATION.startswith('path-sha256:'))
+
+    def test_public_pem_allowance_requires_exact_offset_and_hash(self):
+        data = b'-----BEGIN PRIVATE KEY-----\n' + b'A' * 64 + b'\n-----END PRIVATE KEY-----'
+        prefix = review.COMPILED[0].match(data)[0]
+        permitted = {123: hashlib.sha256(prefix).hexdigest()}
+        review.scan_bytes(data, (), permitted, 123)
+        with self.assertRaises(review.ReviewError):
+            review.scan_bytes(data, (), permitted, 124)
+        with self.assertRaises(review.ReviewError):
+            review.scan_bytes(data.replace(b'A' * 64, b'B' * 64), (), permitted, 123)
+        with self.assertRaises(review.ReviewError):
+            review.scan_bytes(data, ())
+        with self.assertRaises(review.ReviewError):
+            review.scan_bytes(data + b' __cookie__:' + b'x' * 32, (), permitted, 123)
 
     def test_identifier(self):
         with self.assertRaises(review.ReviewError):
@@ -141,6 +156,18 @@ class ContentReviewTests(unittest.TestCase):
         self.assertEqual(totals['layerMembers'], 1)
         self.assertEqual(totals['decodedBytes'], 4)
         self.assertEqual(totals['decodedTarBytes'], len(buffer.getvalue()))
+
+    def test_declared_public_layer_requires_actual_bytes(self):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode='w') as archive:
+            info = tarfile.TarInfo('app/public.txt')
+            info.size = 4
+            archive.addfile(info, io.BytesIO(b'test'))
+        buffer.seek(0)
+        totals = {'layerMembers': 0, 'decodedBytes': 0, 'decodedTarBytes': 0,
+                  'unusedTestFrameworkKeys': 0, 'testPreviewManifests': 0}
+        with self.assertRaisesRegex(review.ReviewError, 'raw layer digest changed'):
+            review.inspect_layer(buffer, (), totals, review.PUBLIC_SELFTEST_LAYER)
 
     def outer_fixture(self, *, owner='', tail=b''):
         buffer = io.BytesIO()
