@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: presigned-test-evidence-536935c2
+  group: presigned-test-evidence-f889b15f
   cancel-in-progress: false
 
 jobs:
@@ -42,7 +42,7 @@ jobs:
       - name: Check out the exact previously tested candidate separately
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: d5ff8e8677fc2ed39a9f35d2f260cf060650bd7c
+          ref: c8294aa85074f69e1edce3a6ded4d43408b89d86
           path: candidate
           persist-credentials: false
 
