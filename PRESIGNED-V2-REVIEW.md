@@ -104,9 +104,10 @@ the full47 local suite and both real image profiles, including actual
 creation/restoration/revalidation of all three complete evidence archives.
 Root independently checked public receipt/command/source commitments and
 archive-result bindings. The19-case synthetic suite and real dossier runs are
-separate evidence, neither a privacy scan nor archive publication. Only public
-logs/receipts remain retained outside the discarded runners; final durable
-image archive retention and release assembly remain open.
+separate evidence, neither a privacy scan nor archive publication. At that
+checkpoint only public logs/receipts remained outside the discarded runners.
+The separately approved image retention below supersedes that storage gap;
+final release assembly remains open.
 
 A separate same-source private full 47-command run passed at 19:45 UTC, after
 which the guarded collector retained 102 local files and a 1,315,278-byte archive.
@@ -122,6 +123,61 @@ A subsequent independent read-only check accepted all 47 command records, the
 with no finding. This proves retained local evidence, not image retention,
 content-privacy approval, off-host backup, release readiness or real Signet.
 
+## Approved public test-image retention follow-up
+
+The user separately authorized a clearly test-only prerelease in the existing
+public repository. A separate tooling branch preserved candidate d5ff8e8/source
+536935c2, its earlier complete local 47 proof and the original rollback baseline.
+Run 34178522361 on tooling ee97b86 passed both genuine rootless image profiles,
+actual packaging/restoration, full archive-content review and draft-only upload.
+The six exact assets were published at 02:19 UTC on 2026-09-08. Exact identities
+and the public release link are in the evidence plan.
+
+The first two retention attempts passed image execution and packaging but
+correctly blocked upload on a credential-pattern match. The source-only scan
+identified a header-only Next documentation fixture, but did not identify the
+actual runner failure. Inspection of the exact pinned public base reproduced
+the failing path hash in GnuTLS. Root and an independent reviewer each matched
+six complete known-answer self-test constants byte-for-byte to the exact Debian
+source. The eventual exception is limited by immutable base-layer/library
+hashes, exact path/offsets and matched-prefix hashes, with whole-layer digest
+verification at EOF. No blanket dependency exemption or transcript redaction
+was introduced; no matched key values were included in diagnostics.
+
+The final scanner's 24 regression tests pass. An independent actual-base check
+and 13 tamper negatives also pass, including changed offsets, paths, library and
+layer bytes, copied application keys and the other credential rules. Canonical
+single-gzip/USTAR envelope guards cover headers, padding and trailers. All 18
+historical image layers and all 39 required outer members are inspected. Empty
+Next action manifests and exact test-preview manifests are separately bounded;
+their unused generated test-build keys become permanently public. This remains
+a bounded review, not proof that arbitrary secrets cannot evade detection.
+
+Before collection, independent review caught inherited archive-tool environment
+options and an incomplete final asset-state check. The private collector now
+uses minimal extraction/scanning environments, isolated Python, hashes all six
+downloaded assets, and compares the exact asset ID/name/size/digest snapshot
+before writing its retained receipt. Root reproduced failure under an unwanted
+ambient tar option, then successfully read the actual earlier 102-member archive
+with the isolated environment. The complete image collector subsequently passed
+with those unwanted ambient options present, without inheriting them into tar.
+
+Root restored and semantically revalidated both actual downloaded archives and
+matched both local content-review reports to CI. An independent read-only check
+repeated both trusted semantic validators, exact archive/member byte comparison,
+the six recorded asset hashes and private ownership/permissions, with no finding.
+The publisher's independent review also caught tag checking after publication;
+the corrected preflight verifies the existing tag or a genuine HTTP 404 before the
+exact-release-ID mutation. Pre/post asset snapshots and a post-publication tag
+check passed, followed by an unauthenticated public read of all six assets.
+Concurrent changes by another authorized repository maintainer are not atomically
+locked by these API checks. No failed publication is automatically retried.
+
+Original execution receipts and OCI bytes are unchanged. Both public images
+are permanently synthetic-test-only: never supply real funds, participant
+custody or operational credentials. This is not a production image release,
+real default-Signet acceptance, physical-device evidence or funding authority.
+
 ## Limits retained
 
 No new payment-authorization or coordinator-data signature-release bypass was
@@ -136,8 +192,8 @@ compromised unlocked devices, the explicitly inherited N-1 recovery collusion
 tradeoff, outside sponsor liquidity and relay liveness remain limitations.
 Restoring a database still requires stopping every old writer.
 
-Real default-Signet lifecycles, complete retained OCI/child-log evidence and final
-acceptance assembly remain unproven. Actual OCI execution has now passed in CI.
+Real default-Signet lifecycles and final acceptance assembly remain unproven.
+Actual OCI execution and complete retained test-image/child-log evidence now pass.
 Physical passkeys are explicitly deferred to friends' onboarding. Public source
 and tests were separately authorized; no review or test authorizes mainnet
 spending, public app exposure/deployment or outreach.

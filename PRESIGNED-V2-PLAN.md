@@ -1,20 +1,23 @@
 # V2 implementation and evidence plan
 
-Goal authorized 2026-09-06. Status: in progress; no v2 release or real-Signet funding yet.
+Goal authorized 2026-09-06. Status: in progress; test-only evidence prerelease
+published, but no production release or real-Signet funding yet.
 Rollback: merged commit `202345ffd8bab35590fe15b98d966c4267f194ef`.
 Working branch: `codex/presigned-vault-v2`. No existing vault mutation, mainnet
 spending, public listener, deployment or outreach is authorized.
 
 On 2026-09-07 the user separately authorized publishing the V2 source and tests
-to the existing public repository, using zero-cost test infrastructure. The new
-public CI runs the complete local matrix plus both genuine rootless OCI-image
-profiles on standard Ubuntu runners. It refuses private-repository execution
-and has no paid runners, caches, artifact uploads, registry pushes or deployments.
+to the existing public repository, using zero-cost test infrastructure. The
+initial public acceptance workflow runs the complete local matrix plus both
+genuine rootless OCI-image profiles on standard Ubuntu runners. It refuses
+private-repository execution and has no paid runners, caches, Actions artifact
+uploads, registry pushes or deployments.
 Normal logs contain synthetic-test progress and independently revalidated
 receipts; no wallets or recovery kits are uploaded. These CI additions change
 the source digest: the earlier `80460afa...` checkpoint remains separate
 historical evidence. The new-source results are recorded below. Retaining the
-full exact-image bytes for final release assembly is still separate work.
+full exact-image bytes was separately authorized and completed as test-only
+prerelease retention below; final release assembly remains separate work.
 
 First public CI run `34145927695` on commit `cbb76642` passed both actual
 rootless preflights and built/exported both production images. Both image jobs
@@ -39,7 +42,7 @@ scripts typecheck passes. The fresh whole matrix subsequently passed below.
 | Fee adaptation with stable descendants | Funding, solo, cooperative, CSV and final payout sponsorship; TRUC/rolling-floor tests | Unified offline/database families, actual Core fee tests and clean Signet-format browser wrapper pass in the full aggregate |
 | Versioned database/runtime/watcher | Migrations015-021, exact-send journals, unknown-state preservation, reverse reorg/restore and monotonic poll revision | Lost-lease/ABA and both fair-queue regressions pass actual Core/PostgreSQL in the corrected-source full aggregate |
 | Substantive v2 readiness and release gate | Exact-image/check receipts and exact funding-state restore proof; no provider gate bypass | Evidence boundary suite has49 fail-closed negatives plus19 archive negatives; native restore has22; end-to-end release proof remains pending |
-| Actual packaged app execution | Production Dockerfile, rootless Podman, all OCI bytes, immutable image, operator and real browser checks | Both network profiles and actual archive restoration passed in public CI; durable image-byte retention is still missing |
+| Actual packaged app execution | Production Dockerfile, rootless Podman, all OCI bytes, immutable image, operator and real browser checks | Both profiles passed; exact test-only archives are now publicly retained and independently restored/validated |
 | Real default-Signet full lifecycles | Isolated keys/coins, txids, confirmations, output audit | Resumable runner and read-only re-verification passed 19 isolated-Core cases; actual default-Signet wallet still unfunded |
 | Documentation and independent security review | Protocol, operator/recovery runbook, versioned historical docs; reviewer findings reproduced and fixed | Three reviews and focused independent rereviews completed; no new findings in the corrected delta |
 | Physical-device passkeys | Friends' onboarding, explicitly deferred by user | Deferred; not tested |
@@ -49,7 +52,69 @@ The preliminary Core feasibility experiment is not integration evidence and
 does not satisfy the pending requirements above. Unchecked rows block completion
 of the active development goal, except the explicit deferred/unauthorized items.
 
-## Current verified archive-CI checkpoint (2026-09-07 UTC)
+## Current retained test-image checkpoint (2026-09-08 UTC)
+
+The user explicitly authorized test-only prerelease archive publication on
+2026-09-07 local time. The
+[published test-only evidence release](https://github.com/twood22/btc-multiplayer-vault/releases/tag/presigned-v2-test-evidence-536935c2-20260908)
+retains six assets: two actual image archives and four retention/content-review
+records. It was published at 02:19 UTC as a prerelease, not latest. These public
+synthetic-test images must never be used with real funds, participant custody
+or operational credentials, and cannot be promoted to production.
+
+[Run 34178522361](https://github.com/twood22/btc-multiplayer-vault/actions/runs/34178522361)
+passed both genuine rootless image profiles, packaging/restoration, content
+review and draft-only uploads. Candidate commit
+`d5ff8e8677fc2ed39a9f35d2f260cf060650bd7c` retains executable source
+`536935c274261a11f18d9a798cc385770c878681842cfe0fc8e89aec724c2069`.
+Retention tooling commit `ee97b86a6f240b0c6a5a8ffff972a8f866e94bdc` is on a
+separate branch and not part of the application image's source fingerprint.
+The earlier full 47 local proof below remains the same-source local acceptance;
+this image-only run did not rerun that matrix.
+
+- Signet-format archive: 258,102,723 bytes, 39 required files, SHA-256
+  `cda7c3ba29b236d311efac07a1295e639b4fa291432faba50700772fa0b659a9`.
+  Tested OCI manifest:
+  `sha256:6231b5ce076c35157001e91154f8ed7ea2cd378a69bee9a1d6ee90455a013cda`.
+  Execution receipt:
+  `c586c4d254c100fab314b29740c7b1ce49b20556c5747308fb0ec01a0bbdeec5`.
+- Mainnet-format archive: 258,101,735 bytes, 39 required files, SHA-256
+  `4d6d661f44b72ee5a094df30da683ab5559367069dddd7999991d219d4a0f088`.
+  Tested OCI manifest:
+  `sha256:90b8ecbe0c4d1bef6639b40bbc15809424ec0bb6a4cc57014304d0bd1679ccee`.
+  Execution receipt:
+  `117279edcc9692efcc0c10305aa6109511592087d07a97b5e75aefd81bcefb86`.
+
+Both retain the exact previously tested offline utility
+`3afcdac5caf72eb0c03598ce8165c78961f4463f7ef50adf6f715f02b9599807`.
+Signet-format exercises the full isolated-Core browser game; mainnet-format
+exercises the complete pre-funding custody/backup ceremony and authorization
+refusal. Neither establishes real default-Signet or mainnet transactions.
+
+The publisher reviewed every required member and all 18 historical image layers,
+including their metadata, padding and trailers. The review is bounded, not a
+universal secret-absence proof. Exact public GnuTLS self-test constants were
+independently matched to published source and tightly hash/offset bound; unused
+framework test-build keys are permanently public. See the release notes and
+review ledger for the boundaries; never redact committed transcripts.
+
+At 02:14:56 UTC, a separate owner-only download matched all six GitHub asset hashes
+and sizes. Both complete archives passed a repeated content review, canonical
+envelope checks, actual restoration and the candidate semantic validator.
+An independent read-only reviewer checked both semantic validators, exact 39-file
+allowlists, each archive member against restored bytes, all six recorded asset
+digests, and private ownership/permissions, with no finding. The exact assets
+were checked again before and after publication; the tag resolves to d5ff8e8.
+Raw/restored proof and publication verification are retained in
+`live-run/presigned-v2-public-images.ZuU0Yi/`; files/directories were flushed.
+No registry push, app deployment, public listener, paid artifact storage,
+operational credentials or private wallet/recovery directories were published.
+
+The default-Signet wallet still had 0 confirmed/0 pending sats at 02:18 UTC and
+was uninitialized. All 19 real lifecycles and final release assembly remain
+outstanding; physical-device checks remain deferred to onboarding.
+
+## Historical log-only archive-CI checkpoint (2026-09-07 UTC)
 
 [Run 34150142799](https://github.com/twood22/btc-multiplayer-vault/actions/runs/34150142799)
 passed all three jobs on commit `3f0d621be4c5b78165f8856d1727382ce4c0f013`,
@@ -88,10 +153,10 @@ source/receipt commitments and matching archive-result bindings. Four public
 result files per profile, the read-only collector and its README are retained
 owner-only in `live-run/presigned-v2-public-ci.e7clQK/` (14 files). **These are
 log-only copies, not the archive/OCI bytes.** No archive was uploaded; runner
-disposal removes those bytes. Public test-only archive publication still needs
-approval, followed by actual durable retention and local byte-level validation.
-No content-privacy scan of the archives, completed release dossier or final
-acceptance assembly is claimed.
+disposal removed those bytes. Archive publication was not authorized at this
+earlier checkpoint. The separately authorized, retained and content-reviewed
+archives above come from a new image run; these older hashes remain historical.
+No completed release dossier or final acceptance assembly is claimed.
 
 At18:28 UTC, the isolated default-Signet wallet still had zero pending/confirmed
 test sats and no initialized lifecycle. All19 real default-Signet lifecycles
@@ -128,14 +193,15 @@ backup or a power-loss recovery experiment. The test parent, browser processes,
 Core nodes and scoped PostgreSQL instances stopped; the original outbound-only
 default-Signet node remains running.
 
-Both public image archives are still unretained. Fresh host checks at 19:24 UTC
-found no local container engine or QEMU; `unshare -Ur true` was denied at
+At that checkpoint, both public image archives were still unretained. Host checks
+at 19:24 UTC found no local container engine or QEMU; `unshare -Ur true` was denied at
 `uid_map`. No host security setting was changed. Public test-only prerelease
-archive retention remains unapproved. At 19:30 UTC the isolated default-Signet
+archive retention was not yet approved; the new authorized checkpoint above
+supersedes that limitation. At 19:30 UTC the isolated default-Signet
 wallet still had zero pending/confirmed test sats and no initialized lifecycle.
 All 19 real default-Signet lifecycles and final release assembly remain pending;
 physical passkeys remain deferred. No archive publication, mainnet spending,
-app deployment or outreach occurred.
+app deployment or outreach occurred during that private-local checkpoint.
 
 ## Historical initial public-CI checkpoint (source09609ca8, 2026-09-07 UTC)
 

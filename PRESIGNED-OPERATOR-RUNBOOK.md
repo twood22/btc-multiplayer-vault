@@ -44,10 +44,11 @@ working local rootless Podman and never push an image. Do not enable privileged
 containers or weaken host isolation when that prerequisite is unavailable.
 
 The authorized standard public GitHub runners have passed this complete local
-matrix and both exact-image profiles. They publish normal test logs/receipts,
-not private wallets, recovery kits or whole runtime directories. The current
-log-only CI does not retain all child transcripts and OCI layers for final
-assembly; a green run must not be supplied in place of those actual artifacts.
+matrix and both exact-image profiles. The original acceptance workflow publishes
+normal test logs/receipts, not private wallets, recovery kits or whole runtime
+directories. That log-only workflow does not retain all child transcripts and
+OCI layers; a green run must not replace actual artifacts. The separately
+approved test-only release route below now retains both complete image archives.
 
 For complete **current-source** evidence directories, `npm run
 presigned:pack-evidence -- local|signet-image|mainnet-image /absolute/evidence
@@ -69,17 +70,33 @@ This is not a privacy scanner: required rootless engine transcripts contain
 host/storage metadata, and inspected image configuration may contain environment
 metadata. Review those exact files and image build contents before approving any
 publication. Do not redact hashed transcripts or include wallet/kit directories.
-All three profiles passed actual packaging/restoration on their disposable
-runners in run34150142799, but CI **does not upload archives**; temporary archive bytes disappear when the
-runner is discarded. Public test-only prerelease archive retention awaits
-separate authorization. A checksum or passing archive test is not a completed
-release dossier, a real-Signet lifecycle, or funding/deployment authority.
+All three profiles passed actual packaging/restoration on disposable runners in
+run34150142799, but that original acceptance workflow **does not upload archives**;
+its temporary bytes disappeared with the runners.
+
+The separately approved
+[test-only evidence prerelease](https://github.com/twood22/btc-multiplayer-vault/releases/tag/presigned-v2-test-evidence-536935c2-20260908)
+now retains both complete image archives and four retention/content-review
+records from run 34178522361. The pinned application source remains `536935c2`;
+publication tooling is on a separate branch. Each archive has 39 required files
+and 18 actual OCI layers. All six downloads matched GitHub hashes; both complete
+archives passed local content review, actual restoration, semantic validation
+and independent member-by-member review. See the evidence plan for exact hashes.
+
+These permanently public synthetic-test images must **never receive real funds,
+participant custody or operational credentials**, or be promoted to production.
+The bounded content review includes historical layers and canonical archive
+metadata; exact public GnuTLS self-test constants and unused framework test-build
+keys are explicitly documented. No wallet/recovery directory is included.
+A checksum, archive or prerelease is not a completed release dossier, a real
+default-Signet lifecycle, or funding/deployment authority.
 
 The separate current-source private local run completed all 47 commands at
 19:45 UTC on 2026-09-07. Its 102 required local files and actually restored,
 revalidated archive are now retained owner-only on the host; exact bindings and
-independent verification are recorded in the V2 evidence plan. This does not
-supply either missing image archive or the real default-Signet proof.
+independent verification are recorded in the V2 evidence plan. This supplies
+the same-source local counterpart to the test-image archives above, but not the
+remaining real default-Signet proof.
 
 Real default-Signet evidence is separate. On the exact fresh isolated test host,
 `presigned:signet-lifecycle` takes `status`, `init`, `fund`, `advance` or `verify`

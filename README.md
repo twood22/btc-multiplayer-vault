@@ -84,8 +84,20 @@ revalidated on the runners; the local-only `presigned:pack-evidence` command
 does not upload them. A separate current-source private run also passed all 47
 commands at 19:45 UTC; its exact 102-file local evidence set and restored,
 revalidated archive are retained owner-only on the host. Actual default-Signet
-lifecycles and durably retained image evidence for final release assembly are
-still outstanding. See the V2 evidence plan for the distinct run/archive hashes.
+lifecycles and final release assembly remain outstanding. See the V2 evidence
+plan for the distinct run/archive hashes.
+
+The separately approved
+[test-only prerelease](https://github.com/twood22/btc-multiplayer-vault/releases/tag/presigned-v2-test-evidence-536935c2-20260908)
+now retains both actual image archives and their four review/retention records.
+Run 34178522361 passed both genuine image profiles on the same source `536935c2`.
+All six downloaded assets matched GitHub's hashes; both archives passed actual
+content review, restoration and semantic validation, followed by an independent
+member-by-member review. Each includes all 39 required files and 18 OCI layers.
+The publication tooling is separate from the frozen application candidate.
+These permanently public synthetic-test images must **never be used with real
+funds, participant custody or operational credentials**. This is not a production
+release, funding authority or real default-Signet evidence.
 
 The saved offline utility has passed the full six-ordering/four-cooperative/
 nine-recovery matrix and all ten native-wallet fee cases on one exact artifact.
@@ -123,7 +135,7 @@ It requires `--vault-id`, `--epoch-id`, two distinct output paths via
 `--write-protected-receipt` and `--write-database-receipt`, and
 `--confirm-source-quiesced SOURCE_QUIESCED_FOR_BACKUP_RESTORE`.
 It does not pause services, perform a restore, authorize spending or replace
-the outstanding real-network, exact-image and physical-device release checks.
+the remaining real-network, release-assembly and physical-device checks.
 
 ## Preserved v1 implementation and historical evidence
 
