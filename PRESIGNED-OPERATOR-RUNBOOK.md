@@ -37,14 +37,16 @@ npm run presigned:test:container -- signet
 npm run presigned:test:container -- mainnet
 ```
 
-The first command runs the fixed47-step local matrix, including both network
+The first command runs the fixed 49-step local matrix, including both network
 formats, all Core families, five PostgreSQL suites, the complete saved-file
 recovery browser and a fresh Signet-format web build. Container commands need
 working local rootless Podman and never push an image. Do not enable privileged
 containers or weaken host isolation when that prerequisite is unavailable.
 
-The authorized standard public GitHub runners have passed this complete local
-matrix and both exact-image profiles. The original acceptance workflow publishes
+The authorized standard public GitHub runners passed the historical 47-step
+matrix and both exact-image profiles on source `536935c2`. The new low-capital
+runner adds two pure signing/validation runs and requires new same-source
+acceptance; old receipts cannot be reused. The original workflow publishes
 normal test logs/receipts, not private wallets, recovery kits or whole runtime
 directories. That log-only workflow does not retain all child transcripts and
 OCI layers; a green run must not replace actual artifacts. The separately
@@ -77,7 +79,7 @@ its temporary bytes disappeared with the runners.
 The separately approved
 [test-only evidence prerelease](https://github.com/twood22/btc-multiplayer-vault/releases/tag/presigned-v2-test-evidence-536935c2-20260908)
 now retains both complete image archives and four retention/content-review
-records from run 34178522361. The pinned application source remains `536935c2`;
+records from run 34178522361. Those historical archives pin source `536935c2`;
 publication tooling is on a separate branch. Each archive has 39 required files
 and 18 actual OCI layers. All six downloads matched GitHub hashes; both complete
 archives passed local content review, actual restoration, semantic validation
@@ -91,7 +93,7 @@ keys are explicitly documented. No wallet/recovery directory is included.
 A checksum, archive or prerelease is not a completed release dossier, a real
 default-Signet lifecycle, or funding/deployment authority.
 
-The separate current-source private local run completed all 47 commands at
+The separate historical `536935c2` private local run completed all 47 commands at
 19:45 UTC on 2026-09-07. Its 102 required local files and actually restored,
 revalidated archive are now retained owner-only on the host; exact bindings and
 independent verification are recorded in the V2 evidence plan. This supplies
@@ -101,9 +103,24 @@ remaining real default-Signet proof.
 Real default-Signet evidence is separate. On the exact fresh isolated test host,
 `presigned:signet-lifecycle` takes `status`, `init`, `fund`, `advance` or `verify`
 and the host's protected control-file path. `status` and `verify` are read-only.
-`init` allocates fresh test-wallet targets; `fund` commits at most800,000 test sats
-including its capped fanout fee; `advance` signs and submits the exact resumable
-test cases. It must be run only with isolated random test keys and test coins.
+`init` also requires `--capital-limit-sats=N --initial-outpoint=TXID:VOUT`.
+Use one exact confirmed, non-coinbase native coin from that isolated wallet;
+the minimum bounded seed is 124,680 sats. The 128,985-sat budget retains all
+19 cases, five replacement families, 10,000-sat deposits and CSV12. `fund`
+allocates the first case only. `advance` recycles each fully settled case's exact
+payouts, refunds, sponsor change and reserve into the next, with no wallet coin
+selection or key import. Full intent and signed journals precede signing and
+broadcast respectively; only the same exact transaction may be retried.
+The 20 allocations, including final return, are capped at 2,250 sats each and
+use a conservative 2-sat/vB calculation. Together with 47,000 sats of fixed
+lifecycle fees, total burn cannot exceed 92,000 sats. Final acceptance requires
+all 84 unique transactions and a confirmed, unspent wallet return: at least
+36,985 sats from a 128,985-sat seed. A missing historical intent, foreign spender,
+changed source, fee-policy refusal or unproven replacement stops progress; never
+increase the budget, drop cases or relabel spent payouts as unspent to continue.
+Sequential confirmations and nine separate CSV waits make this slower than the
+historical fully prefunded parallel run. Only isolated random keys/test coins
+may be used; this capital-transport helper is not a product withdrawal API.
 Wait for reported confirmations/CSV maturity and resume the same directory;
 never substitute regtest, custom Signet or deterministic public fixture keys.
 Freeze executable source from `init` through final verification.

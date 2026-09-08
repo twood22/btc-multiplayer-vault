@@ -55,6 +55,17 @@ assert(live.version === 2 && live.protocol === 'presigned-graph-v2' && live.kind
   live.recoverySubsetsConfirmed === 9 && live.feeFamiliesConfirmed === 5 && live.restoredKits === 57 && live.hostileRejections === 80 &&
   live.everyPayoutRefundAndSponsorChangeVerified === true && live.freshRandomParticipantKeys === true && live.externalWalletKeysExported === false &&
   live.physicalPasskeysVerified === false && live.liveBrowserPasskeysVerified === false && live.fundingAuthorized === false);
+const capital = live.capitalRecyclingEvidence;
+assert(capital?.version === 1 && capital.execution === 'bounded-sequential-recycling-v1' &&
+  Number.isSafeInteger(capital.initialCapitalSats) && capital.initialCapitalSats >= 124_680 &&
+  capital.initialCapitalSats <= capital.capitalLimitSats && capital.capitalLimitSats <= 1_000_000 &&
+  capital.unrelatedWalletInputsUsed === 0 && capital.confirmedAllocations === 20 && capital.uniqueConfirmedTransactions === 84 &&
+  capital.fixedConfirmedFeesSats === 47_000 && capital.allocationFeesSats <= 45_000 &&
+  capital.uniqueConfirmedFeesSats === capital.fixedConfirmedFeesSats + capital.allocationFeesSats &&
+  capital.maximumUniqueConfirmedFeesSats === 92_000 && capital.returnedSats >= 330 &&
+  capital.initialCapitalSats === capital.returnedSats + capital.uniqueConfirmedFeesSats &&
+  capital.allTerminalOutputsAndReservesConsumedExactlyOnce === true && capital.finalWalletReturnConfirmedAndUnspent === true,
+  'completed Signet evidence lacks exact closed-budget capital recycling and confirmed return');
 assert.equal(commitmentDigest('vault/presigned-graph-v2/verified-live-lifecycle', liveBody), liveDigest);
 assert.equal(presignedSourceDigest(), sourceDigest, 'source changed during final acceptance assembly');
 

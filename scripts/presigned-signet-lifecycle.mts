@@ -8,10 +8,13 @@ import { advanceLiveLifecycle, fundLiveLifecycle, initializeLiveLifecycle, lifec
   readLifecycleFile, verifyCompletedLiveLifecycle, type LiveLifecycleCore } from './lib/presigned-live-lifecycle.js';
 
 process.umask(0o077);
-const [operation, filename] = process.argv.slice(2);
-assert(process.argv.length === 4 && ['init', 'status', 'fund', 'advance', 'verify'].includes(operation ?? '') &&
+const [operation, filename, capitalArgument, coinArgument] = process.argv.slice(2);
+assert(process.argv.length === (operation === 'init' ? 6 : 4) && ['init', 'status', 'fund', 'advance', 'verify'].includes(operation ?? '') &&
   /^\/tmp\/btc-presigned-signet-[A-Za-z0-9]+\/control\.json$/u.test(filename ?? ''),
-'usage: tsx scripts/presigned-signet-lifecycle.mts init|status|fund|advance|verify /tmp/btc-presigned-signet-.../control.json');
+'usage: tsx scripts/presigned-signet-lifecycle.mts init|status|fund|advance|verify /tmp/btc-presigned-signet-.../control.json [init only: --capital-limit-sats=N --initial-outpoint=TXID:VOUT]');
+const capitalMatch = /^--capital-limit-sats=([1-9][0-9]{0,6})$/u.exec(capitalArgument ?? '');
+const coinMatch = /^--initial-outpoint=([0-9a-f]{64}):([0-9]{1,8})$/u.exec(coinArgument ?? '');
+assert(operation !== 'init' || (capitalMatch && coinMatch), 'init requires an explicit capital limit and exact confirmed initial outpoint');
 const directory = filename!.slice(0, -'/control.json'.length);
 const metadata = lstatSync(directory);
 assert(metadata.isDirectory() && metadata.uid === process.getuid?.() && (metadata.mode & 0o077) === 0);
@@ -76,7 +79,8 @@ if (operation === 'verify') {
   const lock = openSync(lockFile, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
   writeFileSync(lock, JSON.stringify({ pid: process.pid })); closeSync(lock);
   try {
-    const result = operation === 'init' ? await initializeLiveLifecycle(core, runDirectory)
+    const result = operation === 'init' ? await initializeLiveLifecycle(core, runDirectory, {
+      capitalLimitSats: Number(capitalMatch![1]), initialOutpoint: { txid: coinMatch![1]!, vout: Number(coinMatch![2]) } })
       : operation === 'fund' ? await fundLiveLifecycle(core, runDirectory) : await advanceLiveLifecycle(core, runDirectory);
     console.log(JSON.stringify({ ...result, evidence: runDirectory }));
   } finally { unlinkSync(lockFile); }

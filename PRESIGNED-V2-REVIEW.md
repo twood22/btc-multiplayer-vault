@@ -3,6 +3,41 @@
 Date: 2026-09-07 UTC. This is internal code review and executable regression
 evidence, not an external security audit, production release or funding approval.
 
+## Low-capital follow-up review (2026-09-08 UTC)
+
+Two independent source reviews and an independently implemented Core regression
+runner cover the new sequential test-capital transport. The pure reviewer found
+high-S ECDSA acceptance, unknown nested journal fields, and permissive hex
+decoding. The implementation now shares the strict native-wallet verifier,
+rejects unknown fields and noncanonical/bounded hex, and rejects journals beyond
+the private reader's size bound before signing. Wallet Taproot signatures support
+DEFAULT and ALL; participant payout signatures remain DEFAULT. Actual temporary
+private-key buffers are cleared. Root reproduced passing pure tests under both
+network configurations: ten valid transactions, eight accepted wallet-PSBT
+normalization forms and 96 rejected mutations each.
+
+The caller review found no high-impact custody or capital-confinement blocker,
+but identified a fail-late historical funding-intent check. That exact check now
+runs before a completed predecessor can authorize further recycling. Missing and
+mismatched intent regressions are included in the new Core runner, alongside the
+original backup, hostile-witness, lost-response and reorganization checks.
+
+The first actual low-capital Core run refused initial allocation signing before
+broadcast: Core 31.1 strips redundant `nonWitnessUtxo` from native-input PSBTs.
+A separate isolated Core diagnostic confirmed unchanged unsigned bytes and exact
+witness values/scripts, with only that redundant field removed. A second run
+completed the first case and both historical-intent refusals, then exposed Core's
+witness stripping in returned full-parent metadata. The diagnostic found all ten
+mixed inputs retained exact values/scripts, parent txids and non-witness bytes.
+The caller now requires exact witness prevouts and exact parent identity/
+non-witness bytes when redundant parents are returned; the immutable intent
+still independently validates every original full parent, input, output, fee
+and final signature. No coin-selection fallback was introduced.
+Complete current-source Core/49-command/image/live-Signet results remain pending;
+the dated checkpoints below retain their original historical scope.
+
+## Original review checkpoint
+
 Three independent reviewers examined custody/signature release, chain/send/fee
 authority, and release/restore/evidence boundaries. They independently matched
 the original source digest

@@ -99,17 +99,37 @@ These permanently public synthetic-test images must **never be used with real
 funds, participant custody or operational credentials**. This is not a production
 release, funding authority or real default-Signet evidence.
 
+The public `536935c2` evidence above is historical: the current low-capital
+acceptance runner changes executable source and requires a fresh full local
+suite, both exact image profiles and real default-Signet evidence on its own
+source digest. Historical test receipts cannot authorize this changed source.
+
 The saved offline utility has passed the full six-ordering/four-cooperative/
 nine-recovery matrix and all ten native-wallet fee cases on one exact artifact.
 The resumable runner has passed those 19 lifecycle cases, five fee families and
 lost-reply recovery against isolated Core. Neither establishes real Signet.
 For the fresh isolated default-Signet host, `presigned:signet-lifecycle` accepts
 `status`, `init`, `fund`, `advance` or `verify`, followed by that host's exact owner-only
-`control.json` path. `status` is read-only. `init` reserves fresh wallet targets;
-`fund` commits 784,000 test sats plus at most 16,000 sats of fanout fees;
+`control.json` path. `status` is read-only. `init` additionally requires
+`--capital-limit-sats=N --initial-outpoint=TXID:VOUT`: one exact, confirmed,
+non-coinbase native output owned by the fresh isolated wallet. It reserves fresh
+wallet targets and commits that coin and budget. The lower bound is 124,680 sats;
+128,985 sats supports the unchanged complete 19-case/five-fee-family matrix.
+`fund` signs and submits only the initial bounded allocation. Each subsequent
+case receives all prior verified participant payouts, funding refunds, sponsor
+change and the unused reserve through one exact journaled allocation. Participant
+payout keys are restored locally and never imported into Core; Core cannot
+select other wallet coins. Every case retains 10,000-sat deposits and CSV12.
+Twenty allocations, including the final wallet return, each have a hard
+2,250-sat fee cap; the actual conservative fee is 2 sat/vB. The fixed lifecycle
+fees total 47,000 sats, making total burn at most 92,000 sats and the final return
+at least 36,985 sats from a 128,985-sat seed. No automatic fee or budget increase
+is permitted. If the exact inputs cannot meet policy or confirmation conditions,
+the run retains its state and reports the unresolved condition.
 `advance` performs one resumable pass and reports pending confirmations/CSV.
 `verify` is a separate read-only check of all completed lifecycles, decrypted
-backups, active confirmations, replacements and exact payouts; it cannot prepare,
+backups, active confirmations, replacements, exact historical payouts and the
+closed 84-transaction capital DAG with its confirmed unspent final return; it cannot prepare,
 sign or broadcast. Retain the exact source checkpoint: changing executable source
 after `init` invalidates the run binding rather than silently reinterpreting it.
 Never supply an operational wallet or deterministic fixture keys. Keep the

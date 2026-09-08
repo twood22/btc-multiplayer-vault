@@ -22,6 +22,7 @@ const pureFiles = [
   'src/presigned/coin-observations-acceptance.ts', 'src/presigned/release-acceptance.ts',
   'web/tests/presigned-custody-acceptance.ts', 'web/tests/presigned-local-lock-acceptance.ts',
   'web/tests/presigned-browser-review-probe.ts', 'web/tests/presigned-chain-review-acceptance.ts',
+  'scripts/presigned-live-recycling-verification.mts',
 ];
 export function acceptancePlan(mode: AcceptanceMode): AcceptanceCommand[] {
   assert(mode === 'pure' || mode === 'local');
@@ -147,6 +148,13 @@ export function validateCommandResults(command: AcceptanceCommand, stdout: strin
       assert(result?.network === command.network && result.nativeWalletCombinations === 8 && result.exitsPerCombination === 9,
         'graph acceptance did not cover the actual requested network and wallet matrix');
     }
+    if (command.args.at(-1) === 'scripts/presigned-live-recycling-verification.mts') {
+      const result = records.findLast(resultPassed);
+      assert(result?.configuredNetwork === command.network && result.scope === 'pure-offline-capital-recycling' &&
+        result.signedTransactions === 10 && result.normalizedWalletPsbts === 8 && result.rejectedMutations >= 96 && result.completedChecks >= 13 &&
+        result.networkCalls === 0 && result.walletCalls === 0 && result.consensusOrLiveSignetVerified === false,
+      'capital signing proof lacks the actual mixed-native and hostile-journal regressions');
+    }
   } else if (command.category === 'core') {
     assert(!records.some(item => item.passed === false || item.status === 'failed'), `${command.id} reported a failed result`);
     const record = records.findLast(resultPassed);
@@ -157,6 +165,16 @@ export function validateCommandResults(command: AcceptanceCommand, stdout: strin
       record.adequatePackageAndReplacementConfirmed === true && record.fundingAndGraphUnchanged === true);
     if (command.id === 'presigned-core-funding-fees') assert(record.dynamicMempoolFloorRaisedByRealEviction === true &&
       record.adequatelySponsoredFundingAndReplacementConfirmed === true && record.exactGraphAndNineExitTxidsUnchanged === true);
+    if (command.id === 'presigned-live-lifecycle-regtest') {
+      const capital = record.capitalAudit;
+      assert(record.cases === 19 && record.feeFamilies === 5 && record.lostRepliesWithoutResending === 6 &&
+        capital?.initialCapitalSats === 128_985 && capital.fixedConfirmedFeesSats === 47_000 &&
+        Number.isSafeInteger(capital.allocationFeesSats) && capital.allocationFeesSats > 0 && capital.allocationFeesSats <= 45_000 &&
+        capital.returnedSats + capital.fixedConfirmedFeesSats + capital.allocationFeesSats === capital.initialCapitalSats &&
+        capital.confirmedAllocations === 20 && capital.recycledParticipantPayouts === 57 && capital.unrelatedWalletInputsUsed === 0 &&
+        capital.allTerminalOutputsAndReservesConsumedExactlyOnce === true,
+      'resumable Core proof omits the complete confined low-capital money trail or restart faults');
+    }
   } else if (command.id === 'offline-full') {
     assert(!records.some(item => item.passed === false || item.status === 'failed'), 'offline proof reported a failed result');
     const record = records.findLast(resultPassed);

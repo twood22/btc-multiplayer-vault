@@ -30,6 +30,31 @@ Sixteen OCI boundary regressions pass, including 0755 refusal, successful
 permission correction, symlink non-mutation and non-private-parent refusal;
 scripts typecheck passes. The fresh whole matrix subsequently passed below.
 
+## Low-capital follow-up (2026-09-08 UTC)
+
+The user authorized proceeding with the available confirmed 128,985 test sats.
+The runner now uses one explicitly selected coin and a closed sequential
+allocation DAG, preserving all 19 cases, five replacement families and original
+economics. Its 20 allocation fees are capped at 45,000 sats in total; the fixed
+lifecycle fees are 47,000 sats. Final acceptance requires a confirmed unspent
+return and exact conservation across 84 unique confirmed transactions, with no
+unrelated wallet inputs. The original all-at-once 800,000-sat harness budget was
+not a Bitcoin network minimum. The new lower bound is 124,680 sats.
+
+Pure signing tests pass for both configured networks (ten valid transactions,
+eight wallet-PSBT normalization forms and 96 hostile mutations each), scripts
+typecheck passes, and the evidence boundary suite now has 67 refusal checks
+plus 19 archive negatives.
+Independent review corrections and a Core PSBT compatibility diagnosis are
+recorded in the review checkpoint. The complete low-capital Core run is being
+validated; real default-Signet allocation has not started. The required full
+local plan now contains 49 commands. Current-source full local, both image
+profiles and live-Signet evidence remain required. All `536935c2` receipts and
+archives below are historical and cannot certify this changed executable source.
+
+The table below records implementation and prior test coverage; it is not a
+claim that the changed source has completed its fresh acceptance requirements.
+
 | Requirement | Implementation / acceptance evidence | Status |
 | --- | --- | --- |
 | Versioned protocol, threat model, full scope | PRESIGNED-PROTOCOL.md; independently reviewed findings reproduced and corrected | Implemented and documented; three scoped internal reviews and rereviews complete, not an external audit |
@@ -41,9 +66,9 @@ scripts typecheck passes. The fresh whole matrix subsequently passed below.
 | Cooperative, CSV, final sweep | Core19 confirmed cases and56 rejections; funding and all game transactions V3 | Core and actual browser signing passed; lifecycle confirmations also proven by standalone offline browser |
 | Fee adaptation with stable descendants | Funding, solo, cooperative, CSV and final payout sponsorship; TRUC/rolling-floor tests | Unified offline/database families, actual Core fee tests and clean Signet-format browser wrapper pass in the full aggregate |
 | Versioned database/runtime/watcher | Migrations015-021, exact-send journals, unknown-state preservation, reverse reorg/restore and monotonic poll revision | Lost-lease/ABA and both fair-queue regressions pass actual Core/PostgreSQL in the corrected-source full aggregate |
-| Substantive v2 readiness and release gate | Exact-image/check receipts and exact funding-state restore proof; no provider gate bypass | Evidence boundary suite has49 fail-closed negatives plus19 archive negatives; native restore has22; end-to-end release proof remains pending |
+| Substantive v2 readiness and release gate | Exact-image/check receipts and exact funding-state restore proof; no provider gate bypass | Evidence boundary suite has67 fail-closed negatives plus19 archive negatives; native restore has22; end-to-end release proof remains pending |
 | Actual packaged app execution | Production Dockerfile, rootless Podman, all OCI bytes, immutable image, operator and real browser checks | Both profiles passed; exact test-only archives are now publicly retained and independently restored/validated |
-| Real default-Signet full lifecycles | Isolated keys/coins, txids, confirmations, output audit | Resumable runner and read-only re-verification passed 19 isolated-Core cases; actual default-Signet wallet still unfunded |
+| Real default-Signet full lifecycles | Isolated keys/coins, txids, confirmations, output audit | Historical runner passed 19 isolated-Core cases; 128,985 confirmed default-Signet sats available; new low-capital runner under validation, no live allocation yet |
 | Documentation and independent security review | Protocol, operator/recovery runbook, versioned historical docs; reviewer findings reproduced and fixed | Three reviews and focused independent rereviews completed; no new findings in the corrected delta |
 | Physical-device passkeys | Friends' onboarding, explicitly deferred by user | Deferred; not tested |
 | Mainnet activation/public deployment | Separate user authority and release review | Not authorized |
@@ -52,7 +77,7 @@ The preliminary Core feasibility experiment is not integration evidence and
 does not satisfy the pending requirements above. Unchecked rows block completion
 of the active development goal, except the explicit deferred/unauthorized items.
 
-## Current retained test-image checkpoint (2026-09-08 UTC)
+## Historical retained test-image checkpoint (2026-09-08 UTC)
 
 The user explicitly authorized test-only prerelease archive publication on
 2026-09-07 local time. The

@@ -56,6 +56,28 @@ for (const failed of [{ passed: false }, { status: 'failed' }]) {
   denied(() => validateCommandResults(core, `${coreSummary}\n${JSON.stringify(failed)}\n`));
 }
 checks.push('whole JSON parsing, explicit network coverage and rejection of partial/failed evidence');
+const recycling = plan.find(item => item.args.at(-1) === 'scripts/presigned-live-recycling-verification.mts')!;
+const pureCapital = { passed: true, syntheticParserFixture: true, configuredNetwork: 'signet', scope: 'pure-offline-capital-recycling',
+  signedTransactions: 10, normalizedWalletPsbts: 8, rejectedMutations: 96, completedChecks: 13,
+  networkCalls: 0, walletCalls: 0, consensusOrLiveSignetVerified: false };
+validateCommandResults(recycling, JSON.stringify(pureCapital));
+for (const mutation of [{ configuredNetwork: 'mainnet' }, { rejectedMutations: 95 }, { signedTransactions: 9 }, { normalizedWalletPsbts: 7 },
+  { networkCalls: 1 }, { walletCalls: 1 }, { consensusOrLiveSignetVerified: true }])
+  denied(() => validateCommandResults(recycling, JSON.stringify({ ...pureCapital, ...mutation })));
+const lowCapital = acceptancePlan('local').find(item => item.id === 'presigned-live-lifecycle-regtest')!;
+const capitalAudit = { initialCapitalSats: 128_985, fixedConfirmedFeesSats: 47_000, allocationFeesSats: 30_000,
+  returnedSats: 51_985, confirmedAllocations: 20, recycledParticipantPayouts: 57, unrelatedWalletInputsUsed: 0,
+  allTerminalOutputsAndReservesConsumedExactlyOnce: true };
+const lowCapitalSummary = { passed: true, syntheticParserFixture: true, publicNetworkBroadcasts: 0, coreVersion: 310100,
+  cases: 19, feeFamilies: 5, lostRepliesWithoutResending: 6, capitalAudit };
+validateCommandResults(lowCapital, JSON.stringify(lowCapitalSummary));
+for (const mutation of [{ cases: 18 }, { feeFamilies: 4 }, { lostRepliesWithoutResending: 5 }])
+  denied(() => validateCommandResults(lowCapital, JSON.stringify({ ...lowCapitalSummary, ...mutation })));
+for (const mutation of [{ initialCapitalSats: 128_984 }, { fixedConfirmedFeesSats: 46_000 }, { allocationFeesSats: 45_001 },
+  { returnedSats: 51_986 }, { confirmedAllocations: 19 }, { recycledParticipantPayouts: 56 }, { unrelatedWalletInputsUsed: 1 },
+  { allTerminalOutputsAndReservesConsumedExactlyOnce: false }])
+  denied(() => validateCommandResults(lowCapital, JSON.stringify({ ...lowCapitalSummary, capitalAudit: { ...capitalAudit, ...mutation } })));
+checks.push('pure capital signatures and complete confined Core recycling are mandatory on the exact required matrix');
 const directory = mkdtempSync('/tmp/btc-presigned-evidence-boundary.');
 const filename = `${directory}/synthetic.json`;
 writeFileSync(filename, '{"synthetic":true}', { mode: 0o600, flag: 'wx' });
