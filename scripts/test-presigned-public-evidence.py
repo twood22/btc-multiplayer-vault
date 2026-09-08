@@ -6,6 +6,9 @@ from pathlib import Path
 import tarfile
 import unittest
 import sys
+import tempfile
+import zlib
+import struct
 
 sys.dont_write_bytecode = True
 
@@ -38,6 +41,24 @@ class ContentReviewTests(unittest.TestCase):
         for example in examples:
             with self.assertRaisesRegex(review.ReviewError, '^credential-like content$'):
                 review.scan_bytes(example)
+
+    def test_pem_documentation_without_payload(self):
+        review.scan_bytes(b'-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----')
+
+    def test_real_pem_shape_with_short_wrapped_lines(self):
+        with self.assertRaises(review.ReviewError):
+            review.scan_bytes(b'-----BEGIN PRIVATE KEY-----\n' + (b'A' * 8 + b'\n') * 8 + b'-----END PRIVATE KEY-----')
+
+    def test_encrypted_pem_headers(self):
+        with self.assertRaises(review.ReviewError):
+            review.scan_bytes(b'-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,' +
+                              b'0' * 32 + b'\n\n' + b'A' * 64 + b'\n-----END RSA PRIVATE KEY-----')
+
+    def test_diagnostic_filename_never_echoed(self):
+        filename = 'app/ghp_' + 'x' * 36
+        review.location(filename)
+        self.assertNotIn(filename, review.SCAN_LOCATION)
+        self.assertTrue(review.SCAN_LOCATION.startswith('path-sha256:'))
 
     def test_identifier(self):
         with self.assertRaises(review.ReviewError):
@@ -120,6 +141,42 @@ class ContentReviewTests(unittest.TestCase):
         self.assertEqual(totals['layerMembers'], 1)
         self.assertEqual(totals['decodedBytes'], 4)
         self.assertEqual(totals['decodedTarBytes'], len(buffer.getvalue()))
+
+    def outer_fixture(self, *, owner='', tail=b''):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode='w', format=tarfile.USTAR_FORMAT) as archive:
+            info = tarfile.TarInfo('browser.json')
+            info.mode = 0o600
+            info.uid = info.gid = info.mtime = 0
+            info.uname = owner
+            info.size = 2
+            archive.addfile(info, io.BytesIO(b'{}'))
+        raw = buffer.getvalue() + tail
+        compressed = zlib.compressobj(level=6, wbits=-15)
+        return b'\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03' + compressed.compress(raw) + compressed.flush() + struct.pack('<II', zlib.crc32(raw), len(raw))
+
+    def test_canonical_outer_envelope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'fixture.tar.gz'
+            path.write_bytes(self.outer_fixture())
+            self.assertEqual(review.inspect_outer_envelope(path), 1)
+
+    def test_outer_header_and_tail_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'fixture.tar.gz'
+            for data in (self.outer_fixture(owner='__cookie__:' + '1' * 20), self.outer_fixture(tail=b'not-zero')):
+                path.write_bytes(data)
+                with self.assertRaises(review.ReviewError):
+                    review.inspect_outer_envelope(path)
+
+    def test_extra_gzip_member_with_secret_comment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'fixture.tar.gz'
+            empty = zlib.compressobj(level=6, wbits=-15)
+            extra = b'\x1f\x8b\x08\x10\x00\x00\x00\x00\x00\x03' + b'__cookie__:' + b'x' * 32 + b'\x00' + empty.flush() + struct.pack('<II', 0, 0)
+            path.write_bytes(self.outer_fixture() + extra)
+            with self.assertRaises(review.ReviewError):
+                review.inspect_outer_envelope(path)
 
 
 if __name__ == '__main__':

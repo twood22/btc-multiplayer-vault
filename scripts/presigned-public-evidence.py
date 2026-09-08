@@ -6,6 +6,7 @@ errors. This is not a general proof that arbitrary binaries contain no secrets.
 It supplements the fresh-runner, no-credential build and semantic verifier.
 """
 import base64
+import io
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ import re
 import stat
 import sys
 import tarfile
+import zlib
 
 MAX_ARCHIVE = 2 * 1024 ** 3 - 1
 MAX_DECODED = 8 * 1024 ** 3
@@ -21,7 +23,7 @@ MAX_MEMBER = 512 * 1024 ** 2
 STAGES = ('rootless-preflight', 'build-image', 'inspect-image', 'export-oci',
           'runtime-identity', 'operator-runtime', 'browser-execution')
 SECRET_PATTERNS = (
-    rb'-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[\r\n]',
+    rb'-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----[ \t\r\n]+(?:[A-Za-z0-9-]{1,40}:[^\r\n]{0,200}\r?\n){0,8}[ \t\r\n]*(?:[A-Za-z0-9+/=][ \t\r\n]*){32}',
     rb'(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{60,})',
     rb'__cookie__:[A-Za-z0-9+/=_-]{16,}',
     rb'(?i)["\x27](?:personalPrivateKey|payoutPrivateKey|privateKeyHex|recoveryKey|walletSeed|mnemonic)["\x27]\s*:\s*["\x27][A-Za-z0-9+/= _-]{32,}["\x27]',
@@ -30,6 +32,7 @@ SECRET_PATTERNS = (
 )
 COMPILED = tuple(re.compile(pattern) for pattern in SECRET_PATTERNS)
 FRAMEWORK_KEY = re.compile(rb'"(?:encryptionKey|previewModeSigningKey|previewModeEncryptionKey)"\s*:\s*"[A-Za-z0-9+/=]{32,}"')
+SCAN_LOCATION = 'archive'
 
 
 class ReviewError(Exception):
@@ -49,6 +52,100 @@ def strict_json(data):
             result[key] = value
         return result
     return json.loads(data, object_pairs_hook=pairs)
+
+
+def location(name):
+    global SCAN_LOCATION
+    # Even a filename can be a secret. Resolve this digest against known public
+    # source paths privately; never echo a rejected archive filename.
+    SCAN_LOCATION = 'path-sha256:' + hashlib.sha256(name.encode()).hexdigest()
+
+
+class SingleGzipReader(io.RawIOBase):
+    """Exactly one bounded gzip member: no ignored comments in extra members."""
+    def __init__(self, path):
+        super().__init__()
+        self.raw = path.open('rb')
+        self.decoder = zlib.decompressobj(31)
+        self.pending = b''
+        self.finished = False
+        self.decoded = 0
+
+    def readable(self):
+        return True
+
+    def readinto(self, output):
+        if self.finished:
+            return 0
+        while True:
+            if not self.pending:
+                self.pending = self.raw.read(64 * 1024)
+                require(bool(self.pending), 'truncated single gzip member')
+            data = self.decoder.decompress(self.pending, len(output))
+            self.pending = self.decoder.unconsumed_tail
+            self.decoded += len(data)
+            require(self.decoded <= MAX_DECODED, 'gzip decoded bytes exceed limit')
+            if self.decoder.eof:
+                require(not self.decoder.unused_data and not self.pending and not self.raw.read(1),
+                        'extra gzip member or compressed trailer')
+                self.finished = True
+            if data:
+                output[:len(data)] = data
+                return len(data)
+            if self.finished:
+                return 0
+
+    def close(self):
+        self.raw.close()
+        super().close()
+
+
+def inspect_outer_envelope(path):
+    """The exact GNU ustar/gzip envelope emitted by the frozen packer."""
+    def octal(field):
+        require(bool(re.fullmatch(rb'[ 0-7\x00]+', field)), 'invalid outer numeric field')
+        return int(field.strip(b' \x00') or b'0', 8)
+    with path.open('rb') as raw:
+        require(raw.read(10) == b'\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03', 'noncanonical outer gzip header')
+    names = set()
+    total = 0
+    with io.BufferedReader(SingleGzipReader(path), buffer_size=1024 * 1024) as data:
+        while True:
+            header = data.read(512)
+            require(len(header) == 512, 'truncated outer tar header')
+            total += 512
+            if header == b'\x00' * 512:
+                require(data.read(512) == b'\x00' * 512, 'invalid outer end marker')
+                total += 512
+                tail = data.read(10241)
+                require(len(tail) <= 10240 and not tail.strip(b'\x00') and not data.read(1), 'nonzero or excessive outer trailer')
+                total += len(tail)
+                break
+            first, *rest = header[:100].split(b'\x00', 1)
+            require(not rest or not rest[0].strip(b'\x00'), 'noncanonical outer name padding')
+            name = member_name(first.decode('ascii'), outer=True)
+            require(name not in names and len(names) < 512, 'duplicate outer header')
+            names.add(name)
+            require(octal(header[100:108]) == 0o600 and octal(header[108:116]) == 0 and octal(header[116:124]) == 0 and
+                    octal(header[136:148]) == 0, 'noncanonical outer ownership, mode or time')
+            size = octal(header[124:136])
+            require(size <= MAX_ARCHIVE, 'oversized outer body')
+            require(octal(header[148:156]) == sum(header[:148] + b' ' * 8 + header[156:]), 'invalid outer checksum')
+            require(header[156:157] == b'0' and header[157:257] == b'\x00' * 100 and header[257:265] == b'ustar\x0000',
+                    'unsupported outer type or format')
+            require(not header[265:329].strip(b'\x00') and octal(header[329:337]) == 0 and octal(header[337:345]) == 0 and
+                    not header[345:].strip(b'\x00'), 'noncanonical outer metadata')
+            remaining = size
+            while remaining:
+                chunk = data.read(min(1024 * 1024, remaining))
+                require(bool(chunk), 'truncated outer body')
+                remaining -= len(chunk)
+            padding = (-size) % 512
+            require(data.read(padding) == b'\x00' * padding, 'nonzero outer file padding')
+            total += size + padding
+            require(total <= MAX_DECODED, 'outer envelope exceeds limit')
+    require(total % 10240 == 0, 'noncanonical outer tar record size')
+    return len(names)
 
 
 def member_name(name, outer=False):
@@ -79,7 +176,11 @@ def scan_path(name):
 
 
 def scan_bytes(data, forbidden=()):
-    require(not any(pattern.search(data) for pattern in COMPILED), 'credential-like content')
+    for index, pattern in enumerate(COMPILED):
+        if pattern.search(data):
+            error = ReviewError('credential-like content')
+            error.rule_index = index
+            raise error
     lowered = data.lower()
     require(not any(value.lower() in lowered for value in forbidden if len(value) >= 4),
             'unintended identifying content')
@@ -170,6 +271,7 @@ def inspect_layer(stream, forbidden, totals):
             totals['layerMembers'] += 1
             require(totals['layerMembers'] <= 200000, 'excessive layer members')
             name = member_name(member.name)
+            location(name)
             scan_path(name)
             scan_bytes(name.encode(), forbidden)
             scan_bytes(member.uname.encode(), forbidden)
@@ -238,6 +340,7 @@ def review(directory):
     size = owned_file(archive, MAX_ARCHIVE).st_size
     digest = hash_file(archive)
     require(digest == retention['archiveSha256'] and size == retention['archiveBytes'], 'archive differs from verified bytes')
+    require(inspect_outer_envelope(archive) == retention['files'], 'outer envelope membership differs')
     # Repo owner is an ephemeral review input, not embedded in public tooling or
     # review reports. Dependency authorship is public source, not host identity.
     owner = os.environ.get('GITHUB_REPOSITORY_OWNER', '')
@@ -250,6 +353,7 @@ def review(directory):
     with tarfile.open(archive, mode='r|gz') as outer:
         for member in outer:
             name = member_name(member.name, outer=True)
+            location(name)
             require(member.isreg() and name not in names and len(names) < 512 and 0 <= member.size <= MAX_ARCHIVE,
                     'unexpected outer member type, duplicate or size')
             names.add(name)
@@ -302,6 +406,7 @@ def review(directory):
               'toolingCommit': retention['toolingCommit'], 'workflowRunId': retention['workflowRunId'],
               'scannerSha256': hash_file(Path(__file__)),
               'historicalLayersInspected': True, 'exactArchiveMembersInspected': True,
+              'canonicalOuterEnvelopeVerified': True,
               'freshCredentialFreeHostedBuildRequired': True, 'universalSecretAbsenceProven': False,
               'productionUsePermitted': False, 'fundingAuthorized': False}
     output = root / f'presigned-v2-{network}-content-review.json'
@@ -318,5 +423,6 @@ if __name__ == '__main__':
     except Exception as error:
         # Never include data-derived exception messages or raw matched values.
         reason = str(error) if isinstance(error, ReviewError) else 'malformed or unsupported archive content'
-        print(json.dumps({'passed': False, 'reason': reason, 'uploaded': False}), file=sys.stderr)
+        print(json.dumps({'passed': False, 'reason': reason, 'location': SCAN_LOCATION,
+                          'ruleIndex': getattr(error, 'rule_index', None), 'uploaded': False}), file=sys.stderr)
         sys.exit(1)

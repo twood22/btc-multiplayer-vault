@@ -16,7 +16,10 @@ runtime evidence, and all seven required execution transcripts. The candidate's
 existing verifier checks the image actually executed, archive membership,
 checksums, and restored bytes. The separate publication review examines actual
 archive contents, including historical layers, without extracting an image onto
-the host. It is a bounded content review, not a universal secret-detection claim.
+the host. The outer envelope must also have one canonical gzip member, fixed
+USTAR metadata and zero padding/trailers. It is a bounded content review, not a
+universal secret-detection claim; PEM documentation without a key payload is not
+treated as an actual private key.
 
 Builds use fresh hosted rootless runners, locked dependencies, no operational
 build keys, and no publication token in the build/test/review environment. Public

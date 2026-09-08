@@ -90,6 +90,7 @@ if (operation === 'run') {
     retention.syntheticOnly === true && retention.productionUsePermitted === false && retention.fundingAuthorized === false);
   assert(review.passed === true && review.archiveSha256 === actual.sha256 && review.archiveBytes === actual.bytes &&
     review.historicalLayersInspected === true && review.exactArchiveMembersInspected === true && review.productionUsePermitted === false &&
+    review.canonicalOuterEnvelopeVerified === true &&
     review.sourceCommit === CANDIDATE && review.sourceDigest === SOURCE && review.toolingCommit === process.env.GITHUB_SHA &&
     review.workflowRunId === process.env.GITHUB_RUN_ID && review.network === network &&
     review.scannerSha256 === createHash('sha256').update(readFileSync(resolve('../scripts/presigned-public-evidence.py'))).digest('hex'));
