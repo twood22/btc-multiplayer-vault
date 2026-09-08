@@ -1,0 +1,77 @@
+name: Presigned V2 test-only evidence retention
+
+on:
+  # A separate tooling branch leaves the previously tested candidate unchanged.
+  push:
+    branches: [codex/presigned-test-evidence]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: presigned-test-evidence-536935c2
+  cancel-in-progress: false
+
+jobs:
+  retain:
+    if: github.event.repository.private == false && github.ref == 'refs/heads/codex/presigned-test-evidence'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    # Used only by the final, draft-only upload step. No credential is exported
+    # to candidate installation, image builds, browser tests or content review.
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        network: [signet, mainnet]
+    name: Retain ${{ matrix.network }} test image
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+    defaults:
+      run:
+        working-directory: candidate
+        shell: bash
+    steps:
+      - name: Check out retention tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Check out the exact previously tested candidate separately
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: d5ff8e8677fc2ed39a9f35d2f260cf060650bd7c
+          path: candidate
+          persist-credentials: false
+
+      - name: Select the reviewed Node runtime without caching
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: candidate/.node-version
+
+      - name: Test the content-review boundaries
+        run: python3 ../scripts/test-presigned-public-evidence.py
+
+      - name: Install locked candidate dependencies
+        run: npm ci
+
+      - name: Prepare checksum-pinned Core and PostgreSQL 16
+        run: bash scripts/setup-presigned-ci.sh
+
+      - name: Install Chromium on this disposable runner
+        run: npx playwright install --with-deps chromium
+
+      - name: Execute exact rootless image tests and retain verified bytes
+        id: evidence
+        run: node --import tsx ../scripts/presigned-ci-retain.mjs run '${{ matrix.network }}'
+
+      - name: Inspect actual archive contents before any upload
+        run: python3 ../scripts/presigned-public-evidence.py '${{ steps.evidence.outputs.directory }}'
+
+      - name: Upload reviewed archives only to the preapproved test-only draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node ../scripts/presigned-ci-retain.mjs upload '${{ matrix.network }}' '${{ steps.evidence.outputs.directory }}'
