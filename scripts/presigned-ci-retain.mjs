@@ -6,9 +6,9 @@ import { appendFileSync, createReadStream, linkSync, lstatSync, mkdirSync, readF
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const CANDIDATE = '35d9038102ea7c4735a1f49d6dae69899124f1d1';
-const SOURCE = 'b8c4cf2848be5d9626f8210d601b245f18bbf49ec15595efc5f46b73246dc97f';
-const TAG = 'presigned-v2-test-evidence-b8c4cf28-20260910';
+const CANDIDATE = '1ee74cbcd048230489d1a14b5138cf99c50cd890';
+const SOURCE = '409cca25c6f7fb93889b8b7ff1076772b4ca1ca8c9b2b13b11e64e8e03c44087';
+const TAG = 'presigned-v2-test-evidence-409cca25-20260910';
 process.umask(0o077);
 const [operation, network, suppliedDirectory] = process.argv.slice(2);
 assert(['run', 'upload'].includes(operation) && ['signet', 'mainnet'].includes(network));
