@@ -49,23 +49,32 @@ const code = await new Promise<number | null>((resolveExit, reject) => {
 assert(code === 0 && length <= 2 * 1024 * 1024, 'actual completed default-Signet verification failed; no acceptance receipt was created');
 const live = parseAcceptanceJson(Buffer.concat(stdout)) as any;
 const { receiptDigest: liveDigest, ...liveBody } = live;
-assert(live.version === 2 && live.protocol === 'presigned-graph-v2' && live.kind === 'presigned-v2-verified-live-lifecycle' &&
+assert(live.version === 3 && live.protocol === 'presigned-graph-v2' && live.kind === 'presigned-v2-verified-live-lifecycle' &&
   live.sourceDigest === sourceDigest && live.chain === 'default-Signet' && live.actualGenesisHash === genesisHash('signet') &&
   live.complete === true && live.realDefaultSignetVerified === true && live.soloOrderingsConfirmed === 6 && live.cooperativeRoundsConfirmed === 4 &&
   live.recoverySubsetsConfirmed === 9 && live.feeFamiliesConfirmed === 5 && live.restoredKits === 57 && live.hostileRejections === 80 &&
   live.everyPayoutRefundAndSponsorChangeVerified === true && live.freshRandomParticipantKeys === true && live.externalWalletKeysExported === false &&
   live.physicalPasskeysVerified === false && live.liveBrowserPasskeysVerified === false && live.fundingAuthorized === false);
 const capital = live.capitalRecyclingEvidence;
-assert(capital?.version === 1 && capital.execution === 'bounded-sequential-recycling-v1' &&
-  Number.isSafeInteger(capital.initialCapitalSats) && capital.initialCapitalSats >= 124_680 &&
+assert(capital?.version === 2 && capital.execution === 'bounded-sequential-recycling-v2' &&
+  Number.isSafeInteger(capital.initialCapitalSats) && capital.initialCapitalSats >= 88_352 &&
   capital.initialCapitalSats <= capital.capitalLimitSats && capital.capitalLimitSats <= 1_000_000 &&
   capital.unrelatedWalletInputsUsed === 0 && capital.confirmedAllocations === 20 && capital.uniqueConfirmedTransactions === 84 &&
-  capital.fixedConfirmedFeesSats === 47_000 && capital.allocationFeesSats <= 45_000 &&
+  capital.fixedConfirmedFeesSats === 47_000 && capital.allocationFeesSats <= 6760 &&
   capital.uniqueConfirmedFeesSats === capital.fixedConfirmedFeesSats + capital.allocationFeesSats &&
-  capital.maximumUniqueConfirmedFeesSats === 92_000 && capital.returnedSats >= 330 &&
+  capital.maximumUniqueConfirmedFeesSats === 53_760 && capital.returnedSats >= 330 &&
   capital.initialCapitalSats === capital.returnedSats + capital.uniqueConfirmedFeesSats &&
   capital.allTerminalOutputsAndReservesConsumedExactlyOnce === true && capital.finalWalletReturnConfirmedAndUnspent === true,
   'completed Signet evidence lacks exact closed-budget capital recycling and confirmed return');
+const custody = live.durableCustodyEvidence;
+assert(custody?.version === 1 && custody.independentRollbackAnchorVerified === true && custody.allRequiredCustodyBytesHashVerified === true &&
+  custody.independentlyRestoredCasesBeforeFunding === 19 && custody.actualNativeWalletRestoredSignatures === 83 &&
+  custody.allNativeSignaturesBindExactRunAndBackup === true && custody.persistentStorageRequired === true && custody.wholeDiskLossProtectionClaimed === false &&
+  [custody.checkpointDigest, custody.journalIdentityDigest, custody.nativeWalletBackupSha256, custody.nativeWalletProofSha256]
+    .every(value => typeof value === 'string' && /^[0-9a-f]{64}$/u.test(value)) &&
+  Array.isArray(custody.independentCaseCheckpoints) && custody.independentCaseCheckpoints.length === 19 &&
+  new Set(custody.independentCaseCheckpoints).size === 19 && custody.independentCaseCheckpoints.every((value: string) => /^[0-9a-f]{64}$/u.test(value)),
+  'completed Signet evidence lacks current complete persistent custody and independently restored native and participant keys');
 assert.equal(commitmentDigest('vault/presigned-graph-v2/verified-live-lifecycle', liveBody), liveDigest);
 assert.equal(presignedSourceDigest(), sourceDigest, 'source changed during final acceptance assembly');
 
@@ -79,7 +88,8 @@ const dossiers: Record<typeof PRESIGNED_RELEASE_CHECKS[number], unknown> = {
   'core-six-exit-orders-cooperative-recovery-final-sweeps': executions(['presigned-core-acceptance', 'presigned-core-spends', 'presigned-live-lifecycle-regtest']),
   'core-hostile-witnesses-and-transaction-mutations': executions(['presigned-core-acceptance', 'presigned-core-spends', 'presigned-core-observed-witnesses']),
   'core-real-rolling-fee-floor-truc-and-child-replacement': executions(['presigned-core-fees', 'presigned-core-funding-fees', 'presigned-core-spend-fees']),
-  'core-database-restart-reorganization-and-broadcast-races': executions(['database-v2-all', 'presigned-core-observed-witnesses', 'presigned-live-lifecycle-regtest']),
+  'core-database-restart-reorganization-and-broadcast-races': executions(['database-v2-all', 'presigned-core-observed-witnesses',
+    'presigned-wallet-restore-verification', 'presigned-live-lifecycle-regtest']),
   'optimized-browser-three-participants-two-prf-passkeys': { sourceDigest, signetImage, mainnetImage,
     local: executions(['optimized-browser']), mainnetScope: 'full pre-funding custody and refusal without actual separate release',
     signetScope: 'full game and fee execution; Bitcoin facts bridged from isolated Core' },

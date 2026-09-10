@@ -37,7 +37,7 @@ npm run presigned:test:container -- signet
 npm run presigned:test:container -- mainnet
 ```
 
-The first command runs the fixed 49-step local matrix, including both network
+The first command runs the fixed 52-step local matrix, including both network
 formats, all Core families, five PostgreSQL suites, the complete saved-file
 recovery browser and a fresh Signet-format web build. Container commands need
 working local rootless Podman and never push an image. Do not enable privileged
@@ -57,6 +57,12 @@ mining. They do not establish acceptance of the revised source. The new regtest
 checks recovery rejection at depth 11 and acceptance at depth 12 for all nine
 cases; it mines intermediate blocks together without changing CSV12. Its
 execution is bounded to 90 minutes, with 150 minutes for the complete CI suite.
+
+Source `9afe98cf` subsequently passed all 49 local commands and both genuine
+image profiles; its complete local archive and both test-only OCI archives are
+retained. That is now historical evidence. The persistent-recovery changes add
+two filesystem/locking runs and one actual native-wallet restore run, requiring
+a new complete 52-command suite and both images on the new source digest.
 
 For complete **current-source** evidence directories, `npm run
 presigned:pack-evidence -- local|signet-image|mainnet-image /absolute/evidence
@@ -107,21 +113,26 @@ the same-source local counterpart to the test-image archives above, but not the
 remaining real default-Signet proof.
 
 Real default-Signet evidence is separate. On the exact fresh isolated test host,
-`presigned:signet-lifecycle` takes `status`, `init`, `fund`, `advance` or `verify`
+`presigned:signet-lifecycle` takes `status`, `init`, `fund`, `advance`, `follow` or `verify`
 and the host's protected control-file path. `status` and `verify` are read-only.
 `init` also requires `--capital-limit-sats=N --initial-outpoint=TXID:VOUT`.
 Use one exact confirmed, non-coinbase native coin from that isolated wallet;
-the minimum bounded seed is 124,680 sats. The 128,985-sat budget retains all
-19 cases, five replacement families, 10,000-sat deposits and CSV12. `fund`
+the current minimum bounded seed is 88,352 sats (the isolated regression uses
+89,000). This preserves all 19 cases, five replacement families, 10,000-sat
+deposits, 9,500/10,250-sat first/second payouts and CSV12. The separately funded
+sponsor escrow is 15,000 sats per case; graph fees and payout economics are
+unchanged. `fund`
 allocates the first case only. `advance` recycles each fully settled case's exact
 payouts, refunds, sponsor change and reserve into the next, with no wallet coin
 selection or key import. Full intent and signed journals precede signing and
 broadcast respectively; only the same exact transaction may be retried.
-The 20 allocations, including final return, are capped at 2,250 sats each and
-use a conservative 2-sat/vB calculation. Together with 47,000 sats of fixed
-lifecycle fees, total burn cannot exceed 92,000 sats. Final acceptance requires
+The 20 allocations, including final return, are capped at 338 sats each and
+use exact integer ceiling at 300 millisatoshis/vB. Together with 47,000 sats of
+fixed lifecycle fees, total in-run burn cannot exceed 53,760 sats. Final acceptance requires
 all 84 unique transactions and a confirmed, unspent wallet return: at least
-36,985 sats from a 128,985-sat seed. A missing historical intent, foreign spender,
+35,240 sats from an 89,000-sat seed. Any separately authorized seed consolidation
+is outside that run and must have its own exact-input audit and fee bound.
+A missing historical intent, foreign spender,
 changed source, fee-policy refusal or unproven replacement stops progress; never
 increase the budget, drop cases or relabel spent payouts as unspent to continue.
 Sequential confirmations and nine separate CSV waits make this slower than the
@@ -129,14 +140,65 @@ historical fully prefunded parallel run. Only isolated random keys/test coins
 may be used; this capital-transport helper is not a product withdrawal API.
 Wait for reported confirmations/CSV maturity and resume the same directory;
 never substitute regtest, custom Signet or deterministic public fixture keys.
-Freeze executable source from `init` through final verification.
+Freeze executable source from host creation through final verification. `follow`
+holds the same kernel-backed operation locks and repeats the same exact runner
+every 30 seconds until completion or a verified refusal; it does not increase
+fees, change source, or create a replacement run after a reboot. If the public
+relay floor exceeds the approved transport fee, wait rather than change policy.
 
-Preserve the isolated test wallet separately from public test evidence with
-Core's native `backupwallet`, and verify restoration into a distinct,
-network-disabled test node. Keep the wallet file owner-only and out of Git,
-image contexts and shared dossiers. Address ownership after restoration is a
-wallet-recoverability check, not a completed default-Signet lifecycle. Never
-load an operational wallet to replace a missing isolated test host.
+### Persistent isolated host and explicit recovery
+
+The new version-3 host lives under the repository's ignored, owner-only
+`live-run/presigned-v2-signet-host.*`, never `/tmp`. Independently named sibling
+roots retain the full checkpoint objects/native-wallet backups and a separate
+metadata-only rollback anchor. These are separate directories on this host,
+not protection against whole-disk loss. A reboot does not automatically resume
+the writer; use the exact control and source below. Do not reinterpret older
+version-2 host controls or lost funded participant journals as this format.
+
+Create a fresh host with `presigned:signet-host --
+--stopped-chain-cache=/absolute/stopped/public/cache/signet`. Only public blocks,
+chainstate and indexes are copied. The copier holds Core's actual POSIX data
+directory lock through copying and destination validation; never copy a live
+cache. No operational wallet is copied or loaded. Core starts offline with an
+empty configuration, isolated wallet directory, loopback-only RPC,
+`walletbroadcast=0`, and `persistmempool=0`.
+
+Before publishing its receiving address, the host makes a native wallet backup
+and restores it into a separate offline Core. Synthetic impossible-parent
+signatures bind the actual backup, binary, source and exact receiving key.
+Initialization separately reserves 82 exact native targets and proves all 83
+receiving/reserved keys from another native restore before funding. Each case's
+three complete encrypted participant kits and their wrapping material must also
+restore from the independent full checkpoint before any wallet funding signature.
+Checkpoint intent, exact signed bytes and acknowledgement precede each sign/send;
+OS-held locks release on process death without deleting stale PID files.
+
+- `presigned:signet-control -- start|status|stop /absolute/host/control.json`
+  controls only that exact host/wallet. Read-only status and identity-safe stop
+  remain available when source or backup validation prevents normal operation.
+- `presigned:signet-restore -- journal /absolute/host/control.json` restores the
+  newest exact journal to a new private tree, checks its custody, retains any
+  damaged original, and atomically installs the verified tree at its original
+  path. Missing/corrupt primary metadata is not a reason to discard a surviving
+  newer independent or primary acknowledgement. A stale backup refuses.
+- Whole-host recovery requires the original path to be absent and its Core
+  stopped: `presigned:signet-restore -- host /absolute/backup/host-control.json
+  --stopped-chain-cache=/absolute/stopped/public/cache/signet`. It preserves the
+  original host/source/address and restores the pinned native wallet, not a new
+  identity. An independently retained monotonic attempt record and a new
+  attempt-bound native restoration proof gate normal restart and funding.
+- `host-stage` takes the same arguments but stops offline before acknowledgement;
+  `host-resume /absolute/backup/host-control.json` completes that exact pending
+  attempt. Old completions, orphaned newer records and primary rollback cannot
+  satisfy it. Interrupted replica publication can be repaired only by this
+  explicit recovery path after actual proof validation.
+
+All wallet files, private checkpoint objects, wrapping keys and restored clones
+must remain owner-only and outside Git, image contexts and public dossiers.
+An unfunded host recovery drill or native signature proof is not the required
+19-case funded default-Signet acceptance. Never load an operational wallet to
+replace a missing isolated host, or reinitialize over damaged funded custody.
 
 Only after actual same-source local, both-image and live tests pass, assemble
 software evidence with `presigned:assemble-acceptance`. Supply all six options:

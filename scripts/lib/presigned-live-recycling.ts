@@ -6,20 +6,20 @@ import { taggedHash } from '../../src/crypto.js';
 import { commitmentDigest } from '../../src/presigned/validation.js';
 import { hasWalletSignature, nativeWalletWitnessFromPsbt, verifyNativeWalletWitness } from '../../src/presigned/wallet.js';
 import type { ParticipantId } from '../../src/presigned/types.js';
+import { RECYCLING_FEE_CAP, RECYCLING_FEE_RATE_MILLISATS, recyclingFeeForVsize } from './presigned-live-capital.js';
 
-export const RECYCLING_FEE_CAP = 2250;
-export const RECYCLING_FEE_RATE = 2;
-export const MINIMUM_SEQUENTIAL_CAPITAL = 124_680;
+export { RECYCLING_FEE_CAP, RECYCLING_FEE_RATE_MILLISATS, MINIMUM_SEQUENTIAL_CAPITAL, recyclingFeeForVsize } from './presigned-live-capital.js';
 export interface RecyclingCoin {
   txid: string; vout: number; valueSats: number; scriptPubKeyHex: string;
   participantId: ParticipantId | null; parentTransactionHex: string;
 }
 export interface RecyclingTarget { scriptPubKeyHex: string; valueSats: number }
 export interface RecyclingIntent {
-  version: 1; kind: 'presigned-isolated-capital-allocation'; id: string;
+  version: 2; kind: 'presigned-isolated-capital-allocation'; id: string;
   sourceDigest: string; runDigest: string; previousCaseDigest: string | null;
   inputs: RecyclingCoin[]; targets: RecyclingTarget[]; reserveScriptPubKeyHex: string;
   inputSats: number; reserveSats: number; feeSats: number; maximumFeeSats: number;
+  feeRateMillisatsPerVbyte: number;
   maximumSignedVsize: number; unsignedTransactionHex: string; txid: string; psbtBase64: string;
   intentDigest: string;
 }
@@ -88,7 +88,7 @@ export function buildRecyclingIntent(input: {
   coins.forEach((coin, index) => transaction.setWitness(index, nativeKind(coin.scriptPubKeyHex) === 'p2tr'
     ? [Buffer.alloc(coin.participantId === null ? 65 : 64)] : [Buffer.alloc(73), Buffer.alloc(33)]));
   const maximumSignedVsize = transaction.virtualSize();
-  const feeSats = maximumSignedVsize * RECYCLING_FEE_RATE;
+  const feeSats = recyclingFeeForVsize(maximumSignedVsize);
   assert(feeSats > 0 && feeSats <= RECYCLING_FEE_CAP, 'bounded allocation fee is insufficient for these exact inputs/outputs');
   const reserveSats = inputSats - targets.reduce((sum, target) => sum + target.valueSats, 0) - feeSats;
   assert(reserveSats >= 330, 'insufficient isolated capital for this exact allocation and reserve');
@@ -98,10 +98,10 @@ export function buildRecyclingIntent(input: {
     witnessUtxo: { script: Buffer.from(coin.scriptPubKeyHex, 'hex'), value: BigInt(coin.valueSats) },
     nonWitnessUtxo: Buffer.from(coin.parentTransactionHex, 'hex') });
   for (const output of transaction.outs) psbt.addOutput({ script: output.script, value: output.value });
-  const body = { version: 1 as const, kind: 'presigned-isolated-capital-allocation' as const, id: input.id,
+  const body = { version: 2 as const, kind: 'presigned-isolated-capital-allocation' as const, id: input.id,
     sourceDigest: input.sourceDigest, runDigest: input.runDigest, previousCaseDigest: input.previousCaseDigest,
     inputs: coins, targets, reserveScriptPubKeyHex: input.reserveScriptPubKeyHex, inputSats, reserveSats, feeSats,
-    maximumFeeSats: RECYCLING_FEE_CAP, maximumSignedVsize,
+    maximumFeeSats: RECYCLING_FEE_CAP, feeRateMillisatsPerVbyte: RECYCLING_FEE_RATE_MILLISATS, maximumSignedVsize,
     unsignedTransactionHex: unsignedHex(transaction), txid: transaction.getId(), psbtBase64: psbt.toBase64() };
   const intent = { ...body, intentDigest: commitmentDigest('vault/presigned-graph-v2/isolated-capital-allocation', body) };
   assert(Buffer.byteLength(JSON.stringify(intent, null, 2)) < 4_000_000, 'capital intent exceeds its private journal bound');
@@ -158,7 +158,7 @@ export function validateSignedRecycling(intent: RecyclingIntent, signed: Recycli
     }
     verifyNativeWalletWitness(tx, index, intent.inputs, witness);
   }
-  assert(tx.virtualSize() <= intent.maximumSignedVsize && intent.feeSats >= tx.virtualSize() * RECYCLING_FEE_RATE &&
+  assert(tx.virtualSize() <= intent.maximumSignedVsize && intent.feeSats >= recyclingFeeForVsize(tx.virtualSize()) &&
     intent.feeSats <= RECYCLING_FEE_CAP);
   return signed;
 }

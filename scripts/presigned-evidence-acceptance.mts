@@ -65,18 +65,20 @@ for (const mutation of [{ configuredNetwork: 'mainnet' }, { rejectedMutations: 9
   { networkCalls: 1 }, { walletCalls: 1 }, { consensusOrLiveSignetVerified: true }])
   denied(() => validateCommandResults(recycling, JSON.stringify({ ...pureCapital, ...mutation })));
 const lowCapital = acceptancePlan('local').find(item => item.id === 'presigned-live-lifecycle-regtest')!;
-const capitalAudit = { initialCapitalSats: 128_985, fixedConfirmedFeesSats: 47_000, allocationFeesSats: 30_000,
-  returnedSats: 51_985, confirmedAllocations: 20, recycledParticipantPayouts: 57, unrelatedWalletInputsUsed: 0,
+const capitalAudit = { initialCapitalSats: 89_000, fixedConfirmedFeesSats: 47_000, allocationFeesSats: 3500,
+  returnedSats: 38_500, confirmedAllocations: 20, recycledParticipantPayouts: 57, unrelatedWalletInputsUsed: 0,
   allTerminalOutputsAndReservesConsumedExactlyOnce: true };
 const csvBoundaryAudit = { cases: 9, delayBlocks: 12, justBeforeMaturityRejected: 9,
   matureTransactionsAllowed: 9, sameStoredTransactionBytes: true };
+const durableCustodyAudit = { primaryLossRestorations: 2, initializationInterruptions: 2, durableSendChecks: 84, uniqueSubmittedTransactions: 89,
+  actualNativeWalletRestoredSignatures: 83, independentlyRestoredCasesBeforeFunding: 19, nativeTargetsRegenerated: 0 };
 const lowCapitalSummary = { passed: true, syntheticParserFixture: true, publicNetworkBroadcasts: 0, coreVersion: 310100,
-  cases: 19, feeFamilies: 5, lostRepliesWithoutResending: 6, capitalAudit, csvBoundaryAudit };
+  cases: 19, feeFamilies: 5, lostRepliesWithoutResending: 6, capitalAudit, csvBoundaryAudit, durableCustodyAudit };
 validateCommandResults(lowCapital, JSON.stringify(lowCapitalSummary));
 for (const mutation of [{ cases: 18 }, { feeFamilies: 4 }, { lostRepliesWithoutResending: 5 }])
   denied(() => validateCommandResults(lowCapital, JSON.stringify({ ...lowCapitalSummary, ...mutation })));
-for (const mutation of [{ initialCapitalSats: 128_984 }, { fixedConfirmedFeesSats: 46_000 }, { allocationFeesSats: 45_001 },
-  { returnedSats: 51_986 }, { confirmedAllocations: 19 }, { recycledParticipantPayouts: 56 }, { unrelatedWalletInputsUsed: 1 },
+for (const mutation of [{ initialCapitalSats: 88_999 }, { fixedConfirmedFeesSats: 46_000 }, { allocationFeesSats: 6761 },
+  { returnedSats: 38_501 }, { confirmedAllocations: 19 }, { recycledParticipantPayouts: 56 }, { unrelatedWalletInputsUsed: 1 },
   { allTerminalOutputsAndReservesConsumedExactlyOnce: false }])
   denied(() => validateCommandResults(lowCapital, JSON.stringify({ ...lowCapitalSummary, capitalAudit: { ...capitalAudit, ...mutation } })));
 denied(() => validateCommandResults(lowCapital, JSON.stringify({ ...lowCapitalSummary, csvBoundaryAudit: undefined })));
@@ -85,6 +87,35 @@ for (const mutation of [{ cases: 8 }, { delayBlocks: 11 }, { justBeforeMaturityR
   denied(() => validateCommandResults(lowCapital, JSON.stringify({ ...lowCapitalSummary,
     csvBoundaryAudit: { ...csvBoundaryAudit, ...mutation } })));
 checks.push('pure capital signatures and complete confined Core recycling are mandatory on the exact required matrix');
+denied(() => validateCommandResults(lowCapital, JSON.stringify({ ...lowCapitalSummary, durableCustodyAudit: undefined })));
+for (const mutation of [{ primaryLossRestorations: 1 }, { initializationInterruptions: 1 }, { durableSendChecks: 83 }, { uniqueSubmittedTransactions: 88 },
+  { actualNativeWalletRestoredSignatures: 82 }, { independentlyRestoredCasesBeforeFunding: 18 }, { nativeTargetsRegenerated: 1 }])
+  denied(() => validateCommandResults(lowCapital, JSON.stringify({ ...lowCapitalSummary, durableCustodyAudit: { ...durableCustodyAudit, ...mutation } })));
+const durableCommand = plan.find(item => item.args.at(-1) === 'scripts/presigned-durable-journal-verification.mts')!;
+const durableSummary = { passed: true, syntheticParserFixture: true, configuredNetwork: 'signet', scope: 'private-journal-filesystem-fixtures',
+  completeCheckpoints: 19, actualCompleteRestorations: 14, rejectedBoundaries: 42, kernelLockChecks: 4, actualPrimaryCutovers: 2,
+  metadataLossRestorations: 3, interruptedCheckpointRepairs: 3, atomicCutoverPreflightChecks: 1,
+  independentRollbackAnchorRequired: true, networkCalls: 0, walletCalls: 0, publicBroadcasts: 0,
+  realParticipantCustodyVerified: false, realSignetVerified: false };
+validateCommandResults(durableCommand, JSON.stringify(durableSummary));
+for (const mutation of [{ completeCheckpoints: 18 }, { actualCompleteRestorations: 13 }, { rejectedBoundaries: 41 },
+  { metadataLossRestorations: 2 }, { interruptedCheckpointRepairs: 2 }, { atomicCutoverPreflightChecks: 0 },
+  { kernelLockChecks: 3 }, { actualPrimaryCutovers: 1 }, { independentRollbackAnchorRequired: false }, { publicBroadcasts: 1 }, { realSignetVerified: true }])
+  denied(() => validateCommandResults(durableCommand, JSON.stringify({ ...durableSummary, ...mutation })));
+const nativeCommand = acceptancePlan('local').find(item => item.id === 'presigned-wallet-restore-verification')!;
+const nativeSummary = { passed: true, syntheticParserFixture: true, scope: 'actual-isolated-native-wallet-restoration',
+  publicNetworkBroadcasts: 0, coreVersion: 310100, actualRestoredNativeSignatures: 83, rejectedBindings: 15, sourceWalletCalls: 1,
+  coreDataDirectoryLockChecks: 4,
+  sourceBalancesUnchanged: true, originalBackupUnchanged: true, networkingDisabled: true, participantKeysImported: false,
+  realDefaultSignetVerified: false, signatureContextBindingVerified: true, cleanRestoreShutdownVerified: true };
+validateCommandResults(nativeCommand, JSON.stringify(nativeSummary));
+for (const mutation of [{ actualRestoredNativeSignatures: 82 }, { rejectedBindings: 14 }, { sourceWalletCalls: 2 }, { coreDataDirectoryLockChecks: 3 },
+  { sourceBalancesUnchanged: false }, { originalBackupUnchanged: false }, { networkingDisabled: false },
+  { participantKeysImported: true }, { signatureContextBindingVerified: false }, { cleanRestoreShutdownVerified: false }])
+  denied(() => validateCommandResults(nativeCommand, JSON.stringify({ ...nativeSummary, ...mutation })));
+checks.push('full-primary-loss, exact initialization resumption, kernel locking and native signature-context custody proofs cannot be omitted');
+denied(() => validateCommandResults(lowCapital, JSON.stringify({ passed: true, scope: 'isolated-durable-custody-smoke-only',
+  coreVersion: 310100, publicNetworkBroadcasts: 0, primaryLossRestorations: 2, fullLifecycleAcceptanceCompleted: false })));
 const directory = mkdtempSync('/tmp/btc-presigned-evidence-boundary.');
 const filename = `${directory}/synthetic.json`;
 writeFileSync(filename, '{"synthetic":true}', { mode: 0o600, flag: 'wx' });

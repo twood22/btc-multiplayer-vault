@@ -1,13 +1,13 @@
 /** Tests exact low-capital resumable orchestration, not real Signet proof. */
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync } from 'node:fs';
 import * as bitcoin from 'bitcoinjs-lib';
 import { createPresignedCoreBackend, type PresignedCoreRpc } from '../src/presigned/core.js';
 import { genesisHash } from '../src/presigned/validation.js';
 import { withPresignedRegtest } from './lib/presigned-regtest.js';
 import { advanceLiveLifecycle, fundLiveLifecycle, initializeLiveLifecycle, readLifecycleFile,
-  saveLifecycleFile, verifyCompletedLiveLifecycle, type LiveLifecycleCore } from './lib/presigned-live-lifecycle.js';
+  saveLifecycleFile, verifyCompletedLiveLifecycle, verifyRestoredLiveLifecycleCustody, type LiveLifecycleCore } from './lib/presigned-live-lifecycle.js';
 import { validatePresignedFeePackage, type PresignedFeePackage } from '../src/presigned/fee-package.js';
 import type { PresignedSpendProposal } from '../src/presigned/spends.js';
 import type { PresignedPublicKit } from '../src/presigned/types.js';
@@ -15,10 +15,14 @@ import { presignedSourceDigest } from './presigned-build-identity.mjs';
 import { coinId, MINIMUM_SEQUENTIAL_CAPITAL, RECYCLING_FEE_CAP,
   validateRecyclingIntent, validateSignedRecycling,
   type RecyclingCoin, type RecyclingIntent, type RecyclingSigned } from './lib/presigned-live-recycling.js';
+import { LIVE_REGTEST_CAPITAL_SATS, LIVE_CAPITAL_EXECUTION } from './lib/presigned-live-capital.js';
+import { createDurableLifecycleJournal } from './lib/presigned-durable-journal.js';
+import { restoreLifecyclePrimary } from './lib/presigned-primary-restore.js';
 
-const CAPITAL_SATS = 128_985;
+const CAPITAL_SATS = LIVE_REGTEST_CAPITAL_SATS;
 const FIXED_CONFIRMED_FEES_SATS = 47_000;
 const LOST_RESPONSE = 'deliberately lost successful Core response';
+const INTERRUPTED_INITIALIZATION = 'deliberately interrupted exact native initialization';
 const CASE_IDS = Array.from({ length: 19 }, (_, index) => `case-${String(index).padStart(2, '0')}`);
 const ALLOCATION_IDS = [...CASE_IDS, 'return'];
 const FAMILIES = ['funding', 'solo', 'cooperative', 'recovery', 'final-sweep'];
@@ -44,8 +48,16 @@ const caseSteps = (plan: CaseDefinition) => plan.kind === 'solo-order'
   ? [plan.first!, plan.source!, 'terminal'] : [...(plan.source ? [plan.source] : []), 'terminal'];
 
 process.umask(0o077);
+// Diagnostic-only early stop. The fixed full acceptance command has no such
+// argument and its parser rejects this deliberately incomplete smoke summary.
+assert(process.argv.length === 2 || (process.argv.length === 3 && process.argv[2] === '--custody-smoke'));
+const custodySmoke = process.argv[2] === '--custody-smoke';
 await withPresignedRegtest(async host => {
-  const directory = mkdtempSync('/tmp/btc-presigned-live-runner.');
+  const fixtureRoot = mkdtempSync('/tmp/btc-presigned-live-runner.');
+  let directory = `${fixtureRoot}/primary`; mkdirSync(directory, { mode: 0o700 });
+  const backupDirectory = mkdtempSync('/tmp/btc-presigned-live-backup.');
+  const anchorDirectory = mkdtempSync('/tmp/btc-presigned-live-anchor.');
+  const restorationParent = mkdtempSync('/tmp/btc-presigned-live-restores.');
   // Deliberately leave the host wallet's much larger coins available. The
   // lifecycle must select only this confirmed non-coinbase seed and its heirs.
   const seedAddress = await host.walletRpc('getnewaddress', ['bounded-lifecycle-seed', 'bech32m']);
@@ -72,6 +84,9 @@ await withPresignedRegtest(async host => {
   const sendAttempts = new Map<string, number>(); const allocationSignRequests = new Map<string, number>();
   const csvBoundaryRecords = new Map<string, CsvBoundaryRecord>();
   let backupGateChecks = 0; let walletCalls = 0; let finalReturnPendingChecks = 0; let historicalIntentRefusals = 0;
+  let primaryLossRestorations = 0; let initializationInterruptions = 0; let nativeTargetsCreated = 0;
+  let initializationTargetFault = true; let initializationBackupFault = true; let durableSendChecks = 0;
+  const submittedTransactionIds = new Set<string>();
   // Hash only public allocation journals, never kits' separate wrapping keys.
   // Every later invocation must preserve the exact bytes already published.
   const immutableAllocationFiles = new Map<string, string>();
@@ -93,7 +108,16 @@ await withPresignedRegtest(async host => {
     let txid: string | undefined;
     if (method === 'submitpackage' || method === 'sendrawtransaction') {
       const hex = method === 'submitpackage' ? (params[0] as string[]).at(-1)! : params[0] as string;
+      for (const transactionHex of method === 'submitpackage' ? params[0] as string[] : [hex])
+        submittedTransactionIds.add(bitcoin.Transaction.fromHex(transactionHex).getId());
       txid = bitcoin.Transaction.fromHex(hex).getId(); sendAttempts.set(txid, (sendAttempts.get(txid) ?? 0) + 1);
+      const checkpoint = core.durableJournal.assertCurrent().snapshot; assert(checkpoint);
+      assert(checkpoint.files.some(file => file.path === 'wallet-recovery.json'));
+      assert(checkpoint.files.filter(file => file.path.startsWith('events/')).some(file => {
+        const intent = readLifecycleFile<{ kind: string; txid?: string; childTxid?: string }>(directory, file.path);
+        return (intent.kind === 'submit-intent' && intent.txid === txid) || (intent.kind === 'fee-submit-intent' && intent.childTxid === txid);
+      }), 'public-chain path would send without an independently checkpointed exact transaction intent');
+      durableSendChecks++;
       const allocationId = allocationForTxid(txid);
       if (allocationId) {
         assert.equal(method, 'sendrawtransaction');
@@ -124,10 +148,20 @@ await withPresignedRegtest(async host => {
   };
   const walletRpc: LiveLifecycleCore['walletRpc'] = async (method, params = []) => {
     walletCalls++;
-    assert(['getnewaddress', 'getaddressinfo', 'walletprocesspsbt'].includes(method),
+    assert(['getnewaddress', 'getaddressinfo', 'walletprocesspsbt', 'backupwallet'].includes(method),
       'lifecycle attempted wallet coin selection, key import/export, or an unexpected wallet mutation');
+    if (method === 'getnewaddress' && nativeTargetsCreated === 7 && initializationTargetFault) {
+      initializationTargetFault = false; throw new Error(INTERRUPTED_INITIALIZATION);
+    }
+    if (method === 'backupwallet' && initializationBackupFault) {
+      initializationBackupFault = false; throw new Error(INTERRUPTED_INITIALIZATION);
+    }
+    if (method === 'backupwallet') assert(typeof params[0] === 'string' && params[0].startsWith(`${backupDirectory}/wallet-restore-proof.`) &&
+      params[0].endsWith('/wallet.dat'), 'native test-wallet backup escaped its private scope');
     let allocationId: string | undefined;
     if (method === 'walletprocesspsbt') {
+      const checkpoint = core.durableJournal.assertCurrent().snapshot; assert(checkpoint);
+      assert(checkpoint.files.some(file => file.path === 'wallet-recovery.json'), 'wallet signing lacks its independently verified full native backup');
       const tx = bitcoin.Transaction.fromBuffer(bitcoin.Psbt.fromBase64(params[0] as string).data.globalMap.unsignedTx.toBuffer());
       if (tx.version === 2) {
         allocationId = allocationForTxid(tx.getId()); assert(allocationId, 'allocation signing preceded its immutable intent');
@@ -144,19 +178,39 @@ await withPresignedRegtest(async host => {
         const receipts = readLifecycleFile<{ proofs: unknown[]; restoredBeforeWalletSigning: boolean }>(directory, `cases/${item}/backup-receipts.json`);
         assert(receipts.restoredBeforeWalletSigning && receipts.proofs.length === 3);
         assert(existsSync(`${directory}/cases/${item}/wallet-signing-intent.json`));
+        assert(checkpoint.files.some(file => file.path === `cases/${item}/independent-restoration.json`),
+          'funding wallet signing preceded actual independent complete-case restoration');
         for (const id of ['alice', 'bob', 'carol']) assert(existsSync(`${directory}/cases/${item}/${id}.encrypted.json`) &&
           existsSync(`${directory}/keys/${item}-${id}.json`));
         backupGateChecks++;
       }
     }
     const result = await host.walletRpc(method, params);
+    if (method === 'getnewaddress') nativeTargetsCreated++;
     if (allocationId === 'case-01' && !lost.has('allocation-sign-response')) {
       lost.add('allocation-sign-response'); throw new Error(LOST_RESPONSE);
     }
     return result;
   };
   const core: LiveLifecycleCore = { rpc: interruptedRpc, walletRpc, observeCoin: point => backend.observeConfirmedCoin(point),
-    chain: 'isolated-regtest', actualGenesisHash: await host.rpc('getblockhash', [0]), sourceDigest: presignedSourceDigest() };
+    chain: 'isolated-regtest', actualGenesisHash: await host.rpc('getblockhash', [0]), sourceDigest: presignedSourceDigest(),
+    durableJournal: createDurableLifecycleJournal(directory, backupDirectory, anchorDirectory, {
+      chain: 'isolated-regtest', actualGenesisHash: await host.rpc('getblockhash', [0]), sourceDigest: presignedSourceDigest() }),
+    restorationParent, nativeWalletBackup: {
+      binary: process.env.BITCOIN_CORE_BIN ?? '/home/codex/.cache/btc-multiplayer-vault/bitcoin-core-31.1/bin/bitcoind',
+      binarySha256: createHash('sha256').update(readFileSync(process.env.BITCOIN_CORE_BIN ??
+        '/home/codex/.cache/btc-multiplayer-vault/bitcoin-core-31.1/bin/bitcoind')).digest('hex'), parentDirectory: backupDirectory } };
+  const losePrimaryAndRestore = async () => {
+    const previous = directory; const retained = `${previous}.retained-${randomUUID()}`;
+    const checkpoint = core.durableJournal.assertCurrent().snapshot; assert(checkpoint);
+    renameSync(previous, retained);
+    const restored = await restoreLifecyclePrimary(previous, backupDirectory, anchorDirectory, restorationParent, {
+      sourceDigest: core.sourceDigest, chain: core.chain, actualGenesisHash: core.actualGenesisHash },
+    async journal => { await verifyRestoredLiveLifecycleCustody({ ...core, durableJournal: journal }, journal.directory); });
+    assert.equal(restored.journal.assertCurrent().snapshot?.checkpointDigest, checkpoint.checkpointDigest);
+    assert.equal(restored.journal.directory, previous);
+    directory = previous; core.durableJournal = restored.journal; primaryLossRestorations++;
+  };
   for (const capitalLimitSats of [MINIMUM_SEQUENTIAL_CAPITAL - 1, CAPITAL_SATS - 1]) {
     const rejectedDirectory = mkdtempSync('/tmp/btc-presigned-live-capital-refusal.');
     const callsBefore = walletCalls;
@@ -166,7 +220,25 @@ await withPresignedRegtest(async host => {
     assert.equal(walletCalls, callsBefore, 'insufficient capital touched the wallet');
     assert.equal(sendAttempts.size, 0, 'insufficient capital attempted a broadcast');
   }
-  const initialized = await initializeLiveLifecycle(core, directory, { capitalLimitSats: CAPITAL_SATS, initialOutpoint: seed });
+  const initializationOptions = { capitalLimitSats: CAPITAL_SATS, initialOutpoint: seed };
+  await assert.rejects(() => initializeLiveLifecycle(core, directory, initializationOptions), new RegExp(INTERRUPTED_INITIALIZATION, 'u'));
+  initializationInterruptions++;
+  assert.equal(nativeTargetsCreated, 7); assert(!existsSync(`${directory}/run.json`));
+  const originalTargets = readdirSync(`${directory}/initialization`).filter(name => name.startsWith('wallet-target-'))
+    .map(name => ({ name, digest: createHash('sha256').update(readFileSync(`${directory}/initialization/${name}`)).digest('hex') }));
+  await losePrimaryAndRestore();
+  await assert.rejects(() => initializeLiveLifecycle(core, directory, initializationOptions), new RegExp(INTERRUPTED_INITIALIZATION, 'u'));
+  initializationInterruptions++;
+  assert.equal(nativeTargetsCreated, 82); assert(existsSync(`${directory}/run.json`) && !existsSync(`${directory}/wallet-recovery.json`));
+  assert.equal(sendAttempts.size, 0);
+  const beforeIncompleteProof = walletCalls;
+  await assert.rejects(() => fundLiveLifecycle(core, directory)); assert.equal(walletCalls, beforeIncompleteProof);
+  await assert.rejects(() => initializeLiveLifecycle(core, directory, { ...initializationOptions, capitalLimitSats: CAPITAL_SATS + 1 }),
+    /exact original capital approval/u);
+  assert.equal(walletCalls, beforeIncompleteProof);
+  const initialized = await initializeLiveLifecycle(core, directory, initializationOptions);
+  assert.equal(nativeTargetsCreated, 82);
+  for (const target of originalTargets) assert.equal(createHash('sha256').update(readFileSync(`${directory}/initialization/${target.name}`)).digest('hex'), target.digest);
   assert.equal(initialized.cases, 19);
   assert.equal(initialized.initialCapitalSats, CAPITAL_SATS); assert.equal(initialized.capitalLimitSats, CAPITAL_SATS);
   assert.equal(initialized.maximumUniqueConfirmedFeesSats, FIXED_CONFIRMED_FEES_SATS + 20 * RECYCLING_FEE_CAP);
@@ -203,8 +275,7 @@ await withPresignedRegtest(async host => {
         let walletCallsBefore = walletCalls; let attemptsBefore = [...sendAttempts.entries()];
         renameSync(originalPath, retainedPath);
         try {
-          await assert.rejects(() => advanceLiveLifecycle(core, directory), error =>
-            (error as NodeJS.ErrnoException).code === 'ENOENT' && (error as NodeJS.ErrnoException).path === originalPath);
+          await assert.rejects(() => advanceLiveLifecycle(core, directory), /committed lifecycle bytes are missing or changed/u);
         } finally { renameSync(retainedPath, originalPath); }
         assertNoNewAuthority(walletCallsBefore, attemptsBefore); historicalIntentRefusals++;
 
@@ -212,7 +283,7 @@ await withPresignedRegtest(async host => {
         renameSync(originalPath, retainedPath);
         try {
           saveLifecycleFile(directory, name, { ...original, graphDigest: '00'.repeat(32) });
-          await assert.rejects(() => advanceLiveLifecycle(core, directory), /completed predecessor lost its exact pre-funding backup intent/u);
+          await assert.rejects(() => advanceLiveLifecycle(core, directory), /committed lifecycle bytes are missing or changed/u);
         } finally {
           if (existsSync(originalPath)) renameSync(originalPath, `${directory}/journal-test-fixtures/mismatched-wallet-signing-intent.json`);
           renameSync(retainedPath, originalPath);
@@ -228,9 +299,25 @@ await withPresignedRegtest(async host => {
     catch (error) {
       checkAllocationJournal();
       if (!(error instanceof Error) || error.message !== LOST_RESPONSE) throw error;
+      if (lost.has('initial-fee-response') && primaryLossRestorations === 1) {
+        // The actual funding/child was already accepted. Remove the ENTIRE
+        // primary from its expected path and resume only from backup + anchor.
+        await losePrimaryAndRestore(); checkAllocationJournal();
+      }
       console.log(JSON.stringify({ stage: 'resumable-runner-lost-response', observedFaults: lost.size })); continue;
     }
     console.log(JSON.stringify({ stage: 'resumable-runner-advance', iteration, complete: result.complete }));
+    if (custodySmoke && primaryLossRestorations === 2 && lost.has('replacement-fee-response')) {
+      const custody = await verifyRestoredLiveLifecycleCustody(core, directory);
+      assert.equal(custody.nativeWalletProof?.actualRestoredNativeSignatures, 83);
+      assert.equal(custody.completeParticipantKitsRestored, 3);
+      assert([...sendAttempts.values()].every(count => count === 1));
+      console.log(JSON.stringify({ passed: true, scope: 'isolated-durable-custody-smoke-only', primaryLossRestorations,
+        initializationInterruptions, actualNativeWalletRestoredSignatures: 83, participantKitsRestored: 3,
+        initialFundingAndReplacementReconciled: true, duplicateSends: 0, fullLifecycleAcceptanceCompleted: false,
+        realDefaultSignetVerified: false, publicNetworkBroadcasts: 0, coreVersion: host.coreVersion, evidence: directory }));
+      return;
+    }
     if (result.complete) break;
     if (existsSync(`${directory}/allocations/return.signed.json`) && finalReturnPendingChecks === 0) {
       const finalReturn = readLifecycleFile<RecyclingSigned>(directory, 'allocations/return.signed.json');
@@ -323,7 +410,7 @@ await withPresignedRegtest(async host => {
   assert.deepEqual(resumed, result, 'repeat completed observation changed evidence');
   assert.equal((await host.rpc('getrawmempool')).length, 0);
   const run = readLifecycleFile<RunEvidence>(directory, 'run.json');
-  assert.equal(run.execution, 'bounded-sequential-recycling-v1');
+  assert.equal(run.execution, LIVE_CAPITAL_EXECUTION);
   assert.equal(run.initialCapitalSats, CAPITAL_SATS); assert.equal(run.capitalLimitSats, CAPITAL_SATS);
   assert.equal(coinId(run.initialCoin), coinId(seed)); assert.equal(run.sourceDigest, core.sourceDigest);
   assert.deepEqual(run.cases.map(item => item.id), CASE_IDS);
@@ -375,7 +462,7 @@ await withPresignedRegtest(async host => {
     const intent = validateRecyclingIntent(readLifecycleFile<RecyclingIntent>(directory, `allocations/${id}.intent.json`));
     const signed = validateSignedRecycling(intent, readLifecycleFile<RecyclingSigned>(directory, `allocations/${id}.signed.json`));
     assert.equal(intent.id, id); assert.equal(intent.sourceDigest, core.sourceDigest);
-    assert.equal(intent.maximumFeeSats, RECYCLING_FEE_CAP); assert(intent.feeSats <= 2250);
+    assert.equal(intent.maximumFeeSats, RECYCLING_FEE_CAP); assert(intent.feeSats <= 338);
     assert(intent.inputs.every(coin => !excludedWalletCoins.has(coinId(coin))));
     assert.equal(intent.previousCaseDigest === null, id === 'case-00');
     assert.throws(() => validateRecyclingIntent({ ...intent, feeSats: intent.feeSats + 1 }));
@@ -465,6 +552,10 @@ await withPresignedRegtest(async host => {
   assert.equal(verification.realDefaultSignetVerified, false); assert.equal(verification.restoredKits, 57);
   assert.equal(verification.hostileRejections, 80); assert.equal(verification.feeFamiliesConfirmed, 5);
   assert.equal(verification.everyPayoutRefundAndSponsorChangeVerified, true);
+  assert.equal(verification.durableCustodyEvidence.actualNativeWalletRestoredSignatures, 83);
+  assert.equal(verification.durableCustodyEvidence.independentlyRestoredCasesBeforeFunding, 19);
+  assert.equal(primaryLossRestorations, 2); assert.equal(initializationInterruptions, 2);
+  assert.equal(durableSendChecks, 84); assert.equal(submittedTransactionIds.size, 89);
   assert.equal(readdirSync(`${directory}/events`).length, eventCount, 'read-only verification wrote a journal event');
   assert.deepEqual([...submissions.entries()], submissionCounts, 'read-only verification resubmitted a transaction');
   await assert.rejects(() => verifyCompletedLiveLifecycle({ ...core, sourceDigest: '00'.repeat(32) }, directory));
@@ -481,11 +572,14 @@ await withPresignedRegtest(async host => {
     lostReplyKinds: [...lost].sort(), sameTemplateWalletSigningRequestsAfterLostReply: allocationSignRequests.get('case-01'),
     preFundingBackupGateChecks: backupGateChecks, interruptedUncommittedCaseRetained: true,
     lowCapitalRefusalsBeforeWalletAccess: 2, historicalIntentRefusalsBeforeRecycling: historicalIntentRefusals,
-    advanceInvocations, finalReturnPendingChecks,
+    advanceInvocations, finalReturnPendingChecks, primaryLossRestorations, initializationInterruptions, durableSendChecks,
     immutablePublicAllocationFiles: immutableAllocationFiles.size, capitalAudit,
     readOnlyCompletionVerification: verification, readOnlyReorganizationAndMissingBackupRejections: true, ...resumed,
     csvBoundaryAudit, csvBoundaryRecords: csvRecords });
   console.log(JSON.stringify({ passed: true, evidence: directory, realDefaultSignetVerified: false, cases: 19,
     publicNetworkBroadcasts: 0, coreVersion: host.coreVersion, chain: 'isolated-regtest',
-    feeFamilies: 5, lostRepliesWithoutResending: lost.size, capitalAudit, csvBoundaryAudit }));
+    feeFamilies: 5, lostRepliesWithoutResending: lost.size, capitalAudit, csvBoundaryAudit,
+    durableCustodyAudit: { primaryLossRestorations, initializationInterruptions, durableSendChecks,
+      uniqueSubmittedTransactions: submittedTransactionIds.size,
+      actualNativeWalletRestoredSignatures: 83, independentlyRestoredCasesBeforeFunding: 19, nativeTargetsRegenerated: 0 } }));
 }, { maximumMinutes: 90 });

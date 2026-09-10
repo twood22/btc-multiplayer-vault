@@ -99,8 +99,18 @@ These permanently public synthetic-test images must **never be used with real
 funds, participant custody or operational credentials**. This is not a production
 release, funding authority or real default-Signet evidence.
 
-The public `536935c2` evidence above is historical: the current low-capital
-acceptance runner changes executable source and requires a fresh full local
+The public `536935c2` evidence above is historical. Source `9afe98cf` subsequently
+passed all 49 local commands and both genuine image profiles; its complete
+local and OCI archives are retained. The first real default-Signet run did begin,
+but reboot loss of its temporary primary journal and participant material
+prevented continuation. A separate surviving native-wallet backup was restored
+offline, then audited against the chain: at 2026-09-10 16:30 UTC, 89,717 sats
+remained in seven native wallet outputs, 29,700 sats in two other known leaves,
+and 9,568 sats were confirmed fees. That closes the original 128,985-sat ledger;
+it is not a completed lifecycle or authority to spend those outputs.
+
+The current persistent-recovery runner changes executable source and requires
+a fresh full 52-command local
 suite, both exact image profiles and real default-Signet evidence on its own
 source digest. Historical test receipts cannot authorize this changed source.
 
@@ -110,22 +120,26 @@ The historical all-at-once runner passed those 19 lifecycle cases, five fee
 families and lost-reply recovery against isolated Core. Neither establishes real
 Signet or complete acceptance of the new low-capital runner.
 For the fresh isolated default-Signet host, `presigned:signet-lifecycle` accepts
-`status`, `init`, `fund`, `advance` or `verify`, followed by that host's exact owner-only
+`status`, `init`, `fund`, `advance`, `follow` or `verify`, followed by that host's exact owner-only
 `control.json` path. `status` is read-only. `init` additionally requires
 `--capital-limit-sats=N --initial-outpoint=TXID:VOUT`: one exact, confirmed,
 non-coinbase native output owned by the fresh isolated wallet. It reserves fresh
-wallet targets and commits that coin and budget. The lower bound is 124,680 sats;
-128,985 sats is budgeted for the unchanged complete 19-case/five-fee-family
+wallet targets and commits that coin and budget. The lower bound is 88,352 sats;
+89,000 sats is used by isolated regression for the complete 19-case/five-fee-family
 matrix; its complete current-source acceptance remains required.
 `fund` signs and submits only the initial bounded allocation. Each subsequent
 case receives all prior verified participant payouts, funding refunds, sponsor
 change and the unused reserve through one exact journaled allocation. Participant
 payout keys are restored locally and never imported into Core; Core cannot
-select other wallet coins. Every case retains 10,000-sat deposits and CSV12.
+select other wallet coins. Every case retains 10,000-sat deposits, 9,500/10,250-sat
+first/second payouts and CSV12. Only sponsor escrow (15,000 sats) and test-capital
+transport changed; the actual graph fees and game economics did not.
 Twenty allocations, including the final wallet return, each have a hard
-2,250-sat fee cap; the actual conservative fee is 2 sat/vB. The fixed lifecycle
-fees total 47,000 sats, making total burn at most 92,000 sats and the final return
-at least 36,985 sats from a 128,985-sat seed. No automatic fee or budget increase
+338-sat fee cap; the calculation is integer ceiling at 300 millisatoshis/vB.
+The fixed lifecycle fees total 47,000 sats, making total in-run burn at most
+53,760 sats and the final return at least 35,240 sats from an 89,000-sat seed.
+Any separate seed consolidation needs its own exact-input audit and fee bound.
+No automatic fee or budget increase
 is permitted. If the exact inputs cannot meet policy or confirmation conditions,
 the run retains its state and reports the unresolved condition.
 The isolated regtest mines directly to recovery boundary heights, verifies the
@@ -133,7 +147,8 @@ same stored transaction is rejected at depth 11 and accepted at depth 12 for
 every recovery case, then resumes the ordinary runner. Its bounded 90-minute
 execution deadline and the CI suite's 150-minute deadline change no block delay
 or substantive acceptance requirement. Real Signet still waits for real blocks.
-`advance` performs one resumable pass and reports pending confirmations/CSV.
+`advance` performs one resumable pass and reports pending confirmations/CSV;
+`follow` keeps the same exclusive writer active between 30-second observations.
 `verify` is a separate read-only check of all completed lifecycles, decrypted
 backups, active confirmations, replacements, exact historical payouts and the
 closed 84-transaction capital DAG with its confirmed unspent final return; it cannot prepare,
@@ -142,6 +157,13 @@ after `init` invalidates the run binding rather than silently reinterpreting it.
 Never supply an operational wallet or deterministic fixture keys. Keep the
 entire private run directory, its separate wrapping-key files and the isolated
 Core wallet; they are recoverable test state, not publishable evidence.
+The new host uses persistent private primary/full-backup/rollback-anchor roots,
+actual native restoration signatures for all 83 receiving/reserved wallet keys,
+complete per-case participant-kit restore checks before funding, and explicit
+same-identity recovery after journal or whole-primary loss. Incomplete or stale
+host-restoration acknowledgements cannot enable restart or funding. These
+separate directories do not protect against whole-disk loss. See the
+[persistent recovery procedure](./PRESIGNED-OPERATOR-RUNBOOK.md#persistent-isolated-host-and-explicit-recovery).
 
 After every actual requirement passes on the same source, the private
 `presigned:assemble-acceptance` command requires absolute paths via `--local-run`,

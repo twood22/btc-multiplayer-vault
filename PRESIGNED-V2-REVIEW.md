@@ -3,6 +3,55 @@
 Date: 2026-09-07 UTC. This is internal code review and executable regression
 evidence, not an external security audit, production release or funding approval.
 
+## Persistent custody and host recovery review (2026-09-10 UTC)
+
+The reboot loss of the original temporary Signet journal exposed a recoverability
+failure, despite its passing historical 49-command suite and independent native
+wallet backup. The backup recovered native wallet outputs, not missing participant
+keys or the original run journal. The old funded graph remains bound to its old
+source; this implementation creates a new persistent execution version.
+
+Independent read-only reviews covered native proof binding, journal/anchor
+restoration, stable single-writer locks, exact-host recovery and the unfunded
+diagnostic. Findings reproduced or corrected include:
+
+- Synthetic native signatures now commit the backup bytes, binary, exact source/
+  run context, all targets, timestamp and fresh challenge. Editable receipt fields
+  alone cannot rebind old signatures. All 83 native keys were restored and signed
+  in actual offline Core; 15 binding/shutdown mutations refused.
+- Ordinary journal operation refuses an unacknowledged head or missing anchor.
+  Explicit recovery verifies all latest bytes before finishing an interrupted
+  acknowledgement, never discarding a surviving newer/conflicting watermark.
+  Missing/corrupt primary identity can be retained and restored; a valid foreign
+  identity refuses. The 19-checkpoint/14-restore test passed 42 refusal cases.
+- Primary cutover preflights same-filesystem placement before moving originals,
+  then uses atomic no-overwrite/no-copy renames and flushes both parents. The
+  actual cross-device negative leaves the original path intact. Immutable file
+  publication no longer creates a crash window with two-link final objects.
+- Copying public chain data holds Core's actual POSIX directory lock, not merely
+  a process-name check or unrelated BSD lock. Source write permissions and the
+  copied tree are checked. Actual live Core exclusion, competing lock attempts,
+  clean release and killed-lock-owner refusal passed.
+- Every whole-host restore has a new monotonic independently retained attempt.
+  A new native proof commits that attempt. Normal start/funding, orphan newer
+  completions and rolled-back primaries fail closed; explicit resume may complete
+  identical interrupted replicas. Cleanup tracks newly launched hosts before
+  post-spawn checks, without adopting unrelated pre-existing processes.
+- The unfunded diagnostic requires specific expected gate failures (not arbitrary
+  nonzero exits), uses locks around negative metadata injection, and retains only
+  its own injected bytes. The actual unfunded default-Signet drill passed on
+  source `b8c4cf28`: two same-wallet restarts, two whole-host restorations, ten
+  specific refusals, two fresh attempt-bound signatures, unchanged address and
+  zero wallet transactions/test sats. The test host stopped cleanly afterward.
+
+The current-source isolated custody smoke passed two whole-primary restorations, two
+initialization interruptions, all 83 wallet targets and reconciliation of lost
+funding/replacement replies without duplicate sends. Final independent static
+delta review found no additional actionable blocker within that bounded scope.
+Fresh full 52-command,
+both-image and funded default-Signet evidence remains pending for this source.
+These are scoped internal reviews, not an independent external security audit.
+
 ## Low-capital follow-up review (2026-09-08 UTC)
 
 Two independent source reviews and an independently implemented Core regression

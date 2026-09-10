@@ -11,9 +11,10 @@ import { BITCOIN_NETWORK_NAME } from '../src/network.js';
 import { createPresignedFixture } from '../src/presigned/fixtures.js';
 import { PARTICIPANT_IDS, type ParticipantId } from '../src/presigned/types.js';
 import { verifyNativeWalletWitness } from '../src/presigned/wallet.js';
-import { buildRecyclingIntent, RECYCLING_FEE_CAP, RECYCLING_FEE_RATE,
+import { buildRecyclingIntent, RECYCLING_FEE_CAP, RECYCLING_FEE_RATE_MILLISATS, recyclingFeeForVsize,
   signRecyclingPayout, validateRecyclingIntent, validateRecyclingWalletPsbt, validateSignedRecycling,
   type RecyclingCoin, type RecyclingIntent, type RecyclingSigned } from './lib/presigned-live-recycling.js';
+import { sequentialCapitalEnvelopes, MINIMUM_SEQUENTIAL_CAPITAL, LIVE_CAPITAL_EXECUTION } from './lib/presigned-live-capital.js';
 
 const fixture = createPresignedFixture({ network: 'signet', walletKinds: ['p2tr', 'p2wpkh', 'p2tr'] });
 const checks: string[] = [];
@@ -86,7 +87,8 @@ function sign(intent: RecyclingIntent, walletTaprootType = bitcoin.Transaction.S
   const signed = { transactionHex: tx.toHex(), txid: tx.getId(), intentDigest: intent.intentDigest };
   validateSignedRecycling(intent, signed);
   assert.equal(intent.inputSats - Number(tx.outs.reduce((sum, output) => sum + output.value, 0n)), intent.feeSats);
-  assert.equal(intent.feeSats, intent.maximumSignedVsize * RECYCLING_FEE_RATE);
+  assert.equal(intent.feeSats, recyclingFeeForVsize(intent.maximumSignedVsize));
+  assert.equal(intent.feeRateMillisatsPerVbyte, RECYCLING_FEE_RATE_MILLISATS);
   assert(tx.virtualSize() <= intent.maximumSignedVsize && intent.feeSats <= RECYCLING_FEE_CAP);
   signedTransactions++;
   return signed;
@@ -131,6 +133,24 @@ function walletPsbt(allocation: RecyclingIntent, completed: RecyclingSigned,
   return psbt;
 }
 
+check('new transport version preserves all cases and bounds every capital envelope with integer-ceiling fees', () => {
+  assert.equal(LIVE_CAPITAL_EXECUTION, 'bounded-sequential-recycling-v2');
+  assert.equal(MINIMUM_SEQUENTIAL_CAPITAL, 88_352);
+  const envelopes = sequentialCapitalEnvelopes();
+  assert.equal(envelopes.length, 20);
+  assert.deepEqual([envelopes[0]!.minimumSeedSats, envelopes[6]!.minimumSeedSats, envelopes[10]!.minimumSeedSats,
+    envelopes[18]!.minimumSeedSats, envelopes[19]!.minimumSeedSats], [81668, 76496, 86348, 88352, 54090]);
+  assert(envelopes.every(item => item.minimumSeedSats <= MINIMUM_SEQUENTIAL_CAPITAL));
+  for (let vsize = 1; vsize <= 1126; vsize++) {
+    const fee = recyclingFeeForVsize(vsize);
+    assert(BigInt(fee) * 1000n >= BigInt(vsize) * 300n);
+    assert(BigInt(fee - 1) * 1000n < BigInt(vsize) * 300n);
+  }
+  denied(() => recyclingFeeForVsize(0)); denied(() => recyclingFeeForVsize(1.5));
+  const current = buildRecyclingIntent(request());
+  denied(() => validateRecyclingIntent({ ...current, version: 1 } as unknown as RecyclingIntent));
+  denied(() => validateRecyclingIntent({ ...current, feeRateMillisatsPerVbyte: 2000 }));
+});
 check('all three local payout owners sign mixed P2WPKH ALL and wallet Taproot DEFAULT/ALL inputs', () => {
   for (const id of PARTICIPANT_IDS) for (const hashType of [bitcoin.Transaction.SIGHASH_DEFAULT, bitcoin.Transaction.SIGHASH_ALL]) {
     const original = request(id); const intent = buildRecyclingIntent(original);

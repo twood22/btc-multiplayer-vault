@@ -6,6 +6,7 @@ import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, wri
 import { dirname, resolve } from 'node:path';
 import { commitmentDigest } from '../../src/presigned/validation.js';
 import { presignedSourceDigest } from '../presigned-build-identity.mjs';
+import { LIVE_REGTEST_CAPITAL_SATS, RECYCLING_FEE_CAP } from './presigned-live-capital.js';
 
 export type AcceptanceMode = 'pure' | 'local';
 export interface AcceptanceCommand {
@@ -23,6 +24,7 @@ const pureFiles = [
   'web/tests/presigned-custody-acceptance.ts', 'web/tests/presigned-local-lock-acceptance.ts',
   'web/tests/presigned-browser-review-probe.ts', 'web/tests/presigned-chain-review-acceptance.ts',
   'scripts/presigned-live-recycling-verification.mts',
+  'scripts/presigned-durable-journal-verification.mts',
 ];
 export function acceptancePlan(mode: AcceptanceMode): AcceptanceCommand[] {
   assert(mode === 'pure' || mode === 'local');
@@ -42,7 +44,7 @@ export function acceptancePlan(mode: AcceptanceMode): AcceptanceCommand[] {
   if (mode === 'local') {
     for (const file of ['presigned-core-acceptance', 'presigned-core-spends', 'presigned-core-fees',
       'presigned-core-funding-fees', 'presigned-core-spend-fees', 'presigned-core-observed-witnesses',
-      'presigned-live-lifecycle-regtest']) plan.push({ id: file, executable: 'node',
+      'presigned-wallet-restore-verification', 'presigned-live-lifecycle-regtest']) plan.push({ id: file, executable: 'node',
       args: ['--import', 'tsx', `scripts/${file}.mts`], network: 'signet', category: 'core' });
     plan.push({ id: 'database-v2-all', executable: 'bash', args: ['scripts/run-presigned-db-acceptance.sh', 'all'],
       network: 'signet', category: 'database' });
@@ -155,6 +157,16 @@ export function validateCommandResults(command: AcceptanceCommand, stdout: strin
         result.networkCalls === 0 && result.walletCalls === 0 && result.consensusOrLiveSignetVerified === false,
       'capital signing proof lacks the actual mixed-native and hostile-journal regressions');
     }
+    if (command.args.at(-1) === 'scripts/presigned-durable-journal-verification.mts') {
+      const result = records.findLast(resultPassed);
+      assert(result?.configuredNetwork === command.network && result.scope === 'private-journal-filesystem-fixtures' &&
+        result.completeCheckpoints >= 19 && result.actualCompleteRestorations >= 14 && result.rejectedBoundaries >= 42 &&
+        result.kernelLockChecks === 4 && result.actualPrimaryCutovers === 2 &&
+        result.metadataLossRestorations === 3 && result.interruptedCheckpointRepairs === 3 && result.atomicCutoverPreflightChecks === 1 &&
+        result.independentRollbackAnchorRequired === true && result.networkCalls === 0 && result.walletCalls === 0 &&
+        result.publicBroadcasts === 0 && result.realParticipantCustodyVerified === false && result.realSignetVerified === false,
+      'private checkpoint proof lacks complete restores, independent rollback refusal or safe filesystem boundaries');
+    }
   } else if (command.category === 'core') {
     assert(!records.some(item => item.passed === false || item.status === 'failed'), `${command.id} reported a failed result`);
     const record = records.findLast(resultPassed);
@@ -165,17 +177,27 @@ export function validateCommandResults(command: AcceptanceCommand, stdout: strin
       record.adequatePackageAndReplacementConfirmed === true && record.fundingAndGraphUnchanged === true);
     if (command.id === 'presigned-core-funding-fees') assert(record.dynamicMempoolFloorRaisedByRealEviction === true &&
       record.adequatelySponsoredFundingAndReplacementConfirmed === true && record.exactGraphAndNineExitTxidsUnchanged === true);
+    if (command.id === 'presigned-wallet-restore-verification') assert(record.scope === 'actual-isolated-native-wallet-restoration' &&
+      record.actualRestoredNativeSignatures === 83 && record.rejectedBindings >= 15 && record.sourceWalletCalls === 1 &&
+      record.coreDataDirectoryLockChecks === 4 &&
+      record.sourceBalancesUnchanged === true && record.originalBackupUnchanged === true && record.networkingDisabled === true &&
+      record.participantKeysImported === false && record.realDefaultSignetVerified === false &&
+      record.signatureContextBindingVerified === true && record.cleanRestoreShutdownVerified === true,
+      'native wallet proof lacks actual separately restored signatures for every reserved target');
     if (command.id === 'presigned-live-lifecycle-regtest') {
       const capital = record.capitalAudit;
       const csv = record.csvBoundaryAudit;
+      const custody = record.durableCustodyAudit;
       assert(record.cases === 19 && record.feeFamilies === 5 && record.lostRepliesWithoutResending === 6 &&
-        capital?.initialCapitalSats === 128_985 && capital.fixedConfirmedFeesSats === 47_000 &&
-        Number.isSafeInteger(capital.allocationFeesSats) && capital.allocationFeesSats > 0 && capital.allocationFeesSats <= 45_000 &&
+        capital?.initialCapitalSats === LIVE_REGTEST_CAPITAL_SATS && capital.fixedConfirmedFeesSats === 47_000 &&
+        Number.isSafeInteger(capital.allocationFeesSats) && capital.allocationFeesSats > 0 && capital.allocationFeesSats <= 20 * RECYCLING_FEE_CAP &&
         capital.returnedSats + capital.fixedConfirmedFeesSats + capital.allocationFeesSats === capital.initialCapitalSats &&
         capital.confirmedAllocations === 20 && capital.recycledParticipantPayouts === 57 && capital.unrelatedWalletInputsUsed === 0 &&
         capital.allTerminalOutputsAndReservesConsumedExactlyOnce === true &&
         csv?.cases === 9 && csv.delayBlocks === 12 && csv.justBeforeMaturityRejected === 9 &&
-        csv.matureTransactionsAllowed === 9 && csv.sameStoredTransactionBytes === true,
+        csv.matureTransactionsAllowed === 9 && csv.sameStoredTransactionBytes === true &&
+        custody?.primaryLossRestorations === 2 && custody.initializationInterruptions === 2 && custody.durableSendChecks === 84 && custody.uniqueSubmittedTransactions === 89 &&
+        custody.actualNativeWalletRestoredSignatures === 83 && custody.independentlyRestoredCasesBeforeFunding === 19 && custody.nativeTargetsRegenerated === 0,
       'resumable Core proof omits the complete confined low-capital money trail, exact CSV boundaries or restart faults');
     }
   } else if (command.id === 'offline-full') {

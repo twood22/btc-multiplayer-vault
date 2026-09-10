@@ -6,13 +6,18 @@ not the current V2 implementation verdict. The explicitly authorized
 [PRESIGNED-V2-PLAN.md](./PRESIGNED-V2-PLAN.md). Its operating procedure is
 [PRESIGNED-OPERATOR-RUNBOOK.md](./PRESIGNED-OPERATOR-RUNBOOK.md). V2 is unfinished;
 no mainnet spending, deployment or migration of an existing funded vault is authorized.
-On 2026-09-07, the public V2 branch passed the full47 local matrix and both
-genuine rootless packaged-app profiles, including actual creation, restoration
-and revalidation of all three evidence archives (run34150142799, source536935c2).
-Archive bytes were not uploaded. A separate same-source private run passed all
-47 commands at 19:45 UTC and retained its actual 102-file local evidence set and
-verified archive. Real default-Signet lifecycles, retained image bytes and the
-complete release dossier remain outstanding; see the V2 evidence plan.
+Current V2 checkpoint (2026-09-10): historical source `9afe98cf` passed all 49
+local commands and both genuine rootless image profiles, with complete local/OCI
+archives retained. Its real default-Signet run began but lost its temporary
+primary journal and participant material on reboot. A separate native wallet
+backup was restored; the dated 16:30 UTC chain audit reconciled 89,717 native
+wallet sats + 29,700 other known unspent sats + 9,568 confirmed fees = the original
+128,985 test sats. No recovered coins have been spent by the new implementation.
+Persistent journal/anchor, native-wallet restoration and same-identity host
+recovery changes are under verification. The new complete 52-command suite,
+both current images and all 19 real default-Signet lifecycles remain required;
+historical passes cannot certify changed source. See the V2 evidence plan for
+exact artifacts, the lower-capital profile and outstanding work.
 
 Last updated: 2026-09-05
 Reviewed baseline: `71b1bd227a5f3f3d35fb8449776747d5d88d28c7`; current work is on

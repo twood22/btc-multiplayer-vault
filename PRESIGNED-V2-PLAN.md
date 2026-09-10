@@ -1,7 +1,8 @@
 # V2 implementation and evidence plan
 
-Goal authorized 2026-09-06. Status: in progress; test-only evidence prerelease
-published, but no production release or real-Signet funding yet.
+Goal authorized 2026-09-06. Status: in progress; test-only evidence prereleases
+published, but no production release. A real-Signet test run was interrupted by
+loss of temporary custody; persistent recovery and a new complete run are pending.
 Rollback: merged commit `202345ffd8bab35590fe15b98d966c4267f194ef`.
 Working branch: `codex/presigned-vault-v2`. No existing vault mutation, mainnet
 spending, public listener, deployment or outreach is authorized.
@@ -30,7 +31,75 @@ Sixteen OCI boundary regressions pass, including 0755 refusal, successful
 permission correction, symlink non-mutation and non-private-parent refusal;
 scripts typecheck passes. The fresh whole matrix subsequently passed below.
 
-## Low-capital follow-up (2026-09-08 UTC)
+## Current persistent-recovery checkpoint (2026-09-10 UTC)
+
+Historical source `9afe98cf951de4261db89dd8e342ff607393ed6d52f64e9381e0d3dc842688c7`
+(commit `a87c6dc`) completed all 49 fixed local commands at 01:15 UTC on
+2026-09-09, including all 19 isolated-Core cases, five fee families, 84 confirmed
+transactions and every CSV11/12 boundary. The actual 106-file retained local
+evidence has run digest `229c8b9c8f2a14b0cf12ce997fe6f6d956c6910b670436fcc7bcaad989b57f28`;
+its restored archive SHA-256 is
+`f6e985609e5f7bb533ee38bfc758a47bd6c35a86864ed2d06beeeb70a9570718`.
+Both actual OCI profiles also passed and their complete 39-file archives were
+retained and independently verified. These artifacts remain historical; none
+certifies the new executable source.
+
+The real default-Signet run on that historical source funded its first case and
+confirmed a first solo exit, but reboot removed its `/tmp` primary journal and
+participant material. It cannot safely continue or be reinterpreted. A surviving
+native test-wallet backup was restored into a new persistent isolated host,
+with networking and automatic wallet broadcast disabled during restoration.
+At the 2026-09-10 16:30 UTC chain audit, the original 128,985 test sats reconciled
+exactly as 89,717 sats in seven owned/solvable native outputs, 29,700 sats in two
+other known unspent leaves, and 9,568 sats in five confirmed fees. Audit SHA-256:
+`6166a397ce465fef7f7bec353c8c4e8dcc08a054c1aafc47765c7bd274a0bbe1`.
+This is a dated non-spending recovery snapshot, not a fresh UTXO authorization.
+No consolidation or new funded run has been performed on the recovered coins.
+
+The new execution profile preserves the full 19-case/5-fee-family/84-transaction
+matrix, all 10,000-sat deposits, 9,500/10,250-sat first/second payouts, graph fees
+and CSV12. Only test-capital transport (integer-ceiling 300 millisatoshis/vB,
+338 sats maximum per allocation) and external sponsor escrow (15,000 sats) change.
+The exact minimum seed is 88,352 sats; regtest uses 89,000. Twenty allocations
+cost at most 6,760 sats plus 47,000 fixed lifecycle fees. Separate consolidation,
+if later executed, needs a fresh audit and its own bound; no extra coins or
+outreach are assumed and no fee or capital override is automatic.
+
+Persistent private primary/full-backup/independent-anchor roots replace temporary
+funded state. Actual native restore proofs cover the receiving key and all 82
+reserved wallet targets; every case independently restores all three complete
+participant kits before wallet signing. Exact intent checkpoints precede all
+signatures and sends. Kernel locks, total-primary-loss restoration, incomplete
+initialization retry and same-identity host recovery are implemented. Restoring
+a host requires a new independently acknowledged attempt-bound native proof;
+stale or missing acknowledgements cannot enable ordinary restart/funding.
+These sibling directories do not protect against whole-disk loss.
+
+Narrow current-development checks passed: scripts typecheck, 19 synthetic durable
+checkpoints/14 complete restores/42 refusal cases, four kernel-lock checks,
+83 actual restored native signatures/15 binding refusals, and four actual POSIX
+lock checks including live Core exclusion and lock-holder death. The isolated
+custody smoke run restored two completely missing primaries and reconciled lost
+submission replies without duplicates; it is not full lifecycle acceptance.
+The unfunded default-Signet drill passed on source
+`b8c4cf2848be5d9626f8210d601b245f18bbf49ec15595efc5f46b73246dc97f`:
+two same-wallet restarts, two full host restorations, ten specific refusal cases,
+two new attempt-bound native signatures, unchanged receiving address, zero wallet
+transactions and zero test sats. Its node stopped cleanly; original trees and
+negative-fixture bytes remain private. The current-source custody smoke also
+passed both primary-loss/init-interruption schedules and funding/replacement
+lost-reply reconciliation without duplicate sends. Neither is the full funded
+19-case acceptance. Independent final delta review found no additional actionable
+blocker in its bounded static scope; the full suite is still required.
+
+The required local plan now has **52 commands**: the prior 49 plus two filesystem
+checks and one native-wallet restore check. Full current-source local acceptance,
+both current exact images, retained complete artifacts, a new funded default-
+Signet 19-case/five-fee-family run and final release assembly remain required.
+Physical-device passkey tests remain explicitly deferred. Mainnet spending,
+public app exposure and further outreach remain unauthorized.
+
+## Historical low-capital follow-up (2026-09-08 UTC)
 
 The user authorized proceeding with the available confirmed 128,985 test sats.
 The runner now uses one explicitly selected coin and a closed sequential
@@ -75,7 +144,7 @@ claim that the changed source has completed its fresh acceptance requirements.
 | Versioned database/runtime/watcher | Migrations015-021, exact-send journals, unknown-state preservation, reverse reorg/restore and monotonic poll revision | Lost-lease/ABA and both fair-queue regressions pass actual Core/PostgreSQL in the corrected-source full aggregate |
 | Substantive v2 readiness and release gate | Exact-image/check receipts and exact funding-state restore proof; no provider gate bypass | Evidence boundary suite has67 fail-closed negatives plus19 archive negatives; native restore has22; end-to-end release proof remains pending |
 | Actual packaged app execution | Production Dockerfile, rootless Podman, all OCI bytes, immutable image, operator and real browser checks | Both profiles passed; exact test-only archives are now publicly retained and independently restored/validated |
-| Real default-Signet full lifecycles | Isolated keys/coins, txids, confirmations, output audit | Historical runner passed 19 isolated-Core cases; 128,985 confirmed default-Signet sats available; new low-capital runner under validation, no live allocation yet |
+| Real default-Signet full lifecycles | Isolated keys/coins, txids, confirmations, output audit | Historical real run interrupted; native wallet recovered and 128,985-sat ledger reconciled; persistent runner and new complete run still required |
 | Documentation and independent security review | Protocol, operator/recovery runbook, versioned historical docs; reviewer findings reproduced and fixed | Three reviews and focused independent rereviews completed; no new findings in the corrected delta |
 | Physical-device passkeys | Friends' onboarding, explicitly deferred by user | Deferred; not tested |
 | Mainnet activation/public deployment | Separate user authority and release review | Not authorized |
