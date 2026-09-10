@@ -31,7 +31,35 @@ Sixteen OCI boundary regressions pass, including 0755 refusal, successful
 permission correction, symlink non-mutation and non-private-parent refusal;
 scripts typecheck passes. The fresh whole matrix subsequently passed below.
 
-## Current persistent-recovery checkpoint (2026-09-10 UTC)
+## Current onboarding-correction checkpoint (2026-09-10 21:00 UTC)
+
+Source `409cca25c6f7fb93889b8b7ff1076772b4ca1ca8c9b2b13b11e64e8e03c44087`
+corrects two independently reviewed gaps found during final coverage review:
+V2 onboarding displayed V1 Sigbash/optional-recovery instructions, and primary/
+resumed enrollment did not clear its owned PRF on crypto exceptions. Durable
+authenticated vault membership now selects explicit version-specific guidance.
+V2 requires both distinct passkeys and the saved offline kit plus independent
+graph/payout verification; V1 guidance remains separate. Both enrollment paths
+share a helper returning only ciphertext/public identity, with `finally` cleanup
+of owned PRF/material/scalars. This is best effort, not a key-deletion security
+assumption or a guarantee about immutable strings and browser internals.
+
+All four typechecks and 17 focused passkey checks pass, including six exercised
+success/fault paths inspecting actual owned buffers. Independent rereview found
+no further actionable issue in this delta. Actual V2 and legacy browser fixtures
+now assert their respective onboarding requirements; the optimized V2 run is
+executing at this checkpoint. The fixed 52-command plan and all protocol/game/
+fee requirements are unchanged. New complete local, both-image and funded
+default-Signet evidence is required for this new source.
+
+The previous b8c4 clean invocation was intentionally stopped after 40 completed
+commands at 20:52:17 UTC, before its first Core test initialized a node. Its real
+child exited1 and all 128 selected files were retained separately as superseded
+incomplete evidence. This was a response to confirmed findings, not a timeout
+or a shortened acceptance pass. Both b8c4 image archives and their unpublished
+draft remain historical, unchanged; no recovered test coin was signed or sent.
+
+## Historical persistent-recovery checkpoint (2026-09-10 UTC)
 
 Historical source `9afe98cf951de4261db89dd8e342ff607393ed6d52f64e9381e0d3dc842688c7`
 (commit `a87c6dc`) completed all 49 fixed local commands at 01:15 UTC on
@@ -93,9 +121,53 @@ lost-reply reconciliation without duplicate sends. Neither is the full funded
 blocker in its bounded static scope; the full suite is still required.
 
 The required local plan now has **52 commands**: the prior 49 plus two filesystem
-checks and one native-wallet restore check. Full current-source local acceptance,
-both current exact images, retained complete artifacts, a new funded default-
-Signet 19-case/five-fee-family run and final release assembly remain required.
+checks and one native-wallet restore check. The candidate is frozen at commit
+`35d9038102ea7c4735a1f49d6dae69899124f1d1`, source `b8c4cf28` above. Public CI
+`34515524898` completed all three jobs successfully at 19:28 UTC. Its actual local
+log reports 52/52 with run digest
+`5add2368bc6ab81e2491c609265750c80904483d18d5da087d3c02f29d64f38e` and a restored
+112-file archive SHA-256
+`3ebd5920f448301adffc783b57676334370ec76231dc6cd606c12a87abfd8757`.
+That log-only runner did not retain its archive after exit. The separate
+18:37 UTC host-local invocation exited unsuccessfully at 20:28 UTC after 49
+passing commands. Its full isolated-Core lifecycle passed all 19 cases, five
+fee families, six lost replies, nine exact CSV12 boundaries, two primary-loss
+restorations and two initialization interruptions. Its capital audit was
+89,000 = 47,000 fixed fees + 3,515 allocation fees + 38,485 returned sats.
+The subsequent offline build correctly refused dependencies symlinked outside
+the detached checkout. All 158 selected raw files, including the exact failure,
+are retained as failed-prefix evidence; no complete-run receipt was generated.
+
+A new full 52-command invocation started at 20:37:49 UTC on the same frozen
+candidate/source, with an actual inside-checkout `npm ci` installation. An
+independently reviewed preflight verified the real dependency directory, all
+133 offline manifest inputs and the actual utility hash before starting.
+At 20:44 UTC it remains live; its wrapper fsyncs progress and only assembles
+complete retained evidence after the full original child exits successfully.
+No successful prefix, suffix or separate diagnostic is combined into a pass.
+Publication and native-transfer gates now require this new invocation.
+
+Separate retention tooling commit `646aa9e7fac48ce3cd8f6efc7098e98053686878`
+pinned that same candidate. Run `34515940967` passed both genuine image profiles.
+All six assets of draft `presigned-v2-test-evidence-b8c4cf28-20260910` were
+downloaded and actually restored/revalidated at 19:02 UTC. Independent review at
+19:16 UTC rehashed all assets, compared all 78 required members, and reran the
+pinned content scanner over both images' 18 historical layers (25,848 layer
+members per image). Both canonical outer archives contain 39 required files.
+
+| Current test image | Archive SHA-256 | Tested OCI manifest |
+| --- | --- | --- |
+| Signet-format | `40bb308081c5160680a6596c8d70cf0d1c898be9c3d67ef1cc098bbc2c152385` | `sha256:57785eb59a9f7c2de466aa8f892e8bfa9e16bebf4fbb17295ed44f8745395ad9` |
+| Mainnet-format | `eecc9ba1636717128592a831eb857213743b005e9da717e8f9a14df2ea9e2e46` | `sha256:c31772c543c8692d1a7fce28729c71dd987ec6fe7e72fe355147396538037032` |
+
+The Signet-format image proves the isolated-Core browser game, not public Signet;
+the mainnet-format image proves pre-funding custody and authorization refusal,
+not mainnet spending. The draft remains unpublished at this checkpoint.
+Publication additionally requires the actual complete private run and independent
+review bound to its exact archive/retention/child-exit bytes and final public
+notes. No funding authority or complete software release is inferred.
+A new funded default-Signet 19-case/five-fee-family run and final release
+assembly remain required.
 Physical-device passkey tests remain explicitly deferred. Mainnet spending,
 public app exposure and further outreach remain unauthorized.
 

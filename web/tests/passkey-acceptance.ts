@@ -14,6 +14,8 @@ import { deriveParticipantKeys } from '../../src/vault.js';
 import { unlockPublishedVault } from '../lib/client/vault-signing.js';
 import { scrubUnlockedVaultCustody } from '../lib/client/unlocked-vault-custody.js';
 import { createIsolatedSoloFixture } from './solo-signing-fixture.js';
+import { createParticipantSetupMaterial, participantSetupReadiness } from '../lib/client/participant-setup.js';
+import { LEGACY_PROTOCOL, PRESIGNED_PROTOCOL } from '../../src/presigned/types.js';
 
 const checks: Array<{ name: string; ok: boolean }> = [];
 
@@ -130,6 +132,81 @@ await check('PRF encryption material is removed from server-bound assertions', (
   stripPrfSecrets(response);
   assert(!JSON.stringify(response).includes(sentinel), 'PRF output survived assertion sanitization');
 });
+
+await check('setup guidance preserves explicit V1 and V2 recovery requirements for both networks', () => {
+  for (const network of ['signet', 'mainnet']) {
+    const v2 = participantSetupReadiness(PRESIGNED_PROTOCOL, network);
+    assert(v2.includes('both distinct passkeys and their saved offline recovery kit'), 'V2 omitted a mandatory recovery method');
+    assert(v2.includes('independently verify the same graph and exact payouts'), 'V2 omitted independent graph verification');
+    assert(v2.includes(`presigned ${network} release checks`), 'V2 guidance selected the wrong release network');
+    assert(!/Sigbash|second passkey or/i.test(v2), 'V2 inherited a legacy readiness requirement');
+    const v1 = participantSetupReadiness(LEGACY_PROTOCOL, network);
+    assert(v1.includes('second passkey or offline recovery kit') && v1.includes(`live Sigbash ${network}`), 'legacy guidance changed');
+    assert(!v1.includes('presigned'), 'legacy setup was silently reinterpreted as V2');
+  }
+});
+
+await check('setup guidance never infers a protocol from missing or unknown membership', async () => {
+  for (const protocol of [undefined, null, '', 'sigbash-v2', 'mainnet', {}]) {
+    await expectReject(async () => participantSetupReadiness(protocol, 'mainnet'));
+  }
+});
+
+await check('initial and resumed setup material returns only ciphertext and public identity and consumes PRF', async () => {
+  const prf = randomBytes(32); const restorationPrf = Uint8Array.from(prf);
+  let secret = '';
+  try {
+    const result = await createParticipantSetupMaterial(prf, toBase64url(Buffer.from('setup-identity-binding-v1')), 'carol');
+    assert(Object.keys(result).sort().join(',') === 'envelope,identity', 'setup returned private participant material');
+    assert(prf.every(byte => byte === 0), 'caller PRF survived successful setup');
+    secret = await decryptParticipantSecretEnvelope(result.envelope, restorationPrf);
+    assert(!JSON.stringify(result).includes(secret), 'returned setup material contains plaintext');
+    const expected = await deriveParticipantIdentity(secret, 'carol');
+    assert(JSON.stringify(result.identity) === JSON.stringify(expected), 'setup public identity does not match the encrypted backup');
+  } finally { prf.fill(0); restorationPrf.fill(0); secret = ''; }
+});
+
+for (const fault of ['none', 'import', 'encrypt', 'identity-first', 'identity-second', 'participant'] as const) {
+  await check(`setup consumes owned PRF and derivation buffers on ${fault} path`, async () => {
+    const subtle = crypto.subtle;
+    const original = { importKey: subtle.importKey, encrypt: subtle.encrypt, digest: subtle.digest };
+    const prf = randomBytes(32); const retained: Uint8Array[] = [];
+    let digestCalls = 0; let intendedFailureObserved = false;
+    const fail = () => { intendedFailureObserved = true; throw new Error('isolated setup failure injection'); };
+    try {
+      subtle.importKey = (async (...args: any[]) => {
+        if (fault === 'import') fail();
+        return (original.importKey as any).apply(subtle, args);
+      }) as typeof subtle.importKey;
+      subtle.encrypt = async (algorithm, key, data) => {
+        if (fault === 'encrypt') fail();
+        return original.encrypt.call(subtle, algorithm, key, data);
+      };
+      subtle.digest = async (algorithm, data) => {
+        digestCalls++;
+        if (digestCalls >= 2) retained.push(ArrayBuffer.isView(data)
+          ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : new Uint8Array(data));
+        if ((fault === 'identity-first' && digestCalls === 2) || (fault === 'identity-second' && digestCalls === 3)) fail();
+        const result = await original.digest.call(subtle, algorithm, data);
+        if (digestCalls >= 2) retained.push(new Uint8Array(result));
+        return result;
+      };
+      const operation = () => createParticipantSetupMaterial(prf, toBase64url(Buffer.from('fault-bound-setup-v1')),
+        fault === 'participant' ? 'not-a-participant' : 'alice');
+      if (fault === 'none') await operation();
+      else await expectReject(operation);
+      assert(prf.every(byte => byte === 0), 'owned caller PRF survived setup completion or failure');
+      assert(retained.every(bytes => bytes.every(byte => byte === 0)), 'owned identity derivation material survived completion or failure');
+      if (fault.startsWith('identity-')) assert(intendedFailureObserved, 'identity failure was not reached');
+      if (fault === 'import' || fault === 'encrypt') assert(intendedFailureObserved, 'requested crypto failure was not reached');
+      if (fault === 'none') assert(retained.length === 4, 'success did not inspect both private scalars and their input material');
+      if (fault === 'identity-second') assert(retained.length === 3, 'second failure did not inspect the previously derived private scalar');
+    } finally {
+      subtle.importKey = original.importKey; subtle.encrypt = original.encrypt; subtle.digest = original.digest;
+      prf.fill(0); retained.forEach(bytes => bytes.fill(0));
+    }
+  });
+}
 
 console.log(JSON.stringify({ passed: checks.every((item) => item.ok), checks }, null, 2));
 

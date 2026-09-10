@@ -1,8 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { createParticipantSecretEnvelope } from '../lib/client/key-envelope';
-import { deriveParticipantIdentity } from '../lib/client/participant-identity';
+import { createParticipantSetupMaterial } from '../lib/client/participant-setup';
 import { assertPasskeyWithPrf } from '../lib/client/webauthn';
 
 export function FinishKeySetup() {
@@ -13,13 +12,11 @@ export function FinishKeySetup() {
     try {
       const wrapping = await postJson('/api/passkeys/envelope/options', {});
       const assertion = await assertPasskeyWithPrf(wrapping.options);
-      const protectedKey = await createParticipantSecretEnvelope(assertion.prfOutput, wrapping.aad);
-      const identity = await deriveParticipantIdentity(protectedKey.participantSecret, wrapping.participantId);
-      assertion.prfOutput.fill(0);
+      const { envelope, identity } = await createParticipantSetupMaterial(assertion.prfOutput, wrapping.aad, wrapping.participantId);
       await postJson('/api/passkeys/envelope/finish', {
         challengeId: wrapping.challengeId,
         response: assertion.response,
-        envelope: protectedKey.envelope,
+        envelope,
         identity,
       });
       window.location.reload();

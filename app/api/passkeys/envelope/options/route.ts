@@ -6,6 +6,7 @@ import { toBase64url } from '@/web/lib/server/encoding';
 import { assertSameOrigin, jsonError } from '@/web/lib/server/http';
 import { requireSessionUser } from '@/web/lib/server/session';
 import { createAssertionChallenge } from '@/web/lib/server/webauthn-store';
+import { getUserVaultProtocol } from '@/web/lib/server/vault-protocol';
 
 export const runtime = 'nodejs';
 
@@ -13,6 +14,7 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const userId = await requireSessionUser();
+    const protocol = await getUserVaultProtocol(userId);
     const config = webConfig();
     const prfSalt = randomBytes(32);
     const baseOptions = await generateAuthenticationOptions({
@@ -34,6 +36,7 @@ export async function POST(request: Request) {
       participantId: challenge.credential.participantId,
     });
     return Response.json({
+      protocol,
       challengeId: challenge.id,
       credentialId,
       participantId: challenge.credential.participantId,

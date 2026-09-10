@@ -3,7 +3,33 @@
 Date: 2026-09-07 UTC. This is internal code review and executable regression
 evidence, not an external security audit, production release or funding approval.
 
-## Persistent custody and host recovery review (2026-09-10 UTC)
+## Onboarding follow-up review (2026-09-10 21:00 UTC)
+
+Final bounded coverage review found two concrete issues on source b8c4cf28:
+the shared V2 success screen still required Sigbash and described recovery as
+a second passkey **or** offline kit; both enrollment components also omitted
+owned-PRF cleanup on crypto exceptions. No funding-signature bypass was found.
+Root independently confirmed both findings and corrected them on source
+`409cca25c6f7fb93889b8b7ff1076772b4ca1ca8c9b2b13b11e64e8e03c44087`.
+
+Authenticated durable protocol resolution precedes challenge creation. V2 and
+V1 guidance remain explicit and distinct; unknown versions fail. Initial and
+resumed enrollment now use one helper returning only encrypted/public material,
+with exception-safe best-effort cleanup. Seventeen focused passkey checks and
+all four typechecks pass; buffer tests retain the actual owned views and verify
+their cleanup, including failure of the second scalar derivation. Independent
+rereview found no further actionable issue in this delta. The actual optimized
+browser run is pending; its V2/legacy fixtures now assert the correct guidance.
+
+A separate read-only protocol/test audit found all nine exits, withheld leaver
+signatures, MuSig2 cooperation, CSV recovery and fee-preserved descendants
+present. Preserve the documented limits: N-1 mature recovery is unrestricted
+on-chain authority, not a payout covenant; actual eviction-raised fee floors
+are tested for funding and solo parents, while the other three fee families
+have representative package/replacement tests. No new full-run or real-Signet
+acceptance is inferred from these source reviews.
+
+## Historical persistent custody and host recovery review (2026-09-10 UTC)
 
 The reboot loss of the original temporary Signet journal exposed a recoverability
 failure, despite its passing historical 49-command suite and independent native
@@ -48,9 +74,21 @@ The current-source isolated custody smoke passed two whole-primary restorations,
 initialization interruptions, all 83 wallet targets and reconciliation of lost
 funding/replacement replies without duplicate sends. Final independent static
 delta review found no additional actionable blocker within that bounded scope.
-Fresh full 52-command,
-both-image and funded default-Signet evidence remains pending for this source.
-These are scoped internal reviews, not an independent external security audit.
+At 20:44 UTC, candidate `35d9038` / source `b8c4cf28` has passed all three jobs of
+public CI `34515524898`, including all 52 local commands. Both actual image
+archives from separate retention run `34515940967` passed independent asset and
+all-member review, fresh historical-layer content scans and semantic restoration.
+The first host-local invocation passed 49 commands, including the full 19-case
+Core lifecycle, then failed when the offline-build boundary correctly refused
+dependencies symlinked outside the checkout. Its 158 retained files are labeled
+failed-prefix evidence, not full acceptance. Independent review passed the new
+clean-checkout preflight: real inside-checkout dependencies, all 133 input hashes
+and the actual utility bytes. The new full 52-command invocation began at
+20:37 UTC; its complete raw evidence and the exact final prerelease notes
+remain unapproved pending completion and review. The
+test-only prerelease remains a draft. The new funded default-Signet run and final
+release assembly are still required. These are scoped internal reviews, not an
+independent external security audit.
 
 ## Low-capital follow-up review (2026-09-08 UTC)
 

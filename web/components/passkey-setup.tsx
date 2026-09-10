@@ -1,8 +1,7 @@
 'use client';
 
 import { FormEvent, useState } from 'react';
-import { createParticipantSecretEnvelope } from '../lib/client/key-envelope';
-import { deriveParticipantIdentity } from '../lib/client/participant-identity';
+import { createParticipantSetupMaterial, participantSetupReadiness } from '../lib/client/participant-setup';
 import { assertPasskeyWithPrf, createPasskey } from '../lib/client/webauthn';
 import { BITCOIN_NETWORK_CONFIG } from '../../src/network.js';
 
@@ -12,6 +11,7 @@ export function PasskeySetup({ inviteToken }: { inviteToken: string }) {
   const [displayName, setDisplayName] = useState('');
   const [stage, setStage] = useState<Stage>('ready');
   const [message, setMessage] = useState('');
+  const [fundingReadiness, setFundingReadiness] = useState('');
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -32,19 +32,16 @@ export function PasskeySetup({ inviteToken }: { inviteToken: string }) {
       setStage('wrapping');
       setMessage('Protecting your Bitcoin key with your passkey…');
       const wrapping = await postJson('/api/passkeys/envelope/options', {});
+      const readiness = participantSetupReadiness(wrapping.protocol, BITCOIN_NETWORK_CONFIG.addressLabel);
       const assertion = await assertPasskeyWithPrf(wrapping.options);
-      const protectedKey = await createParticipantSecretEnvelope(assertion.prfOutput, wrapping.aad);
-      const identity = await deriveParticipantIdentity(
-        protectedKey.participantSecret,
-        wrapping.participantId,
-      );
-      assertion.prfOutput.fill(0);
+      const { envelope, identity } = await createParticipantSetupMaterial(assertion.prfOutput, wrapping.aad, wrapping.participantId);
       await postJson('/api/passkeys/envelope/finish', {
         challengeId: wrapping.challengeId,
         response: assertion.response,
-        envelope: protectedKey.envelope,
+        envelope,
         identity,
       });
+      setFundingReadiness(readiness);
       setStage('complete');
       setMessage('Your encrypted participant key is ready.');
     } catch (error) {
@@ -59,10 +56,7 @@ export function PasskeySetup({ inviteToken }: { inviteToken: string }) {
         <p className="eyebrow">Passkey protected</p>
         <h2>Your seat is secured</h2>
         <p>{message}</p>
-        <div className="safety-note">
-          Funding remains disabled until a second passkey or offline recovery kit is added, all three
-          friends verify the same vault address, and live Sigbash {BITCOIN_NETWORK_CONFIG.addressLabel} signing passes.
-        </div>
+        <div className="safety-note" data-testid="setup-funding-requirements">{fundingReadiness}</div>
       </section>
     );
   }

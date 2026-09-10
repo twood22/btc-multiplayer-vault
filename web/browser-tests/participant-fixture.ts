@@ -171,6 +171,7 @@ export async function createParticipantBrowser(input: {
   await page.getByLabel('Your name').fill(`${capitalize(input.id)} Browser Acceptance`);
   await page.getByRole('button', { name: 'Create my passkey' }).click();
   await expect(page.getByRole('heading', { name: 'Your seat is secured' })).toBeVisible();
+  await expect(page.getByTestId('setup-funding-requirements')).toContainText('live Sigbash');
 
   await page.goto('/vault');
   await expect(page.getByRole('heading', { name: 'Add a recovery passkey' })).toBeVisible();

@@ -45,6 +45,11 @@ export async function createV2Browser(input: { browser: Browser; baseURL: string
     await page.getByLabel('Your name').fill(`${input.id} acceptance`);
     await page.getByRole('button', { name: 'Create my passkey' }).click();
     await expect(page.getByRole('heading', { name: 'Your seat is secured' })).toBeVisible();
+    const readiness = page.getByTestId('setup-funding-requirements');
+    await expect(readiness).toContainText('both distinct passkeys and their saved offline recovery kit');
+    await expect(readiness).toContainText('independently verify the same graph and exact payouts');
+    await expect(readiness).toContainText('presigned');
+    await expect(readiness).not.toContainText(/Sigbash|second passkey or/i);
     await page.goto('/vault');
     await expect(page.getByRole('heading', { name: 'Add a recovery passkey' })).toBeVisible();
     recovery = (await cdp.send('WebAuthn.addVirtualAuthenticator', { options: authenticator('usb', false) })).authenticatorId;

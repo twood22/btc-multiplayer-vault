@@ -16,15 +16,19 @@ export async function deriveParticipantIdentity(
     throw new Error('unknown participant id');
   }
   const personal = await deterministicPrivateKey(participantSecret, `${participantId}:personal`);
-  const payout = await deterministicPrivateKey(participantSecret, `${participantId}:payout`);
-  const personalPublicKey = secp256k1.getPublicKey(personal, true);
-  const payoutPublicKey = secp256k1.getPublicKey(payout, true);
-  personal.fill(0);
-  payout.fill(0);
-  return {
-    personalPublicKeyHex: hex(personalPublicKey),
-    payoutXonlyPublicKeyHex: hex(payoutPublicKey.slice(1)),
-  };
+  let payout: Uint8Array | undefined;
+  try {
+    payout = await deterministicPrivateKey(participantSecret, `${participantId}:payout`);
+    const personalPublicKey = secp256k1.getPublicKey(personal, true);
+    const payoutPublicKey = secp256k1.getPublicKey(payout, true);
+    return {
+      personalPublicKeyHex: hex(personalPublicKey),
+      payoutXonlyPublicKeyHex: hex(payoutPublicKey.slice(1)),
+    };
+  } finally {
+    personal.fill(0);
+    payout?.fill(0);
+  }
 }
 
 export async function deriveParticipantSigbashPrivateKey(
@@ -47,8 +51,9 @@ export async function deriveParticipantSigbashPrivateKey(
 async function deterministicPrivateKey(seed: string, label: string): Promise<Uint8Array> {
   for (let counter = 0; counter < 2 ** 16; counter += 1) {
     const material = new TextEncoder().encode(`${seed}:${label}:${counter}`);
-    const candidate = new Uint8Array(await crypto.subtle.digest('SHA-256', material));
-    material.fill(0);
+    let candidate: Uint8Array;
+    try { candidate = new Uint8Array(await crypto.subtle.digest('SHA-256', material)); }
+    finally { material.fill(0); }
     if (secp256k1.utils.isValidSecretKey(candidate)) return candidate;
     candidate.fill(0);
   }

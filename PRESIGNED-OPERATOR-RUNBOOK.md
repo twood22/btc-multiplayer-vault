@@ -64,6 +64,31 @@ retained. That is now historical evidence. The persistent-recovery changes add
 two filesystem/locking runs and one actual native-wallet restore run, requiring
 a new complete 52-command suite and both images on the new source digest.
 
+Current checkpoint, 2026-09-10 21:00 UTC: onboarding-correction source
+`409cca25c6f7fb93889b8b7ff1076772b4ca1ca8c9b2b13b11e64e8e03c44087`
+has passed all four typechecks and 17 focused passkey checks, with actual
+optimized-browser integration running. This changed source requires a new
+complete 52-command run, both exact-image profiles and a fresh source-bound
+Signet host/lifecycle. Do not repoint an old host control or reuse historical
+acceptance artifacts. V2 onboarding must say both distinct passkeys **and** a
+saved offline kit; Sigbash readiness belongs only to the retained V1 flow.
+
+Historical checkpoint, 2026-09-10 20:44 UTC: candidate `35d9038` / source
+`b8c4cf28` passed the full 52-command public local job and both image jobs in
+run `34515524898`. Both actual image archives from separate run `34515940967`
+have been downloaded, restored and independently reviewed. Their test-only
+prerelease remains a draft until complete private local retention and final-note
+review finish. The first host-local invocation failed after 49 passing commands:
+its offline build correctly refused the symlinked out-of-checkout dependencies.
+The failed prefix is retained separately. The new full invocation began at
+20:37 UTC after an actual inside-checkout dependency installation and successful
+offline-build preflight, then stopped at 40/52 at 20:52 UTC when independently
+confirmed onboarding findings superseded its source. Its 128 raw files are
+separately retained as incomplete evidence. Always install dependencies inside the frozen checkout;
+do not weaken the manifest boundary or combine partial invocations. These
+results do not replace the outstanding new funded default-Signet run or final
+acceptance assembly; never use these synthetic test images with real funds.
+
 For complete **current-source** evidence directories, `npm run
 presigned:pack-evidence -- local|signet-image|mainnet-image /absolute/evidence
 /private/output.tar.gz` creates a new owner-only local archive. The output

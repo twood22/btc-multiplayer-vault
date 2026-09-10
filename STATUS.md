@@ -6,7 +6,15 @@ not the current V2 implementation verdict. The explicitly authorized
 [PRESIGNED-V2-PLAN.md](./PRESIGNED-V2-PLAN.md). Its operating procedure is
 [PRESIGNED-OPERATOR-RUNBOOK.md](./PRESIGNED-OPERATOR-RUNBOOK.md). V2 is unfinished;
 no mainnet spending, deployment or migration of an existing funded vault is authorized.
-Current V2 checkpoint (2026-09-10): historical source `9afe98cf` passed all 49
+Current V2 checkpoint (2026-09-10 21:00 UTC): onboarding-correction source
+`409cca25c6f7fb93889b8b7ff1076772b4ca1ca8c9b2b13b11e64e8e03c44087`
+addresses independently confirmed V2 legacy-instruction and PRF exception-cleanup
+gaps. All four typechecks and 17 focused passkey tests pass; the actual optimized
+browser integration is running. The full 52-command run, both current images,
+fresh source-bound receiving host and all 19 funded default-Signet cases remain
+required. Earlier results cannot certify this changed source.
+
+Historical source `9afe98cf` passed all 49
 local commands and both genuine rootless image profiles, with complete local/OCI
 archives retained. Its real default-Signet run began but lost its temporary
 primary journal and participant material on reboot. A separate native wallet
@@ -14,10 +22,21 @@ backup was restored; the dated 16:30 UTC chain audit reconciled 89,717 native
 wallet sats + 29,700 other known unspent sats + 9,568 confirmed fees = the original
 128,985 test sats. No recovered coins have been spent by the new implementation.
 Persistent journal/anchor, native-wallet restoration and same-identity host
-recovery changes are under verification. The new complete 52-command suite,
-both current images and all 19 real default-Signet lifecycles remain required;
-historical passes cannot certify changed source. See the V2 evidence plan for
-exact artifacts, the lower-capital profile and outstanding work.
+recovery candidate `35d9038` / source `b8c4cf28` is now superseded. Its public CI
+`34515524898` passed all 52 local commands and both genuine image jobs at
+19:28 UTC. Both current OCI archives from retention run `34515940967` are
+downloaded, restored and independently reviewed; their test-only prerelease is
+still a draft at 20:44 UTC. The first host-local run passed 49 checks, including
+all 19 isolated-Core cases, then exited unsuccessfully when the offline build
+correctly refused dependencies symlinked outside its checkout. Its 158 retained
+files are failed-prefix evidence, not a complete run. A new full 52-command
+invocation began at 20:37 UTC with dependencies installed inside a fresh frozen
+checkout; offline-build preflight passed. It was intentionally stopped at 40/52
+at 20:52 UTC for the verified onboarding findings, not an observation timeout.
+Its 128 retained files are explicitly incomplete superseded evidence.
+All 19 new real default-Signet lifecycles and
+final release assembly remain required. Historical passes cannot certify changed
+source. See the V2 evidence plan for exact artifacts and outstanding work.
 
 Last updated: 2026-09-05
 Reviewed baseline: `71b1bd227a5f3f3d35fb8449776747d5d88d28c7`; current work is on

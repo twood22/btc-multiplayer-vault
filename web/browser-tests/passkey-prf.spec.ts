@@ -74,6 +74,8 @@ test('registers, recovers, independently PRF-unlocks, and signs out one identity
     await page.getByRole('button', { name: 'Create my passkey' }).click();
     await expect(page.getByRole('heading', { name: 'Your seat is secured' })).toBeVisible();
     await expect(page.getByText('Your encrypted participant key is ready.')).toBeVisible();
+    await expect(page.getByTestId('setup-funding-requirements')).toContainText('live Sigbash');
+    await expect(page.getByTestId('setup-funding-requirements')).not.toContainText('presigned');
 
     const initiallyPersisted = await sql<Array<{
       credentials: number;

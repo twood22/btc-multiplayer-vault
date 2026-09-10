@@ -109,10 +109,31 @@ remained in seven native wallet outputs, 29,700 sats in two other known leaves,
 and 9,568 sats were confirmed fees. That closes the original 128,985-sat ledger;
 it is not a completed lifecycle or authority to spend those outputs.
 
-The current persistent-recovery runner changes executable source and requires
-a fresh full 52-command local
-suite, both exact image profiles and real default-Signet evidence on its own
-source digest. Historical test receipts cannot authorize this changed source.
+The current onboarding-correction source is
+`409cca25c6f7fb93889b8b7ff1076772b4ca1ca8c9b2b13b11e64e8e03c44087`.
+Independent review caught legacy Sigbash/optional-recovery instructions on the
+V2 success screen and missing exception-path cleanup of onboarding PRF material.
+Both are corrected: V2 explicitly requires both distinct passkeys and a saved
+offline kit; initial and resumed enrollment share tested best-effort cleanup.
+All four typechecks and 17 focused passkey checks pass. At 21:00 UTC the actual
+optimized-browser test is running; a new complete 52-command run, both images
+and the funded default-Signet matrix remain required for this changed source.
+
+The previous persistent-recovery candidate was commit `35d9038`, executable
+source `b8c4cf28`. On 2026-09-10, public CI run `34515524898` passed the complete
+52-command local suite and both genuine image profiles. Separate retention run
+`34515940967` produced both exact OCI archives; all six downloaded assets passed
+hash, content, restoration and independent member-by-member review. At 20:44 UTC,
+their test-only prerelease remains a draft. The first host-local run passed 49
+checks, including all 19 Core lifecycles, then failed the offline build because
+its symlinked dependencies were outside that checkout. Its failed evidence is
+retained separately. A fresh full 52-command invocation began at 20:37 UTC with
+an actual inside-checkout dependency installation and a verified offline-build
+preflight. That invocation was intentionally stopped at 40/52 at 20:52 UTC when
+the onboarding findings superseded its source; 128 raw files were separately
+retained as incomplete evidence. A new
+funded 19-case default-Signet run and final release assembly remain required.
+Historical test receipts cannot certify this changed source.
 
 The saved offline utility has passed the full six-ordering/four-cooperative/
 nine-recovery matrix and all ten native-wallet fee cases on one exact artifact.
