@@ -151,5 +151,8 @@ if [ "$container_started" = true ]; then
   podman container inspect --format '{"image":{{json .Image}},"readOnly":{{json .HostConfig.ReadonlyRootfs}},"networkMode":{{json .HostConfig.NetworkMode}},"mounts":{{json .Mounts}},"running":{{json .State.Running}}}' \
     "$container_name" >"$work_dir/container-runtime.json"
 fi
-npx playwright test web/browser-tests/presigned-v2.spec.ts --workers=1 --output "$work_dir/browser-output" >"$work_dir/browser.log" 2>&1
+# The spec keeps its 45-minute body deadline and all action/assertion limits.
+# An independent runner deadline prevents stalled fixture cleanup extending it
+# indefinitely; deadline expiry is a failure, never an accepted retry.
+npx playwright test web/browser-tests/presigned-v2.spec.ts --workers=1 --global-timeout=2820000 --output "$work_dir/browser-output" >"$work_dir/browser.log" 2>&1
 printf 'Optimized V2 browser acceptance passed. No public-network broadcasts; regtest identity bridge is test-only.\n'

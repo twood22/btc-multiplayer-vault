@@ -109,15 +109,40 @@ remained in seven native wallet outputs, 29,700 sats in two other known leaves,
 and 9,568 sats were confirmed fees. That closes the original 128,985-sat ledger;
 it is not a completed lifecycle or authority to spend those outputs.
 
-The current onboarding-correction source is
+Current verification checkpoint, 2026-09-11 00:30 UTC: source
+`1cc9f5f94e55bca6070fd294b4ab7e817d0a441d39764355b7401e11934f32cc`
+adds independently reviewed browser-failure privacy and bounded cleanup, without
+changing the game or weakening signing checks. Both 30-check custody suites and
+typechecks pass; six actual synthetic failure/timeout cases passed their scoped
+privacy checks. The fresh optimized application run is live. The preceding
+private invocation failed at 51/52 on a refresh-chain click timeout; all 169
+selected files are retained and independently reviewed as failed evidence.
+Fresh full local/image evidence, all 19 funded default-Signet cases and final
+assembly remain required. Earlier receipts and unpublished draft images cannot
+certify changed source; no recovered test coins have moved.
+
+Historical onboarding-correction source:
 `409cca25c6f7fb93889b8b7ff1076772b4ca1ca8c9b2b13b11e64e8e03c44087`.
 Independent review caught legacy Sigbash/optional-recovery instructions on the
 V2 success screen and missing exception-path cleanup of onboarding PRF material.
 Both are corrected: V2 explicitly requires both distinct passkeys and a saved
 offline kit; initial and resumed enrollment share tested best-effort cleanup.
-All four typechecks and 17 focused passkey checks pass. At 21:00 UTC the actual
-optimized-browser test is running; a new complete 52-command run, both images
-and the funded default-Signet matrix remain required for this changed source.
+All four typechecks and 17 focused passkey checks pass. At 23:38 UTC, current CI
+`34529963155` has passed all 52 local commands and both image profiles; both
+retention jobs also passed. CI receipts/logs are privately retained, not their
+raw child/archive bytes. All six downloaded
+assets and both 39-member archives passed local and independent actual-byte,
+content, restoration and semantic review. Their test-only release remains draft.
+At that checkpoint, the complete private invocation had passed 51/52 checks,
+including all 19 isolated-Core lifecycle cases,
+all five database suites and the complete saved-file recovery/fee tests.
+It subsequently failed as described above; there is no complete receipt.
+The separate optimized V2 browser run failed during final-sweep finalization
+with a Core transport/read error; its underlying cause is unproven and its
+retained log is explicitly a failure. Both legacy PRF browser tests pass.
+A new unfunded Signet host passed two restarts, two complete restores and ten
+rejection checks, then stopped with custody intact. Complete current local
+evidence, the funded default-Signet matrix and final assembly remain required.
 
 The previous persistent-recovery candidate was commit `35d9038`, executable
 source `b8c4cf28`. On 2026-09-10, public CI run `34515524898` passed the complete

@@ -3,7 +3,42 @@
 Date: 2026-09-07 UTC. This is internal code review and executable regression
 evidence, not an external security audit, production release or funding approval.
 
-## Onboarding follow-up review (2026-09-10 21:00 UTC)
+## Current failure-boundary review (2026-09-11 00:30 UTC)
+
+Two independent harness findings were reproduced: unbounded DOM text collection
+preceded the original failure report, and automatic aria/error-context snapshots
+were independent of the disabled trace/screenshot/video settings. A synthetic
+control retained fake page material; the explicit snapshot opt-out prevented it.
+The prior real browser failure itself was a refresh-chain click timeout before
+Alice's recovery proposal, not an established cryptographic or transport cause.
+Only its disposable browser was deliberately terminated after that separate
+privacy defect was demonstrated. The actual invocation then exited1 at 51/52.
+Independent review verified all 169 selected retained files / 2,178,310 bytes,
+51 execution commitments and the failed-child/intervention bindings; no full
+acceptance was inferred. Root independently rehashed every retained file.
+
+The six-file correction emits safe diagnostics before any cleanup await,
+disables page snapshots for direct spec execution, bounds cleanup while preserving
+failure, and requires genuine hydration-attribute removal. No signing gate or
+existing game assertion was weakened. The independent reviewer identified one
+P3 precision issue: checking only `inert=""` missed other boolean-attribute
+values. Both hydration attributes now use the presence overload. Final delta
+review found no further actionable issue. All four typechecks and both 30-check
+custody suites pass; web types were rerun after the attribute correction.
+
+Root executed six synthetic browser failure/timeout cases, and the reviewer
+independently inspected all 36 resulting files, their closed inventories, hashes,
+private permissions and intended natural failure exits. No generated sentinel
+or page snapshot remained, including during a pending password-field fill.
+Safe reporting preceded cleanup in the three caught-failure cases. Earlier four
+cases remain a9cc9aa2 evidence; two active-call cases match current1cc9f5f9 with
+the same tested helper bytes. Review SHA-256:
+`28a2125e91b0c17dfcad672d7c3f4baf4b4f3742daf710fc5ab35e68ba3a4300`.
+This is not universal serializer coverage or proof of the 47-minute runner
+deadline's expiry. The optimized application check is live. Complete new-source
+local/image/default-Signet evidence and final assembly remain mandatory.
+
+## Historical onboarding follow-up review (2026-09-10 23:38 UTC)
 
 Final bounded coverage review found two concrete issues on source b8c4cf28:
 the shared V2 success screen still required Sigbash and described recovery as
@@ -18,8 +53,55 @@ resumed enrollment now use one helper returning only encrypted/public material,
 with exception-safe best-effort cleanup. Seventeen focused passkey checks and
 all four typechecks pass; buffer tests retain the actual owned views and verify
 their cleanup, including failure of the second scalar derivation. Independent
-rereview found no further actionable issue in this delta. The actual optimized
-browser run is pending; its V2/legacy fixtures now assert the correct guidance.
+rereview found no further actionable issue in this delta. The V2/legacy fixtures
+now assert the correct guidance; both actual legacy PRF browser tests pass.
+
+The separate current V2 browser run is a retained failure, not a pass: Carol's
+final-sweep finalization remained false after a generic Core transport/read
+error. Independent review traced the 15-second server request through a
+45-second fixture transport but found no evidence proving a specific timeout
+or resource cause. The 60-second assertion polls persisted status without
+retrying the action. This preceded deliberate cookie expiry, remained below
+both 45-minute execution ceilings and did not reach final-sweep broadcast;
+local signing may already have occurred. Source and timeouts were not changed.
+All three current CI jobs pass, including the complete 52-command local plan
+and its optimized-browser run. These are separate executions and do not relabel
+this failed local result. The exact current CI logs/receipts are privately retained.
+Independent review freshly retrieved all three logs with identical bytes, checked
+all 12 private files, and recomputed 69 commitments (three receipts, 52 local
+executions, 14 image commands). Additional image identity/denial/timestamp checks
+also passed; root rechecked every retained file and commitment. This does not
+claim that the log-only runner retained its raw child logs or archives.
+
+The source-bound unfunded host passed two restarts, two whole-host restorations,
+ten rejection checks and two attempt-bound native signatures, then stopped with
+intact custody and zero transactions/funds. Independent static review confirmed
+current collector/publisher/transfer pins and unchanged exact native-transfer
+checks. Publication and transfer entrypoints reject absent complete acceptance
+before writes or wallet work. Both actual image archives now pass independent
+review: all six asset hashes, 78 archive-to-restored member comparisons, canonical
+outer encoding, 18 historical layers / 25,850 entries per image and actual embedded
+offline-utility/receipt/browser/runtime bindings. Fresh pinned content reports
+match the hosted bytes. Root independently rehashed all files and rechecked the
+unchanged draft; the private review record binds the exact verification record.
+Reviewed public test/framework constants are not universal secret-absence proof.
+The private fixed invocation is now at 51/52: the actual 19-case isolated-Core
+lifecycle passed at 23:07 UTC, then all five database suites and the offline
+build passed. Root checked the retained lifecycle command, both transcript
+hashes and its successful exit. Its accounting closes all 89,000 test sats,
+and all nine exact CSV boundaries, six lost replies, two primary-loss restores
+and 83 native restored signatures passed. Independent partial-48 review passed
+144 actual files / 157,472 bytes, 96 transcript hashes and 48 commitments; root
+rehashed all files and recomputed the commitments at 23:17 UTC. The 84 confirmed
+transactions are source-enforced and independently derived, not a direct summary
+field and not the separate 84 send-check/89 submitted-ID counts. This partial
+review remains distinct from the required complete-run and full-archive review.
+The saved-file browser subsequently passed all six solo/four cooperative/nine
+recovery cases and ten fee cases on the exact offline utility, with zero network
+requests and no persistent secret storage; root checked its actual transcript
+and successful command record. Final optimized-browser acceptance remains live.
+Current full-run evidence, isolated transfer-shape proof and funded default-Signet
+execution remain pending; the test-only release is still unpublished.
 
 A separate read-only protocol/test audit found all nine exits, withheld leaver
 signatures, MuSig2 cooperation, CSV recovery and fee-preserved descendants

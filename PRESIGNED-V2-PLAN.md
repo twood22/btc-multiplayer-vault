@@ -31,7 +31,60 @@ Sixteen OCI boundary regressions pass, including 0755 refusal, successful
 permission correction, symlink non-mutation and non-private-parent refusal;
 scripts typecheck passes. The fresh whole matrix subsequently passed below.
 
-## Current onboarding-correction checkpoint (2026-09-10 21:00 UTC)
+## Current browser-harness correction (2026-09-11 00:30 UTC)
+
+Source `1cc9f5f94e55bca6070fd294b4ab7e817d0a441d39764355b7401e11934f32cc`
+preserves the application protocol, custody and game assertions. The prior
+private source409cca25 invocation exited1 at 00:05:31 UTC with 51/52 completed
+commands. Its original failure was `refreshChain` before Alice's recovery
+proposal: the click timed out after 60 seconds with HTML intercepting pointer
+events. The cause of the unresponsive page is not established. Core had already
+shut down at 23:31:49 UTC, but the catch awaited an unbounded DOM-text read before
+logging any original source location. Separately, the installed framework's
+automatic error-page snapshots were not disabled by trace/screenshot/video off.
+
+A synthetic positive/negative control reproduced that snapshot gap without any
+real custody data. After exact process-identity checks and a durable intervention
+record, only the disposable Chromium process was sent SIGTERM to prevent an
+automatic snapshot and release the original error. This was a deliberate
+confirmed-defect intervention, not a restart following an observation timeout.
+The actual failed child outcome and all 169 selected files / 2,178,310 bytes are
+retained under the private current-acceptance root. Independent review and root
+rehashing checked all bytes, 51 commitments, 102 transcripts, five database logs
+and the exact intervention/probe bindings. Failed-retention SHA-256:
+`fa61d911190cbfc212cd509fd20b16f78ae78dfd86430327810260ba4c94ca36`;
+independent diagnostic:
+`7a3b66ab722118920f199ce8bceb634cac74a635726d4c733b01e6cba7b55a2b`.
+No browser snapshots, custody files or complete-run receipt were copied.
+
+The corrected direct spec disables automatic page snapshots before any context
+is created, emits only known stage names, bounded allowlisted source locations
+and event counts before awaiting cleanup, and never serializes DOM text or raw
+exceptions. Cleanup is separately bounded and cannot replace the original error
+or turn failure into acceptance. Reloads now require actual removal of both
+hydration attributes; they do not remove guards or force clicks. The 60-second
+action checks and 45-minute test-body deadline are unchanged. A 47-minute
+framework runner deadline is an additional failure guard, not a longer body
+budget or a claim of a universally hard process-termination ceiling.
+
+All four typechecks passed; after correcting the independent reviewer's attribute
+presence finding, web types were rechecked. Both Signet- and mainnet-format
+custody suites pass all 30 checks, including eight new failure-boundary tests.
+Six actual synthetic cases cover safe error reporting, rejected/stalled cleanup,
+test timeout before catch, and timeout with a private-like argument in a pending
+password fill or evaluation. All 36 retained files / 23,326 bytes were independently
+reviewed and rehashed by root; no generated sentinel or page snapshot remained.
+The first four cases bind source a9cc9aa2, the final two bind current1cc9f5f9,
+and the actual tested helper bytes are unchanged. Independent delta review:
+`28a2125e91b0c17dfcad672d7c3f4baf4b4f3742daf710fc5ab35e68ba3a4300`.
+These tests do not establish every framework serializer or actual expiry of the
+47-minute runner deadline. The fresh optimized application run is live, with
+complete new local/image evidence, final test-only notes/publication, all 19
+funded default-Signet cases and both final assemblies still required. All prior
+source-bound transfer/publication/assembly helpers must be separately rebound
+and reviewed; no recovered coin was signed or sent.
+
+## Historical onboarding-correction checkpoint (2026-09-10 23:38 UTC)
 
 Source `409cca25c6f7fb93889b8b7ff1076772b4ca1ca8c9b2b13b11e64e8e03c44087`
 corrects two independently reviewed gaps found during final coverage review:
@@ -47,10 +100,93 @@ assumption or a guarantee about immutable strings and browser internals.
 All four typechecks and 17 focused passkey checks pass, including six exercised
 success/fault paths inspecting actual owned buffers. Independent rereview found
 no further actionable issue in this delta. Actual V2 and legacy browser fixtures
-now assert their respective onboarding requirements; the optimized V2 run is
-executing at this checkpoint. The fixed 52-command plan and all protocol/game/
-fee requirements are unchanged. New complete local, both-image and funded
-default-Signet evidence is required for this new source.
+now assert their respective onboarding requirements. Both actual legacy PRF
+browser tests pass. The separate optimized V2 invocation exited1 after 23.3
+minutes at Carol's final-sweep finalization: a Core transport/read request failed,
+then the stored-status assertion remained false for 60 seconds. Polling did not
+retry the action. Independent review confirmed that this preceded deliberate
+cookie expiry and was below both 45-minute ceilings; no specific transport
+cause is proven. The exact failed log is retained separately, with no final-sweep
+broadcast reached and no claim that local signing had not already occurred.
+Neither the runtime deadline nor its safety gate was changed.
+
+The new complete private 52-command invocation started at 21:13 UTC in an
+immutable checkout with real inside-root dependencies and verified offline-build
+preflight. It remains live at 51/52, with no full receipt yet. The complete
+19-case isolated-Core lifecycle passed at 23:07:04 UTC after 82m43s, followed
+by all five database suites and the offline build. Actual Core accounting
+reconciled 89,000 starting sats = 47,000 fixed fees + 3,515 allocation fees +
+38,485 confirmed return, with 57 recycled participant payouts, no unrelated
+inputs and every terminal output/reserve consumed exactly once. All nine CSV12
+cases refused at depth 11 and accepted the same stored transaction at depth 12.
+The run exercised six lost replies, 84 durable-send checks, two primary-loss
+restorations, two initialization interruptions, 83 actual restored native-key
+signatures and all 19 restored case kits before funding, without regenerated
+native targets. This is isolated regtest with zero public-network broadcasts,
+not real default-Signet evidence. Independent partial-48 byte review passed:
+144 private files / 157,472 bytes, 48 execution commitments and 96 transcript
+hashes. Root rehashed every file, recomputed all commitments and checked four
+pinned source files at 23:17 UTC. The diagnostic SHA-256 is
+`a0c1fb9c9149f911dbf89879ef5bda75b8b78d580cc0d9d21506b39f22f6b37a`;
+it is not a full-run approval. The 84 confirmed transactions are independently
+derived from source-enforced checks, distinct from 84 durable-send checks and
+89 submitted IDs (including five replaced children). Separately,
+the complete saved-file check passed at 23:22:04 UTC on exact utility
+`3afcdac5caf72eb0c03598ce8165c78961f4463f7ef50adf6f715f02b9599807`:
+six solo orderings, four cooperative rounds, nine recovery subsets, 31 actual
+browser-signed transactions confirmed by Core, 70 restored kits, ten fee cases
+across both native wallet types and ten confirmed replacement children. It
+made zero network requests and stored no persistent secrets. Its actual stdout
+SHA-256 is `b31cc46091e914b5898ab31968e2c0bdd9426e7ddb06b39904b66b867434e591`.
+Only the final optimized-browser check remains live; no complete archive yet.
+Normal CI `34529963155`
+completed all three jobs successfully at 21:54:37 UTC, including all 52 local
+commands and both image profiles. Its actual local receipt has run digest
+`2daa06b6ffa955b59177a4821cb13d385ac9d13728e6681748c6d06f191c1045`, with a
+reported 112-file archive SHA-256
+`475feb4631c0d1e94c8e49007fed7669abebf59440c70bf160478e60d1ed3456` (1,319,008 bytes).
+Root recomputed the fixed plans and receipt/command commitments and retained
+all three public job logs plus their receipt/archive-result/summary files.
+This is log-only retention: the runner did not retain those raw child logs or
+archives. Independent CI review passed: fresh GitHub responses match all three
+saved public logs; all 12 retained files (327,162 bytes) stayed unchanged, and
+69 canonical commitments were independently recomputed. Root rechecked those
+files and commitments. The separate private full run and its actual raw archive
+remain required. Retention CI `34530275095`
+passed both jobs at tooling `c254e459f08eda5628c047152a2c09f54ea463b3`.
+All six assets are attached to unpublished test-only draft `386622569` and
+downloaded. Local scan/restoration/semantic validation passed at 21:31 UTC;
+independent actual-byte review passed at 21:51 UTC. Both canonical outer archives
+have 39 members, all 78 restored files match, and fresh pinned scanners examined
+18 historical layers / 25,850 entries per image with reports byte-identical to
+the hosted reports. Root rehashed all restored files and six downloads and
+rechecked the unchanged draft at 21:53 UTC. The retained independent review binds
+download-verification SHA-256
+`843360bc3e093779eb475627c473ed83842c98d6428dcc27f720f5dbf7bd787b`.
+Reviewed public self-test/framework constants remain permanently public on later
+publication; this bounded review is not universal proof of secret absence.
+New collector/publisher pins passed static review, types, 33 malformed-record
+checks and missing-full publication refusal.
+
+| Current test image | Archive SHA-256 | Tested OCI manifest |
+| --- | --- | --- |
+| Signet-format | `524136b0043ee8b7d984010fa30515e96839c5d60d693c068cf964d55edd6658` | `sha256:6eabe552f41a2153d13a3dccde4a3c107d1c2ec115efba9e6c89805109d4c857` |
+| Mainnet-format | `2dbd45e00c5e50775357448f1b8e2906842e08d0fbd4b5645e7af8bfc16a8156` | `sha256:4e451092157137d94397786dedf54a8db501732f0e42621ca8141ba21fbc9e66` |
+
+Signet-format proves the isolated browser game; Mainnet-format proves the
+unauthorized-funding refusal, not mainnet spending. Publication still requires
+the completed private run, exact retained-byte review and final-note review.
+
+The current source's unfunded default-Signet host drill passed two same-wallet
+restarts, two whole-host restorations, ten exact rejection checks and two fresh
+attempt-bound native signatures. It remained at zero funds/transactions and
+stopped with intact independent custody. A separately rebound native test-coin
+transfer helper passed static review/types and refused missing full acceptance
+before creating a journal or accessing RPC/signing. Its current-source isolated
+shape proof and actual unsigned-intent review remain pending. The fixed plan and
+all protocol/game/fee requirements are unchanged. Complete current local and
+funded default-Signet evidence, test-only publication and final assembly remain
+required.
 
 The previous b8c4 clean invocation was intentionally stopped after 40 completed
 commands at 20:52:17 UTC, before its first Core test initialized a node. Its real

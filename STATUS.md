@@ -6,13 +6,47 @@ not the current V2 implementation verdict. The explicitly authorized
 [PRESIGNED-V2-PLAN.md](./PRESIGNED-V2-PLAN.md). Its operating procedure is
 [PRESIGNED-OPERATOR-RUNBOOK.md](./PRESIGNED-OPERATOR-RUNBOOK.md). V2 is unfinished;
 no mainnet spending, deployment or migration of an existing funded vault is authorized.
-Current V2 checkpoint (2026-09-10 21:00 UTC): onboarding-correction source
+Current V2 checkpoint (2026-09-11 00:30 UTC): source
+`1cc9f5f94e55bca6070fd294b4ab7e817d0a441d39764355b7401e11934f32cc`
+corrects independently reproduced browser-harness failure-reporting and snapshot
+privacy defects. It does not change the protocol or weaken an action/signing
+assertion. All four typechecks passed, the final hydration-attribute correction
+was rechecked by the web compiler, and both network-format custody suites pass
+all 30 checks. Independent review verified six actual synthetic failure/timeout
+cases and all 36 retained files. The real optimized application check is live;
+fresh complete 52-command, image, real default-Signet and final-assembly evidence
+remains required. Earlier image and local receipts cannot certify this source.
+
+The preceding private source409cca25 run actually exited1 at 00:05:31 UTC after
+51 passing commands. Its original failure was a 60-second refresh-chain click
+timeout before Alice's recovery proposal; the HTML intercepted pointer events.
+The underlying unresponsive-page cause is unproven. A separately demonstrated
+automatic-snapshot privacy defect justified ending only its disposable browser,
+which released the previously blocked original failure report. All 169 selected
+files / 2,178,310 bytes are privately retained and independently verified as
+failed-prefix evidence, not a complete pass. No recovered Signet coins moved.
+
+Historical V2 checkpoint (2026-09-10 23:38 UTC; superseded as described above): onboarding-correction source
 `409cca25c6f7fb93889b8b7ff1076772b4ca1ca8c9b2b13b11e64e8e03c44087`
 addresses independently confirmed V2 legacy-instruction and PRF exception-cleanup
-gaps. All four typechecks and 17 focused passkey tests pass; the actual optimized
-browser integration is running. The full 52-command run, both current images,
-fresh source-bound receiving host and all 19 funded default-Signet cases remain
-required. Earlier results cannot certify this changed source.
+gaps. All four typechecks and 17 focused passkey tests pass. The private complete
+52-command run started at 21:13 UTC and is still live at 51/52. Its complete
+19-case isolated-Core lifecycle passed at 23:07 UTC, followed by all five
+database suites, offline build and complete saved-file recovery/fee matrix.
+Only optimized-browser acceptance remains live. Normal CI `34529963155`
+passed all 52 local commands and both image jobs at 21:54 UTC; its receipts/logs
+are retained, not its raw child/archive bytes. Both retention jobs also passed.
+All six current draft assets are downloaded;
+both 39-member archives passed local and independent actual-byte review, including
+all 18 historical layers per image, restoration and semantic validation.
+The separate optimized V2 browser run exited1 after 23.3 minutes at Carol's
+final-sweep finalization, with a generic Core transport/read failure. A specific
+timeout or resource-contention cause is not proven. Both legacy PRF browser
+tests then passed. The new source-bound unfunded Signet host passed two restarts,
+two whole-host restores and ten rejection checks, and is stopped with custody
+intact. Current complete local evidence, all 19 funded default-Signet cases and
+final assembly remain required. The new test-only release is still a draft;
+no recovered coin was signed or sent. Earlier results cannot certify this source.
 
 Historical source `9afe98cf` passed all 49
 local commands and both genuine rootless image profiles, with complete local/OCI

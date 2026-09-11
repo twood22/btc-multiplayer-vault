@@ -10,9 +10,11 @@ import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, type ParticipantId } from '../../s
 import { commitmentDigest } from '../../src/presigned/validation.js';
 import type { PresignedCeremonyStatus } from '../lib/server/presigned-store.js';
 import type { PresignedRegtest } from '../../scripts/lib/presigned-regtest.js';
+import { boundedPresignedBrowserCleanup } from './presigned-failure-report';
 
 export interface V2Browser { id: ParticipantId; context: BrowserContext; page: Page; cdp: CDPSession;
-  primary: string; recovery: string; authenticatedAt: number; reauthentications: number }
+  primary: string; recovery: string; authenticatedAt: number; reauthentications: number;
+  diagnostics: { pageErrors: number; crashes: number; failedScriptRequests: number } }
 export interface V2BrowserAudit { forbidden: string[]; unexpected: string[]; chainRequests: number;
   rpcMethods: string[]; sensitiveRequestDetected: boolean; walletReleaseLocalGates: boolean[] }
 
@@ -34,6 +36,11 @@ export async function createV2Browser(input: { browser: Browser; baseURL: string
   const context = await input.browser.newContext({ baseURL: input.baseURL, acceptDownloads: true });
   context.setDefaultTimeout(60_000);
   const page = await context.newPage();
+  // Counts only: never retain exception text, script URLs or request payloads.
+  const diagnostics = { pageErrors: 0, crashes: 0, failedScriptRequests: 0 };
+  page.on('pageerror', () => { diagnostics.pageErrors++; });
+  page.on('crash', () => { diagnostics.crashes++; });
+  page.on('requestfailed', request => { if (request.resourceType() === 'script') diagnostics.failedScriptRequests++; });
   context.on('request', request => auditRequest(request, input.audit));
   const cdp = await context.newCDPSession(page);
   await cdp.send('WebAuthn.enable', { enableUI: false });
@@ -65,12 +72,12 @@ export async function createV2Browser(input: { browser: Browser; baseURL: string
     await page.getByRole('button', { name: 'Add recovery passkey' }).click();
     await expect(page.getByRole('heading', { name: 'Add a recovery passkey' })).toHaveCount(0);
     cdp.off('WebAuthn.credentialAsserted', onAssert);
-    const actor = { id: input.id, context, page, cdp, primary, recovery, authenticatedAt: Date.now(), reauthentications: 0 };
+    const actor = { id: input.id, context, page, cdp, primary, recovery, authenticatedAt: Date.now(), reauthentications: 0, diagnostics };
     await useV2Authenticator(actor, 'primary');
     await expect(page.getByTestId('presigned-ceremony')).toBeVisible();
     return actor;
   } catch {
-    await context.close();
+    await boundedPresignedBrowserCleanup(() => context.close());
     throw new Error(`Virtual PRF onboarding failed for ${input.id}; invitation and authenticator details redacted`);
   }
 }
@@ -93,6 +100,10 @@ export async function reloadV2Vault(actor: V2Browser) {
     actor.authenticatedAt = Date.now(); actor.reauthentications++;
   }
   await expect(actor.page.getByTestId('presigned-ceremony')).toBeVisible({ timeout: 60_000 });
+  // Visibility alone can describe inert server HTML. Do not remove the guard
+  // or force a click: require the genuine hydration effect to make it usable.
+  await expect(actor.page.locator('body')).not.toHaveAttribute('inert', { timeout: 60_000 });
+  await expect(actor.page.locator('body')).not.toHaveAttribute('aria-busy', { timeout: 60_000 });
 }
 export async function v2Status(page: Page): Promise<PresignedCeremonyStatus> {
   return page.evaluate(async () => {

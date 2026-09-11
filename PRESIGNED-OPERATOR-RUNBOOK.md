@@ -64,14 +64,44 @@ retained. That is now historical evidence. The persistent-recovery changes add
 two filesystem/locking runs and one actual native-wallet restore run, requiring
 a new complete 52-command suite and both images on the new source digest.
 
-Current checkpoint, 2026-09-10 21:00 UTC: onboarding-correction source
+Current checkpoint, 2026-09-11 00:30 UTC: source
+`1cc9f5f94e55bca6070fd294b4ab7e817d0a441d39764355b7401e11934f32cc`
+corrects failure reporting and automatic snapshot privacy in the browser test
+harness. It keeps the existing game/signing checks and action deadlines; cleanup
+has separate bounds, and the framework runner has an additional failure deadline.
+Direct spec execution disables automatic page snapshots, not only screenshots,
+video and tracing. Never restore broad DOM/error logging to diagnose custody
+failures. Typechecks and both 30-check custody suites pass; six actual synthetic
+failure/timeout cases and all 36 artifact files were independently reviewed.
+The actual optimized application check is live. The prior private full run
+exited1 at 51/52 after a refresh-chain click timeout; 169 selected files are
+retained as failed evidence. Do not assemble them into a passing run or use the
+older image approvals for this new source. Full new local/image acceptance,
+reviewed source-bound funding preparation, all 19 real default-Signet cases and
+final assembly remain required. No recovered test coins moved.
+
+Historical checkpoint, 2026-09-10 23:38 UTC: onboarding-correction source
 `409cca25c6f7fb93889b8b7ff1076772b4ca1ca8c9b2b13b11e64e8e03c44087`
-has passed all four typechecks and 17 focused passkey checks, with actual
-optimized-browser integration running. This changed source requires a new
-complete 52-command run, both exact-image profiles and a fresh source-bound
-Signet host/lifecycle. Do not repoint an old host control or reuse historical
-acceptance artifacts. V2 onboarding must say both distinct passkeys **and** a
-saved offline kit; Sigbash readiness belongs only to the retained V1 flow.
+has passed all four typechecks, 17 focused passkey checks and both legacy PRF
+browser tests. The separate optimized V2 browser run failed at final-sweep
+finalization after a generic Core transport/read error; retain the failed bytes
+and do not infer a specific timeout or waive fresh chain checks. The complete
+52-command invocation has run since 21:13 UTC and is at 51/52, not yet a full
+pass. Its 19-case isolated-Core lifecycle, all five database suites, offline
+build and full saved-file recovery/fee tests passed; optimized-browser is live. Current CI
+`34529963155` passed all 52 local commands and both image jobs at 21:54 UTC;
+retain its logs/receipts as log-only evidence, not raw archive custody. Both
+retention jobs passed. Both actual image archives passed local and
+independent byte/content/restoration/semantic review; all six downloaded asset
+hashes and the unchanged draft were rechecked. The test-only release remains a
+draft until complete private acceptance and exact final-note review pass.
+The fresh source-bound unfunded host passed two restarts/two complete restores/
+ten rejection checks and is stopped with custody intact. Full current evidence
+and the new funded Signet lifecycle remain required. Do not repoint an old host
+control or reuse historical acceptance artifacts. V2 onboarding must say both
+distinct passkeys **and** a saved offline kit; Sigbash readiness belongs only
+to the retained V1 flow. Avoid adding heavy parallel acceptance during host
+recovery copying; this is scheduling guidance, not evidence for a failure cause.
 
 Historical checkpoint, 2026-09-10 20:44 UTC: candidate `35d9038` / source
 `b8c4cf28` passed the full 52-command public local job and both image jobs in

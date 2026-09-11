@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { BITCOIN_NETWORK_NAME } from '../../src/network.js';
+import { verifyPresignedBrowserFailureBoundaries } from './presigned-browser-failure-acceptance.js';
 import {
   encryptPresignedOfflineBackup, generatePresignedOfflineSecret,
   MAX_PRESIGNED_BACKUP_FILE_BYTES, parsePresignedOfflineBackup, presignedBackupBinding,
@@ -342,6 +343,7 @@ await check('owned envelope plaintext and PRF copies are cleared on success, cry
   }
 });
 
+for (const name of await verifyPresignedBrowserFailureBoundaries()) checks.push({ name, ok: true });
 offlineSecret.fill(0);
 console.log(JSON.stringify({ title: 'presigned-v2 portable custody and provider-free unlock acceptance',
   network: fixture.roster.network, passed: true, externalProviderContacted: false,

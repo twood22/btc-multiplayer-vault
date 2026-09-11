@@ -15,9 +15,12 @@ import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, type ParticipantId, type Presigned
 import { withPresignedRegtest, type PresignedRegtest } from '../../scripts/lib/presigned-regtest.js';
 import { createV2Browser, installV2EsploraBridge, localV2Gate, seedV2Invitations, startV2CoreBridge,
   reloadV2Vault, useV2Authenticator, v2Status, type V2Browser, type V2BrowserAudit } from './presigned-v2-fixture';
+import { boundedPresignedBrowserCleanup, disablePresignedFailurePageSnapshots,
+  presignedBrowserFailureLocations } from './presigned-failure-report';
 
 // Recovery keys appear briefly in the genuine UI. Never trace, screenshot, video or snapshot this test.
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
+disablePresignedFailurePageSnapshots();
 // Retained graph/package verification is local cryptographic work. Under
 // concurrent CPU-heavy acceptance, observed successful actions exceeded the
 // old 20-second UI assertion budget; actual network deadlines stay unchanged.
@@ -43,6 +46,7 @@ test('real V2 browser ceremony and runtime with virtual PRF passkeys and isolate
   const audit: V2BrowserAudit = { forbidden: [], unexpected: [], chainRequests: 0, rpcMethods: [],
     sensitiveRequestDetected: false, walletReleaseLocalGates: [] };
   let stage = 'initialize disposable V2 vault';
+  let originalFailure = false;
   const checks: string[] = [];
   try {
     const provisioned = await seedV2Invitations(sql, { network: fixture.roster.network, genesisHash: fixture.roster.genesisHash,
@@ -330,23 +334,24 @@ test('real V2 browser ceremony and runtime with virtual PRF passkeys and isolate
       } finally { await bridge.close(); }
     }, { maximumMinutes: 45 });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'unknown test failure';
-    const redactedMessages: string[] = [];
-    for (const actor of actors) {
-      const messages = await actor.page.locator('.form-message,[role="status"]').allTextContents().catch(() => []);
-      redactedMessages.push(...messages.map(value => `${actor.id}: ${value.replace(/[A-Za-z0-9_+\/=.-]{32,}/gu, '[redacted long value]').slice(0, 500)}`));
-      // Close pages before Playwright can write its automatic error-context
-      // snapshot. A recovery key may otherwise be visible in the genuine UI.
-      await actor.context.close().catch(() => undefined);
-    }
-    const assertionLocations = error instanceof Error ? [...(error.stack ?? '').matchAll(/presigned-v2\.spec\.ts:(\d+):(\d+)/gu)]
-      .map(match => ({ line: Number(match[1]), column: Number(match[2]) })) : [];
-    console.log(JSON.stringify({ stage, runtimeStage, assertionLocations, redactedMessages }));
-    // Never preserve a Playwright error containing a recovery key, invite token or signed-PSBT fill value.
-    throw new Error(`V2 browser stage failed: ${stage}. ${message.replace(/[A-Za-z0-9_+\/=.-]{32,}/gu, '[redacted long value]').slice(0, 1200)}`);
+    originalFailure = true;
+    // Report before any await. A stuck renderer must not suppress the original
+    // source location, and neither DOM text nor exception messages are safe.
+    console.log(JSON.stringify({ stage, runtimeStage, assertionLocations: presignedBrowserFailureLocations(error),
+      browserDiagnostics: actors.map(actor => ({ actor: actor.id, ...actor.diagnostics })) }));
+    throw new Error(`V2 browser stage failed: ${stage}. See the safe stage and source-location diagnostic.`);
   } finally {
-    for (const actor of actors) await actor.context.close().catch(() => undefined);
-    await sql.end();
+    // Include contexts from interrupted onboarding, before actors.push(). A
+    // cleanup failure cannot replace the original error or authorize a pass.
+    const contexts = await Promise.all(browser.contexts().map(context => boundedPresignedBrowserCleanup(() => context.close())));
+    const browserOutcome = contexts.some(outcome => outcome !== 'completed')
+      ? await boundedPresignedBrowserCleanup(() => browser.close()) : 'not-needed';
+    const database = await boundedPresignedBrowserCleanup(() => sql.end({ timeout: 5 }), 6_000);
+    const cleanupFailed = contexts.some(outcome => outcome !== 'completed') || database !== 'completed';
+    if (cleanupFailed) {
+      console.log(JSON.stringify({ stage: 'bounded browser cleanup', contexts, browser: browserOutcome, database }));
+      if (!originalFailure) throw new Error('V2 browser cleanup failed; partial artifacts do not prove acceptance');
+    }
   }
 });
 
