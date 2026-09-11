@@ -64,7 +64,17 @@ retained. That is now historical evidence. The persistent-recovery changes add
 two filesystem/locking runs and one actual native-wallet restore run, requiring
 a new complete 52-command suite and both images on the new source digest.
 
-Current checkpoint, 2026-09-11 00:30 UTC: source
+Current checkpoint, 2026-09-11 00:50 UTC: dependency-security source 49e4240d
+replaces affected Next.js/sharp versions. Its exact installed versions,
+zero-known-advisory audit, typechecks and unchanged offline artifact are in the
+[security checkpoint](./DEPENDENCY-SECURITY-2026-09-11.md). The former 1cc browser
+pass cannot certify changed dependencies; that full private run never started,
+CI was deliberately cancelled, and its empty test-only draft is not eligible for
+publication. Rebind operational gates only to new complete reviewed acceptance.
+All 19 funded default-Signet cases and final assembly remain required; no recovered
+test coins moved. Do not reuse an old source-bound host or signed intent.
+
+Historical checkpoint, 2026-09-11 00:30 UTC: source
 `1cc9f5f94e55bca6070fd294b4ab7e817d0a441d39764355b7401e11934f32cc`
 corrects failure reporting and automatic snapshot privacy in the browser test
 harness. It keeps the existing game/signing checks and action deadlines; cleanup

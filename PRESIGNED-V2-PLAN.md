@@ -31,7 +31,27 @@ Sixteen OCI boundary regressions pass, including 0755 refusal, successful
 permission correction, symlink non-mutation and non-private-parent refusal;
 scripts typecheck passes. The fresh whole matrix subsequently passed below.
 
-## Current browser-harness correction (2026-09-11 00:30 UTC)
+## Current dependency-security candidate (2026-09-11 00:50 UTC)
+
+Source `49e4240d66a9780a7403996e4cca96478eb50e797e158ffb38157d910c9071ae`
+contains the unchanged harness correction plus supported Next.js 16.3.3 and
+sharp 0.35.4 security updates. The actual installed sharp native library uses
+patched libheif 1.23.2. Before/after audits verify two affected packages then zero
+known advisories; all four typechecks and the byte-identical offline utility pass.
+Exact evidence, upstream links and limits are in the
+[security checkpoint](./DEPENDENCY-SECURITY-2026-09-11.md).
+
+The preceding 1cc optimized browser actually passed at 00:42:03 UTC, including the
+complete game, all five fee families and four session reauthentications. Its
+three retained artifacts total 61,022 bytes and match the original bytes. That
+source's CI was deliberately cancelled for the confirmed dependency finding;
+the private full 52-command wrapper was never launched, its draft remains empty and
+unpublished, and its retention tooling was not pushed. These are not current
+full acceptance. New full 52-command evidence, both image archives, reviewed
+operational bindings, all 19 funded default-Signet cases and both final assemblies
+remain required.
+
+## Historical browser-harness correction (2026-09-11 00:30 UTC)
 
 Source `1cc9f5f94e55bca6070fd294b4ab7e817d0a441d39764355b7401e11934f32cc`
 preserves the application protocol, custody and game assertions. The prior

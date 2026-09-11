@@ -3,7 +3,21 @@
 Date: 2026-09-07 UTC. This is internal code review and executable regression
 evidence, not an external security audit, production release or funding approval.
 
-## Current failure-boundary review (2026-09-11 00:30 UTC)
+## Current dependency-security review (2026-09-11 00:50 UTC)
+
+Fresh installation/audit exposed upstream Next.js and sharp advisories before
+the new full private run began. The supported patch versions are installed;
+all four typechecks and the unchanged offline utility pass, and the actual new
+audit exits 0 with zero known advisories. No protocol/signing gate or crypto,
+passkey, React or Playwright dependency changed. The preceding 1cc actual browser
+game passed but remains bound to its former dependency set. See the exact
+[security evidence and limits](./DEPENDENCY-SECURITY-2026-09-11.md).
+Independent dependency review found no actionable delta issue: the changes are
+confined to the declared dependency families, and the installed Playwright guard
+is unchanged. New complete local/image/live acceptance remains required; no
+exploitation or public app exposure is claimed.
+
+## Historical failure-boundary review (2026-09-11 00:30 UTC)
 
 Two independent harness findings were reproduced: unbounded DOM text collection
 preceded the original failure report, and automatic aria/error-context snapshots

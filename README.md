@@ -109,7 +109,16 @@ remained in seven native wallet outputs, 29,700 sats in two other known leaves,
 and 9,568 sats were confirmed fees. That closes the original 128,985-sat ledger;
 it is not a completed lifecycle or authority to spend those outputs.
 
-Current verification checkpoint, 2026-09-11 00:30 UTC: source
+Current verification checkpoint, 2026-09-11 00:50 UTC: dependency-security source
+`49e4240d66a9780a7403996e4cca96478eb50e797e158ffb38157d910c9071ae`
+patches Next.js/sharp upstream advisories; installed packages, all four typechecks
+and the unchanged offline utility pass their focused checks. A fresh audit reports
+zero known vulnerabilities. The preceding 1cc browser game passed, but full
+local/image and real default-Signet acceptance must use the new dependency set.
+See the [security checkpoint](./DEPENDENCY-SECURITY-2026-09-11.md); no recovered
+test coins moved and no production or funding approval is claimed.
+
+Historical verification checkpoint, 2026-09-11 00:30 UTC: source
 `1cc9f5f94e55bca6070fd294b4ab7e817d0a441d39764355b7401e11934f32cc`
 adds independently reviewed browser-failure privacy and bounded cleanup, without
 changing the game or weakening signing checks. Both 30-check custody suites and

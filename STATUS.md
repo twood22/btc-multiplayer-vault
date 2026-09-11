@@ -6,7 +6,17 @@ not the current V2 implementation verdict. The explicitly authorized
 [PRESIGNED-V2-PLAN.md](./PRESIGNED-V2-PLAN.md). Its operating procedure is
 [PRESIGNED-OPERATOR-RUNBOOK.md](./PRESIGNED-OPERATOR-RUNBOOK.md). V2 is unfinished;
 no mainnet spending, deployment or migration of an existing funded vault is authorized.
-Current V2 checkpoint (2026-09-11 00:30 UTC): source
+Current V2 checkpoint (2026-09-11 00:50 UTC): dependency-security candidate
+`49e4240d66a9780a7403996e4cca96478eb50e797e158ffb38157d910c9071ae`
+updates Next.js and sharp for verified upstream advisories. The actual installed
+packages and all four typechecks pass; a fresh audit reports zero known
+vulnerabilities and the offline utility is byte-identical. The preceding 1cc
+optimized browser run passed, but cannot certify changed dependencies. Its CI
+was intentionally cancelled and its full private run never launched. See the
+[security checkpoint](./DEPENDENCY-SECURITY-2026-09-11.md). Full new local/image
+acceptance, all 19 funded default-Signet cases and final assembly remain required.
+
+Historical V2 checkpoint (2026-09-11 00:30 UTC): source
 `1cc9f5f94e55bca6070fd294b4ab7e817d0a441d39764355b7401e11934f32cc`
 corrects independently reproduced browser-harness failure-reporting and snapshot
 privacy defects. It does not change the protocol or weaken an action/signing
