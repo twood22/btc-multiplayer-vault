@@ -7,8 +7,8 @@ import { buildPresignedFeeDraft, validatePresignedFeePackage, type PresignedFeeD
 import { signPresignedFeePayout, type FeeCoinObservation, type PresignedFeeApproval } from '../../src/presigned/fees';
 import { authorizePresignedFundingFeeWalletPsbt, type PresignedFundingFeeSignature } from '../../src/presigned/funding-fees';
 import { signPresignedSpendFeePayout } from '../../src/presigned/spend-fees';
-import { PRESIGNED_PROTOCOL, type PresignedParticipant } from '../../src/presigned/types';
-import { assert, canonicalJson, commitmentDigest, safeInteger, sameCanonical } from '../../src/presigned/validation';
+import { PRESIGNED_PROTOCOL, type PresignedProtocol, type PresignedParticipant } from '../../src/presigned/types';
+import { assert, canonicalJson, commitmentDigest, safeInteger, sameCanonical, presignedDomain, presignedVersion } from '../../src/presigned/validation';
 import { presignedPost } from '../lib/client/presigned-ceremony';
 import { withUnlockedPresignedParticipant } from '../lib/client/presigned-custody';
 import { approvePresignedFeePackage, observePresignedFeeCoin, presignedFeeParentConfirmationHint, verifyPresignedFeeView } from '../lib/client/presigned-fees';
@@ -19,13 +19,13 @@ import type { PresignedFeeStatus } from '../lib/server/presigned-fee-store';
 
 type OwnIdentity = Pick<PresignedParticipant, 'id' | 'personalPublicKeyHex' | 'payoutXonlyPublicKeyHex'>;
 type Parent = PresignedFeeStatus['parents'][number];
-const BASE = { version: 2 as const, protocol: PRESIGNED_PROTOCOL };
 
-export function PresignedFees({ vaultId, ownIdentity, passkeys, chainConfig, requiredConfirmations }: {
+export function PresignedFees({ vaultId, ownIdentity, passkeys, chainConfig, requiredConfirmations, protocol = PRESIGNED_PROTOCOL }: {
   vaultId: string; ownIdentity: OwnIdentity; passkeys: Array<{ id: string; name: string }>;
-  chainConfig: { apiUrl: string; allowedOrigins: string[] }; requiredConfirmations: number;
+  chainConfig: { apiUrl: string; allowedOrigins: string[] }; requiredConfirmations: number; protocol?: PresignedProtocol;
 }) {
-  const binding = presignedLocalBinding(vaultId, ownIdentity);
+  const BASE = { version: presignedVersion(protocol), protocol };
+  const binding = presignedLocalBinding(vaultId, ownIdentity, protocol);
   const [status, setStatus] = useState<PresignedFeeStatus | null>(null);
   const [credentialId, setCredentialId] = useState(passkeys[0]?.id ?? '');
   const [apiUrl, setApiUrl] = useState(chainConfig.apiUrl);
@@ -45,7 +45,7 @@ export function PresignedFees({ vaultId, ownIdentity, passkeys, chainConfig, req
   const [combinedWallet, setCombinedWallet] = useState(false);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState('Fee rescue spends only your payout or wallet refund, preserves its entire value, and charges a separate confirmed sponsor coin.');
-  const draftDigest = draft ? commitmentDigest('vault/presigned-graph-v2/browser-fee-draft', draft) : null;
+  const draftDigest = draft ? commitmentDigest(presignedDomain(protocol, 'browser-fee-draft'), draft) : null;
   const preview = draft ? buildPresignedFeeDraft(draft) : null;
 
   async function refresh() {
@@ -54,7 +54,7 @@ export function PresignedFees({ vaultId, ownIdentity, passkeys, chainConfig, req
       fetch('/api/vault/presigned/runtime/status', { cache: 'no-store', credentials: 'same-origin' }),
     ]);
     assert(feesResponse.ok && runtimeResponse.ok, 'Fee coordination is unavailable');
-    const runtime = verifyPresignedRuntimeView(await runtimeResponse.json(), { vaultId, participantId: ownIdentity.id });
+    const runtime = verifyPresignedRuntimeView(await runtimeResponse.json(), { vaultId, participantId: ownIdentity.id, protocol });
     const fees = verifyPresignedFeeView(await feesResponse.json(), runtime);
     setStatus(fees);
     return { fees, runtime };
@@ -116,7 +116,7 @@ export function PresignedFees({ vaultId, ownIdentity, passkeys, chainConfig, req
       }
       buildPresignedFeeDraft(next);
       setDraft(next); setReviewedDigest(null); setSponsorPsbt(''); setChangePsbt(''); setCombinedWallet(false); setImportedPackage(null);
-      download(`presigned-v2-fee-draft-${parent.txid}.json`, canonicalJson(next), 'application/json');
+      download(`presigned-v${BASE.version}-fee-draft-${parent.txid}.json`, canonicalJson(next), 'application/json');
       setMessage('Public fee draft downloaded for interruption recovery. Review the exact summary before wallet export or signing.');
     });
   }
@@ -175,7 +175,7 @@ export function PresignedFees({ vaultId, ownIdentity, passkeys, chainConfig, req
       const checked = validatePresignedFeePackage(approved);
       // Public executable transaction, no secret, saved before the first send
       // to the coordinator so an interrupted approval cannot strand a child.
-      download(`presigned-v2-fee-package-${checked.completed.txid}.json`, canonicalJson(approved), 'application/json');
+      download(`presigned-v${BASE.version}-fee-package-${checked.completed.txid}.json`, canonicalJson(approved), 'application/json');
       const result = await approvePresignedFeePackage(credentialId, approved);
       setMessage(`Exact fee package ${result.packageId} is durably approved. Broadcasting remains a separate action and network gate.`);
     });
@@ -250,7 +250,7 @@ export function PresignedFees({ vaultId, ownIdentity, passkeys, chainConfig, req
         // Supply its fully verified raw transaction as optional wallet metadata.
         const parentHex = draft.mode === 'funding' ? draft.request.fundingTransactionHex : draft.request.parentTransactionHex;
         wallet.updateInput(0, { nonWitnessUtxo: bitcoin.Transaction.fromHex(parentHex).toBuffer() });
-        download(`presigned-v2-fee-${preview.unsignedTxid}.psbt`, wallet.toBase64(), 'text/plain');
+        download(`presigned-v${BASE.version}-fee-${preview.unsignedTxid}.psbt`, wallet.toBase64(), 'text/plain');
       }}>Download unsigned fee PSBT</button>
       {draft.mode === 'funding' && <><label><input type="checkbox" disabled={working} checked={combinedWallet}
         onChange={event => setCombinedWallet(event.target.checked)} />The same external wallet owns both the refund and sponsor inputs; I approve signing both roles.</label>
@@ -276,7 +276,7 @@ export function PresignedFees({ vaultId, ownIdentity, passkeys, chainConfig, req
           setChildFee(String(checked.completed.childFeeSats + 1000)); setPreviousChild(checked.completed.transactionHex);
           setMessage('Previous child selected. Choose and review an increased fee before creating a separate replacement approval.');
         }}>Prepare child-only fee replacement</button>
-        <button onClick={() => download(`presigned-v2-fee-package-${checked.completed.txid}.json`, canonicalJson(row.package), 'application/json')}>Download public package</button>
+        <button onClick={() => download(`presigned-v${BASE.version}-fee-package-${checked.completed.txid}.json`, canonicalJson(row.package), 'application/json')}>Download public package</button>
       </article>;
     })}
   </section>;

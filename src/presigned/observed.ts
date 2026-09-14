@@ -1,7 +1,7 @@
 import * as bitcoin from 'bitcoinjs-lib';
 import type { PresignedBlockObservation, PresignedChainTip } from './chain.js';
 import { nonWitnessTransactionHex, validatePresignedGraph } from './graph.js';
-import { PRESIGNED_PROTOCOL, type PresignedGraph } from './types.js';
+import { type PresignedGraph, type PresignedProtocol, type PresignedVersion } from './types.js';
 import { assert, exactKeys, hexBytes, safeInteger } from './validation.js';
 
 /** Resource bound at block-consensus scale, not the stricter send-policy cap. */
@@ -22,8 +22,8 @@ export interface PresignedConfirmedCoreEvidence {
 
 /** Intentionally not an AuthorizedPresignedTransaction or broadcast artifact. */
 export interface PresignedConfirmedTransactionRecognition {
-  version: 2;
-  protocol: typeof PRESIGNED_PROTOCOL;
+  version: PresignedVersion;
+  protocol: PresignedProtocol;
   kind: 'confirmed-graph-observation';
   graphDigest: string;
   txid: string;
@@ -99,7 +99,7 @@ function confirmedTransaction(graph: PresignedGraph, evidence: PresignedConfirme
 
 function recognition(graph: PresignedGraph, evidence: PresignedConfirmedCoreEvidence, tx: bitcoin.Transaction,
   exitId: string | null, feeSats: number): PresignedConfirmedTransactionRecognition {
-  return { version: 2, protocol: PRESIGNED_PROTOCOL, kind: 'confirmed-graph-observation',
+  return { version: graph.version, protocol: graph.protocol, kind: 'confirmed-graph-observation',
     graphDigest: graph.digest, txid: tx.getId(), exitId, feeSats, vsize: tx.virtualSize(),
     blockHash: evidence.activeBlock.hash, height: evidence.activeBlock.height,
     confirmations: evidence.activeBlock.confirmations };

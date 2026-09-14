@@ -2,7 +2,7 @@ import { Buffer } from 'buffer';
 import * as bitcoin from 'bitcoinjs-lib';
 import { validatePresignedGraph } from './graph.js';
 import { recognizeConfirmedPresignedExitTransaction, recognizeConfirmedPresignedFundingTransaction } from './observed.js';
-import { PRESIGNED_PROTOCOL, type ParticipantId, type PresignedGraph, type RoundId } from './types.js';
+import { type ParticipantId, type PresignedGraph, type RoundId } from './types.js';
 import { assert, canonicalJson, hexBytes, safeInteger } from './validation.js';
 
 export interface PresignedChainTip {
@@ -50,8 +50,8 @@ export interface PresignedGraphConfirmation {
 
 /** Confirmed graph projection only; not an assertion that its output is unspent. */
 export interface PresignedGraphChainState {
-  version: 2;
-  protocol: typeof PRESIGNED_PROTOCOL;
+  version: PresignedGraph['version'];
+  protocol: PresignedGraph['protocol'];
   graphDigest: string;
   confirmed: PresignedGraphConfirmation[];
 }
@@ -78,7 +78,7 @@ export type PresignedChainReconciliation =
 
 export function initialPresignedGraphChainState(graph: PresignedGraph): PresignedGraphChainState {
   validatePresignedGraph(graph);
-  return { version: 2, protocol: PRESIGNED_PROTOCOL, graphDigest: graph.digest, confirmed: [] };
+  return { version: graph.version, protocol: graph.protocol, graphDigest: graph.digest, confirmed: [] };
 }
 
 /**
@@ -235,7 +235,7 @@ export function reconcilePresignedGraphChain(input: {
       }
     }
     const state: PresignedGraphChainState = {
-      version: 2, protocol: PRESIGNED_PROTOCOL, graphDigest: graph.digest, confirmed,
+      version: graph.version, protocol: graph.protocol, graphDigest: graph.digest, confirmed,
     };
     validateState(graph, state);
     const previousByTxid = new Map(currentState.confirmed.map(item => [item.txid, item]));
@@ -312,7 +312,7 @@ function validateTip(graph: PresignedGraph, tip: PresignedChainTip): void {
 }
 
 function validateState(graph: PresignedGraph, state: PresignedGraphChainState): void {
-  assert(state && state.version === 2 && state.protocol === PRESIGNED_PROTOCOL && state.graphDigest === graph.digest,
+  assert(state && state.version === graph.version && state.protocol === graph.protocol && state.graphDigest === graph.digest,
     'chain state belongs to another graph');
   assert(Array.isArray(state.confirmed) && state.confirmed.length <= 3, 'invalid graph confirmation path');
   for (const [index, confirmation] of state.confirmed.entries()) {

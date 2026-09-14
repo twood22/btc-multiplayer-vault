@@ -1,6 +1,6 @@
 'use client';
 import { assert, hexBytes } from '../../../src/presigned/validation';
-import { PRESIGNED_PROTOCOL } from '../../../src/presigned/types';
+import { PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, type PresignedProtocol } from '../../../src/presigned/types';
 
 async function boundedFile(path: string, maximum: number): Promise<Uint8Array<ArrayBuffer>> {
   const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(20_000) });
@@ -18,10 +18,16 @@ async function boundedFile(path: string, maximum: number): Promise<Uint8Array<Ar
 }
 
 /** Integrity relative to the manifest, NOT independent trust in a compromised coordinator. */
-export async function downloadVerifiedPresignedUtility() {
+export async function downloadVerifiedPresignedUtility(expectedProtocol: PresignedProtocol = PRESIGNED_PROTOCOL) {
   const rawManifest = await boundedFile('/offline/presigned-recovery.manifest.json', 256 * 1024);
   const manifest = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(rawManifest));
-  assert(manifest.version === 2 && manifest.protocol === PRESIGNED_PROTOCOL && manifest.format === 'presigned-offline-utility-v1' &&
+  const legacy = expectedProtocol === PRESIGNED_PROTOCOL && manifest.version === 2 &&
+    manifest.protocol === PRESIGNED_PROTOCOL && manifest.format === 'presigned-offline-utility-v1';
+  const current = manifest.version === 3 && manifest.protocol === PRESIGNED_PROTOCOL_V3 &&
+    manifest.format === 'presigned-offline-utility-v3' && Array.isArray(manifest.supportedProtocols) &&
+    manifest.supportedProtocols.length === 2 && manifest.supportedProtocols[0] === PRESIGNED_PROTOCOL &&
+    manifest.supportedProtocols[1] === PRESIGNED_PROTOCOL_V3 && manifest.supportedProtocols.includes(expectedProtocol);
+  assert((legacy || current) &&
     manifest.artifact === 'presigned-recovery.html' && manifest.networkRequests === false && manifest.persistentSecretStorage === false,
     'offline utility manifest changed format or security properties');
   hexBytes(manifest.sha256, 32, 'offline utility SHA-256'); hexBytes(manifest.inputDigest, 32, 'offline utility input digest');

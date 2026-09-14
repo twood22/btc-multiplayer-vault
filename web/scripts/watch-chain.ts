@@ -5,6 +5,7 @@ import { assertReviewedNodeRuntime } from '../../src/runtime-version';
 import { pollPresignedVaultChains } from '../lib/server/presigned-chain-store';
 import { retryPresignedBroadcasts } from '../lib/server/presigned-broadcast-store';
 import { retryPresignedFeePackages } from '../lib/server/presigned-fee-store';
+import { retryPresignedCashouts } from '../lib/server/presigned-cashout-store';
 
 assertReviewedNodeRuntime();
 try {
@@ -12,8 +13,9 @@ try {
     const legacy = await pollVaultChain();
     const presignedBroadcasts = await retryPresignedBroadcasts();
     const presignedFees = await retryPresignedFeePackages();
+    const presignedCashouts = await retryPresignedCashouts();
     const presignedChain = await pollPresignedVaultChains();
-    return { ...legacy, presignedBroadcasts, presignedFees, presignedChain };
+    return { ...legacy, presignedBroadcasts, presignedFees, presignedCashouts, presignedChain };
   });
   if (!leased.acquired) {
     console.log(JSON.stringify({
@@ -25,7 +27,8 @@ try {
   } else {
     const ok = leased.value.broadcastErrors.length === 0 && leased.value.presignedChain.deferredVaults === 0 &&
       leased.value.presignedBroadcasts.results.every(result => result.status !== 'deferred') &&
-      leased.value.presignedFees.results.every(result => result.status !== 'deferred');
+      leased.value.presignedFees.results.every(result => result.status !== 'deferred') &&
+      leased.value.presignedCashouts.results.every(result => result.status !== 'deferred');
     console.log(JSON.stringify({
       ok,
       leaseAcquired: true,

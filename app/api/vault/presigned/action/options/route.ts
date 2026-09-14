@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     const input = Input.parse(await readPresignedJson(request));
     const userId = await requireSessionUser();
     const action = validatePresignedAction(input.action);
-    assertPresignedFundingSignatureRelease(action.kind);
+    assertPresignedFundingSignatureRelease(action.kind, action.protocol);
     await assertPresignedFundingInputsCurrent(userId, action);
     const options = await generateAuthenticationOptions({ rpID: webConfig().rpID,
       userVerification: 'required', timeout: 120_000 });

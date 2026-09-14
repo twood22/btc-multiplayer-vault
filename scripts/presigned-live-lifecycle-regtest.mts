@@ -1,16 +1,19 @@
 /** Tests exact low-capital resumable orchestration, not real Signet proof. */
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync } from 'node:fs';
 import * as bitcoin from 'bitcoinjs-lib';
 import { createPresignedCoreBackend, type PresignedCoreRpc } from '../src/presigned/core.js';
 import { genesisHash } from '../src/presigned/validation.js';
 import { withPresignedRegtest } from './lib/presigned-regtest.js';
 import { advanceLiveLifecycle, fundLiveLifecycle, initializeLiveLifecycle, readLifecycleFile,
-  saveLifecycleFile, verifyCompletedLiveLifecycle, verifyRestoredLiveLifecycleCustody, type LiveLifecycleCore } from './lib/presigned-live-lifecycle.js';
+  saveLifecycleFile, verifyCompletedLiveLifecycle, verifyRestoredLiveLifecycleCustody,
+  LIVE_OWNED_CASHOUT_PROFILE, liveLifecycleMinimumCapital, inspectCompletedLiveLifecycleCase, type LiveLifecycleCore } from './lib/presigned-live-lifecycle.js';
+import { authorizePresignedCashoutTransaction, type PresignedCashoutRequest, type PresignedCashout } from '../src/presigned/cashout.js';
 import { validatePresignedFeePackage, type PresignedFeePackage } from '../src/presigned/fee-package.js';
 import type { PresignedSpendProposal } from '../src/presigned/spends.js';
-import type { PresignedPublicKit } from '../src/presigned/types.js';
+import { PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, isPresignedProtocol, type PresignedProtocol, type PresignedPublicKit } from '../src/presigned/types.js';
+import { LAST_SURVIVOR_PAYOUT_SCHEDULE } from '../src/presigned/economics.js';
 import { presignedSourceDigest } from './presigned-build-identity.mjs';
 import { coinId, MINIMUM_SEQUENTIAL_CAPITAL, RECYCLING_FEE_CAP,
   validateRecyclingIntent, validateSignedRecycling,
@@ -20,7 +23,6 @@ import { createDurableLifecycleJournal } from './lib/presigned-durable-journal.j
 import { restoreLifecyclePrimary } from './lib/presigned-primary-restore.js';
 
 const CAPITAL_SATS = LIVE_REGTEST_CAPITAL_SATS;
-const FIXED_CONFIRMED_FEES_SATS = 47_000;
 const LOST_RESPONSE = 'deliberately lost successful Core response';
 const INTERRUPTED_INITIALIZATION = 'deliberately interrupted exact native initialization';
 const CASE_IDS = Array.from({ length: 19 }, (_, index) => `case-${String(index).padStart(2, '0')}`);
@@ -48,6 +50,12 @@ const caseSteps = (plan: CaseDefinition) => plan.kind === 'solo-order'
   ? [plan.first!, plan.source!, 'terminal'] : [...(plan.source ? [plan.source] : []), 'terminal'];
 
 process.umask(0o077);
+const protocolValue = process.env.PRESIGNED_LIVE_TEST_PROTOCOL ?? PRESIGNED_PROTOCOL;
+assert(isPresignedProtocol(protocolValue)); const protocol: PresignedProtocol = protocolValue;
+const v3 = protocol === PRESIGNED_PROTOCOL_V3;
+const FIXED_CONFIRMED_FEES_SATS = v3 ? 47_300 : 47_000;
+assert.equal(liveLifecycleMinimumCapital(protocol), v3 ? 88_652 : 88_352);
+assert(CAPITAL_SATS >= liveLifecycleMinimumCapital(protocol));
 // Diagnostic-only early stop. The fixed full acceptance command has no such
 // argument and its parser rejects this deliberately incomplete smoke summary.
 assert(process.argv.length === 2 || (process.argv.length === 3 && process.argv[2] === '--custody-smoke'));
@@ -86,6 +94,9 @@ await withPresignedRegtest(async host => {
   let backupGateChecks = 0; let walletCalls = 0; let finalReturnPendingChecks = 0; let historicalIntentRefusals = 0;
   let primaryLossRestorations = 0; let initializationInterruptions = 0; let nativeTargetsCreated = 0;
   let initializationTargetFault = true; let initializationBackupFault = true; let durableSendChecks = 0;
+  let originalCashoutBytes: string | null = null;
+  let publicCompletedCaseCacheAudit: { fileMutationsRejected: number; missingFileRejected: boolean; permissionsRejected: boolean;
+    returnedAliasMutationIsolated: boolean; sourceAndProtocolChangesRejected: boolean; coldMilliseconds: number; warmMilliseconds: number } | undefined;
   const submittedTransactionIds = new Set<string>();
   // Hash only public allocation journals, never kits' separate wrapping keys.
   // Every later invocation must preserve the exact bytes already published.
@@ -142,6 +153,10 @@ await withPresignedRegtest(async host => {
       const allocationId = allocationForTxid(txid);
       if (allocationId === 'case-01') label = 'allocation-send-response';
       if (allocationId === 'return') label = 'final-return-send-response';
+      if (v3 && method === 'sendrawtransaction' && existsSync(`${directory}/cases/case-12/cashout.signed.json`)) {
+        const signed = readLifecycleFile<StoredSigned>(directory, 'cases/case-12/cashout.signed.json');
+        if (signed.txid === txid) { label = 'owned-cashout-send-response'; originalCashoutBytes = signed.transactionHex; }
+      }
       if (label && !lost.has(label)) { lost.add(label); throw new Error(LOST_RESPONSE); }
     }
     return result;
@@ -192,7 +207,7 @@ await withPresignedRegtest(async host => {
     }
     return result;
   };
-  const core: LiveLifecycleCore = { rpc: interruptedRpc, walletRpc, observeCoin: point => backend.observeConfirmedCoin(point),
+  const core: LiveLifecycleCore = { protocol, rpc: interruptedRpc, walletRpc, observeCoin: point => backend.observeConfirmedCoin(point),
     chain: 'isolated-regtest', actualGenesisHash: await host.rpc('getblockhash', [0]), sourceDigest: presignedSourceDigest(),
     durableJournal: createDurableLifecycleJournal(directory, backupDirectory, anchorDirectory, {
       chain: 'isolated-regtest', actualGenesisHash: await host.rpc('getblockhash', [0]), sourceDigest: presignedSourceDigest() }),
@@ -211,7 +226,9 @@ await withPresignedRegtest(async host => {
     assert.equal(restored.journal.directory, previous);
     directory = previous; core.durableJournal = restored.journal; primaryLossRestorations++;
   };
-  for (const capitalLimitSats of [MINIMUM_SEQUENTIAL_CAPITAL - 1, CAPITAL_SATS - 1]) {
+  const rejectedCapitalBudgets = [liveLifecycleMinimumCapital(protocol) - 1, CAPITAL_SATS - 1,
+    ...(v3 ? [MINIMUM_SEQUENTIAL_CAPITAL] : [])];
+  for (const capitalLimitSats of rejectedCapitalBudgets) {
     const rejectedDirectory = mkdtempSync('/tmp/btc-presigned-live-capital-refusal.');
     const callsBefore = walletCalls;
     await assert.rejects(() => initializeLiveLifecycle(core, rejectedDirectory, { capitalLimitSats, initialOutpoint: seed }),
@@ -291,6 +308,52 @@ await withPresignedRegtest(async host => {
         assertNoNewAuthority(walletCallsBefore, attemptsBefore); historicalIntentRefusals++;
         console.log(JSON.stringify({ stage: 'historical-intent-refusals-before-recycling', rejected: historicalIntentRefusals,
           extraWalletCalls: 0, extraBroadcastAttempts: 0, originalBytesRestored: true }));
+        const diagnosticCore: LiveLifecycleCore = { ...core,
+          rpc: async () => { throw new Error('public case inspection must not call Core'); },
+          walletRpc: async () => { throw new Error('public case inspection must not contact a wallet'); },
+          observeCoin: async () => { throw new Error('public case inspection must not observe a coin'); } };
+        const coldStart = performance.now(); const originalPublic = inspectCompletedLiveLifecycleCase(diagnosticCore, directory, 'case-00');
+        const coldMilliseconds = Math.round(performance.now() - coldStart);
+        const warmStart = performance.now();
+        assert.deepEqual(inspectCompletedLiveLifecycleCase(diagnosticCore, directory, 'case-00'), originalPublic);
+        const warmMilliseconds = Math.round(performance.now() - warmStart);
+        const alias = inspectCompletedLiveLifecycleCase(diagnosticCore, directory, 'case-00');
+        alias.kit.graph.digest = '00'.repeat(32); alias.leaves[0]!.valueSats += 1; alias.nodes.pop();
+        assert.deepEqual(inspectCompletedLiveLifecycleCase(diagnosticCore, directory, 'case-00'), originalPublic,
+          'a caller mutated the cached public DAG through an alias');
+        // Includes EVERY public file used by the complete-case verifier, plus
+        // the independent receipts and exact run. Never touches key material.
+        const publicFiles = ['run.json', 'allocations/case-00.intent.json', 'allocations/case-00.signed.json',
+          ...readdirSync(`${directory}/cases/case-00`).filter(name => name.endsWith('.json') && !name.endsWith('.encrypted.json'))
+            .map(name => `cases/case-00/${name}`)];
+        let fileMutationsRejected = 0;
+        for (const [index, name] of publicFiles.entries()) {
+          const original = readLifecycleFile<Record<string, unknown>>(directory, name);
+          const retained = `${directory}/journal-test-fixtures/cache-original-${index}.json`;
+          renameSync(`${directory}/${name}`, retained);
+          try {
+            saveLifecycleFile(directory, name, { ...original, changedPublicCacheBoundary: true });
+            assert.throws(() => inspectCompletedLiveLifecycleCase(diagnosticCore, directory, 'case-00'));
+            fileMutationsRejected++;
+          } finally {
+            if (existsSync(`${directory}/${name}`)) renameSync(`${directory}/${name}`, `${directory}/journal-test-fixtures/cache-rejected-${index}.json`);
+            renameSync(retained, `${directory}/${name}`);
+          }
+        }
+        const checked = `${directory}/cases/case-00/kit.json`; const retained = `${directory}/journal-test-fixtures/cache-missing-kit.json`;
+        renameSync(checked, retained);
+        try { assert.throws(() => inspectCompletedLiveLifecycleCase(diagnosticCore, directory, 'case-00')); }
+        finally { renameSync(retained, checked); }
+        chmodSync(checked, 0o644);
+        try { assert.throws(() => inspectCompletedLiveLifecycleCase(diagnosticCore, directory, 'case-00')); }
+        finally { chmodSync(checked, 0o600); }
+        assert.throws(() => inspectCompletedLiveLifecycleCase({ ...diagnosticCore, sourceDigest: '00'.repeat(32) }, directory, 'case-00'));
+        assert.throws(() => inspectCompletedLiveLifecycleCase({ ...diagnosticCore, protocol: v3 ? PRESIGNED_PROTOCOL : PRESIGNED_PROTOCOL_V3 }, directory, 'case-00'));
+        assert.deepEqual(inspectCompletedLiveLifecycleCase(diagnosticCore, directory, 'case-00'), originalPublic);
+        assert.equal(walletCalls, walletCallsBefore); assert.deepEqual([...sendAttempts.entries()], attemptsBefore);
+        publicCompletedCaseCacheAudit = { fileMutationsRejected, missingFileRejected: true, permissionsRejected: true,
+          returnedAliasMutationIsolated: true, sourceAndProtocolChangesRejected: true, coldMilliseconds, warmMilliseconds };
+        console.log(JSON.stringify({ stage: 'public-completed-case-cache-boundaries', ...publicCompletedCaseCacheAudit }));
       }
     }
     // Every invocation reloads all durable state: no in-process journal cache.
@@ -398,8 +461,10 @@ await withPresignedRegtest(async host => {
   assert.equal(result.feeLifecycleEvidence, true); assert.equal(result.feeEvidence.length, 5);
   assert(advanceInvocations > 25, 'sequential CSV cases were silently parallelized or skipped');
   assert.deepEqual([...lost].sort(), ['initial-fee-response', 'replacement-fee-response', 'funding-response',
-    'allocation-sign-response', 'allocation-send-response', 'final-return-send-response'].sort());
+    'allocation-sign-response', 'allocation-send-response', 'final-return-send-response',
+    ...(v3 ? ['owned-cashout-send-response'] : [])].sort());
   assert.equal(backupGateChecks, 19); assert.equal(finalReturnPendingChecks, 1); assert.equal(historicalIntentRefusals, 2);
+  assert(publicCompletedCaseCacheAudit && publicCompletedCaseCacheAudit.fileMutationsRejected >= 25);
   assert.equal(allocationSignRequests.size, 20);
   assert.equal(allocationSignRequests.get('case-01'), 2, 'lost wallet response did not retry the committed allocation');
   assert([...allocationSignRequests].every(([id, count]) => count === (id === 'case-01' ? 2 : 1)));
@@ -482,8 +547,15 @@ await withPresignedRegtest(async host => {
   for (const [index, plan] of run.cases.entries()) {
     const current = allocations[index]!; const next = allocations[index + 1]!;
     const kit = readLifecycleFile<PresignedPublicKit>(directory, `cases/${plan.id}/kit.json`);
-    assert.deepEqual(kit.graph.roster.economics, { depositSatsPerParticipant: 10_000, firstWithdrawalSats: 9500,
-      secondWithdrawalSats: 10_250, soloWithdrawalFeeSats: 300, soloFeeBudgetSats: 2000,
+    assert.equal(kit.protocol, protocol);
+    const v3 = protocol === PRESIGNED_PROTOCOL_V3;
+    if (v3) {
+      assert.equal(kit.preauthorizations.length + kit.recoveryAuthorizations!.length, 21);
+      assert.equal(kit.graph.recoveries!.length, 4);
+    }
+    assert.deepEqual(kit.graph.roster.economics, { ...(v3 ? { payoutSchedule: LAST_SURVIVOR_PAYOUT_SCHEDULE } : {}),
+      depositSatsPerParticipant: 10_000, firstWithdrawalSats: v3 ? 9_120 : 9_500,
+      secondWithdrawalSats: v3 ? 9_600 : 10_250, soloWithdrawalFeeSats: 300, soloFeeBudgetSats: 2000,
       cooperativeFeeSats: 300, recoveryFeeSats: 500, finalSweepFeeSats: 300, recoveryDelayBlocks: 12 });
     const funding = readLifecycleFile<StoredSigned>(directory, `cases/${plan.id}/funding.json`);
     assert.equal(await actualConfirmedFee(funding), 600); fixedFeesSats += 600;
@@ -505,6 +577,23 @@ await withPresignedRegtest(async host => {
       const fee = await actualConfirmedFee(replacement); assert.equal(fee, 4000);
       fixedFeesSats += fee; transactions.push(await rawTransaction(replacement.txid));
     }
+    if (v3 && plan.id === 'case-12') {
+      const intent = readLifecycleFile<{ request: PresignedCashoutRequest; cashout: PresignedCashout }>(directory, `cases/${plan.id}/cashout.intent.json`);
+      const signed = readLifecycleFile<StoredSigned>(directory, `cases/${plan.id}/cashout.signed.json`);
+      assert.equal(authorizePresignedCashoutTransaction({ ...intent, transactionHex: signed.transactionHex }).txid, signed.txid);
+      assert.equal(intent.request.participantId, 'carol'); assert.equal(intent.cashout.source.vout, 2);
+      assert.equal(intent.cashout.source.valueSats, 9833); assert.equal(intent.cashout.payoutSats, 9533);
+      const refund = readLifecycleFile<StoredSigned>(directory, `cases/${plan.id}/step-terminal.json`);
+      assert.equal(intent.cashout.source.txid, refund.txid);
+      assert.equal(intent.request.parentTransactionHex, refund.transactionHex);
+      assert.equal(intent.cashout.destinationScriptPubKeyHex, kit.graph.funding.inputs.find(item => item.participantId === 'carol')!.scriptPubKeyHex);
+      assert.equal(signed.transactionHex, originalCashoutBytes, 'cash-out lost reply changed the retained exact owner signature');
+      assert.equal(sendAttempts.get(signed.txid), 1, 'cash-out lost reply caused another send');
+      assert.equal(await actualConfirmedFee(signed), 300); fixedFeesSats += 300;
+      transactions.push(await rawTransaction(signed.txid));
+      assert(next.intent.inputs.some(coin => coin.txid === signed.txid && coin.vout === 0 && coin.participantId === null));
+      assert(!next.intent.inputs.some(coin => coin.txid === refund.txid && coin.vout === 2), 'cash-out source was recycled twice');
+    }
     const remaining = new Map<string, { valueSats: number; scriptPubKeyHex: string }>();
     for (const tx of transactions) tx.outs.forEach((output, vout) => remaining.set(`${tx.getId()}:${vout}`,
       { valueSats: Number(output.value), scriptPubKeyHex: Buffer.from(output.script).toString('hex') }));
@@ -525,11 +614,11 @@ await withPresignedRegtest(async host => {
     }
   }
   assert.equal(fixedFeesSats, FIXED_CONFIRMED_FEES_SATS);
-  assert.equal(confirmedFees.size, 84, 'expected exactly 20 allocations, 19 funding transactions, 40 exits, and five confirmed fee children');
+  assert.equal(confirmedFees.size, v3 ? 85 : 84, 'unexpected closed-DAG confirmed transaction count');
   assert.equal(replacedFeeChildIds.size, 5);
   assert([...sendAttempts.keys()].every(txid => confirmedFees.has(txid) || replacedFeeChildIds.has(txid)),
     'runner broadcast an extra transaction outside the independently audited lifecycle');
-  assert.equal(recycledParticipantPayouts, 57, 'not all 57 independently restored participant payouts were recycled');
+  assert.equal(recycledParticipantPayouts, v3 ? 56 : 57, 'every participant payout must be recycled directly or through the one authorized owner cash-out');
   const finalAllocation = allocations.at(-1)!;
   assert.deepEqual(finalAllocation.intent.targets, []);
   const finalTx = await rawTransaction(finalAllocation.signed.txid); assert.equal(finalTx.outs.length, 1);
@@ -555,7 +644,7 @@ await withPresignedRegtest(async host => {
   assert.equal(verification.durableCustodyEvidence.actualNativeWalletRestoredSignatures, 83);
   assert.equal(verification.durableCustodyEvidence.independentlyRestoredCasesBeforeFunding, 19);
   assert.equal(primaryLossRestorations, 2); assert.equal(initializationInterruptions, 2);
-  assert.equal(durableSendChecks, 84); assert.equal(submittedTransactionIds.size, 89);
+  assert.equal(durableSendChecks, v3 ? 85 : 84); assert.equal(submittedTransactionIds.size, v3 ? 90 : 89);
   assert.equal(readdirSync(`${directory}/events`).length, eventCount, 'read-only verification wrote a journal event');
   assert.deepEqual([...submissions.entries()], submissionCounts, 'read-only verification resubmitted a transaction');
   await assert.rejects(() => verifyCompletedLiveLifecycle({ ...core, sourceDigest: '00'.repeat(32) }, directory));
@@ -566,19 +655,44 @@ await withPresignedRegtest(async host => {
   await host.rpc('invalidateblock', [lastBlock]);
   try { await assert.rejects(() => verifyCompletedLiveLifecycle(core, directory)); }
   finally { await host.rpc('reconsiderblock', [lastBlock]); }
+  let ownedCashoutAudit: { confirmed: number; feeSats: number; omittedParticipant: string; destinationAlreadyBackedUp: boolean;
+    ownerOnlySignatureVerified: boolean; lostReplyReconciledWithoutResend: boolean; cashoutReorganizationRejected: boolean;
+    refundAncestorReorganizationRejected: boolean } | undefined;
+  if (v3) {
+    assert.equal(verification.ownedCashoutProfile, LIVE_OWNED_CASHOUT_PROFILE);
+    assert.equal(verification.ownedPayoutCashoutsConfirmed, 1);
+    const evidence = verification.ownedPayoutCashoutEvidence!;
+    assert.equal(evidence.participantId, 'carol'); assert.equal(evidence.feeSats, 300); assert.equal(evidence.payoutSats, 9533);
+    assert.notEqual(evidence.sourceAnchor.blockHash, evidence.cashoutAnchor.blockHash);
+    const beforeAttempts = [...sendAttempts.entries()];
+    await host.rpc('invalidateblock', [evidence.cashoutAnchor.blockHash]);
+    try {
+      assert((await host.rpc('getrawtransaction', [evidence.source.txid, true])).confirmations > 0);
+      await assert.rejects(() => verifyCompletedLiveLifecycle(core, directory));
+    } finally { await host.rpc('reconsiderblock', [evidence.cashoutAnchor.blockHash]); }
+    await host.rpc('invalidateblock', [evidence.sourceAnchor.blockHash]);
+    try { await assert.rejects(() => verifyCompletedLiveLifecycle(core, directory)); }
+    finally { await host.rpc('reconsiderblock', [evidence.sourceAnchor.blockHash]); }
+    assert.deepEqual([...sendAttempts.entries()], beforeAttempts, 'read-only cash-out reorganization audit resent a transaction');
+    ownedCashoutAudit = { confirmed: 1, feeSats: 300, omittedParticipant: 'carol', destinationAlreadyBackedUp: true,
+      ownerOnlySignatureVerified: true, lostReplyReconciledWithoutResend: true, cashoutReorganizationRejected: true,
+      refundAncestorReorganizationRejected: true };
+  }
   assert.equal((await verifyCompletedLiveLifecycle(core, directory)).everyPayoutRefundAndSponsorChangeVerified, true);
   checkAllocationJournal(); assert.equal(presignedSourceDigest(), core.sourceDigest, 'source changed during this acceptance run');
   host.record('resumable-lifecycle-runner', { passed: true, evidence: directory, lostRepliesWithoutResending: lost.size,
     lostReplyKinds: [...lost].sort(), sameTemplateWalletSigningRequestsAfterLostReply: allocationSignRequests.get('case-01'),
     preFundingBackupGateChecks: backupGateChecks, interruptedUncommittedCaseRetained: true,
-    lowCapitalRefusalsBeforeWalletAccess: 2, historicalIntentRefusalsBeforeRecycling: historicalIntentRefusals,
+    lowCapitalRefusalsBeforeWalletAccess: rejectedCapitalBudgets.length, historicalIntentRefusalsBeforeRecycling: historicalIntentRefusals,
     advanceInvocations, finalReturnPendingChecks, primaryLossRestorations, initializationInterruptions, durableSendChecks,
     immutablePublicAllocationFiles: immutableAllocationFiles.size, capitalAudit,
     readOnlyCompletionVerification: verification, readOnlyReorganizationAndMissingBackupRejections: true, ...resumed,
-    csvBoundaryAudit, csvBoundaryRecords: csvRecords });
-  console.log(JSON.stringify({ passed: true, evidence: directory, realDefaultSignetVerified: false, cases: 19,
+    csvBoundaryAudit, csvBoundaryRecords: csvRecords, publicCompletedCaseCacheAudit, ...(v3 ? { ownedCashoutAudit } : {}) });
+  console.log(JSON.stringify({ passed: true, protocol, evidence: directory, realDefaultSignetVerified: false, cases: 19,
+    ...(v3 ? { setupSignaturesPerCase: 21, fixedRecoveryTemplatesPerCase: 4,
+      ownedCashoutProfile: LIVE_OWNED_CASHOUT_PROFILE, ownedPayoutCashoutsConfirmed: 1, ownedCashoutAudit } : {}),
     publicNetworkBroadcasts: 0, coreVersion: host.coreVersion, chain: 'isolated-regtest',
-    feeFamilies: 5, lostRepliesWithoutResending: lost.size, capitalAudit, csvBoundaryAudit,
+    feeFamilies: 5, lostRepliesWithoutResending: lost.size, capitalAudit, csvBoundaryAudit, publicCompletedCaseCacheAudit,
     durableCustodyAudit: { primaryLossRestorations, initializationInterruptions, durableSendChecks,
       uniqueSubmittedTransactions: submittedTransactionIds.size,
       actualNativeWalletRestoredSignatures: 83, independentlyRestoredCasesBeforeFunding: 19, nativeTargetsRegenerated: 0 } }));

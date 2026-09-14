@@ -2,6 +2,8 @@ import { Buffer } from 'buffer';
 import * as bitcoin from 'bitcoinjs-lib';
 import { parsePresignedOfflineBackup, presignedBackupBinding, verifyPresignedKitRestoration,
   withRestoredPresignedOfflineBackup, type PresignedBackupBinding, type PresignedOfflineBackup } from '../src/presigned/backup.js';
+import { buildPresignedCashout, signPresignedCashout, authorizePresignedCashoutTransaction,
+  type PresignedCashout, type PresignedCashoutRequest } from '../src/presigned/cashout.js';
 import { buildPresignedFeeDraft, validatePresignedFeePackage, type PresignedFeeDraft, type PresignedFeePackage } from '../src/presigned/fee-package.js';
 import { signPresignedFeePayout } from '../src/presigned/fees.js';
 import { presignedObservedFeeCoin, validatePresignedCoinObservations, type PresignedCoinObservations } from '../src/presigned/coin-observations.js';
@@ -15,7 +17,7 @@ import { signPresignedSpendFeePayout } from '../src/presigned/spend-fees.js';
 import { buildPresignedSpend, createPresignedCooperativeNonce, createPresignedRecoveryContribution,
   signPresignedCooperativePartial, signPresignedFinalSweep, validatePresignedCooperativeNonces,
   type PresignedSpendProposal } from '../src/presigned/spends.js';
-import { PRESIGNED_PROTOCOL, type ParticipantId, type PresignedParticipantKeys, type PresignedPublicKit } from '../src/presigned/types.js';
+import { type ParticipantId, type PresignedParticipantKeys, type PresignedPublicKit } from '../src/presigned/types.js';
 import { assert, canonicalJson, commitmentDigest, hexBytes, networkParameters, sameCanonical } from '../src/presigned/validation.js';
 
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -39,6 +41,10 @@ let feeDraft: PresignedFeeDraft | null = null;
 let payoutSignatureHex = '';
 let sponsorSignedPsbtBase64 = '';
 let fundingFeeSignatures: PresignedFundingFeeSignature[] = [];
+let cashoutObservations: PresignedCoinObservations | null = null;
+let cashoutRequest: PresignedCashoutRequest | null = null;
+let cashout: PresignedCashout | null = null;
+let cashoutSigned: ReturnType<typeof signPresignedCashout> | null = null;
 
 function guard() {
   assert(location.protocol === 'file:', 'save and open this utility as a local file before using it');
@@ -63,8 +69,14 @@ function resetFee() {
   feeDraft = null; payoutSignatureHex = ''; sponsorSignedPsbtBase64 = ''; fundingFeeSignatures = [];
   field('fee-reviewed').checked = false; field('wallet-fee-psbt').value = ''; show('fee-review', 'No fee draft.');
 }
+function resetCashout() {
+  cashoutRequest = null; cashout = null; cashoutSigned = null;
+  field('cashout-reviewed').checked = false;
+  show('cashout-review', 'No reviewed cash-out.'); show('cashout-result', 'No signed cash-out.');
+}
 function forget() {
-  resetSpend(); resetFee(); kit = null; binding = null; participant = null; envelope = null; transaction = null; observations = null;
+  resetSpend(); resetFee(); resetCashout(); kit = null; binding = null; participant = null; envelope = null;
+  transaction = null; observations = null; cashoutObservations = null;
   for (const input of document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input,textarea')) {
     if (input instanceof HTMLInputElement && input.type === 'checkbox') input.checked = false;
     else input.value = '';
@@ -72,9 +84,10 @@ function forget() {
   // Reset public numeric controls to their visible defaults after forgetting
   // secrets. Blank numeric inputs would otherwise become zero and make a new
   // restored kit's first fee draft invalid without a useful review screen.
-  for (const id of ['sponsor-vout','child-fee','fee-cap','target-rate','relay-rate','incremental-rate'])
+  for (const id of ['sponsor-vout','child-fee','fee-cap','target-rate','relay-rate','incremental-rate',
+    'cashout-vout','cashout-fee','cashout-fee-cap'])
     field(id).value = field(id).defaultValue;
-  for (const id of ['spending','transactions','fees']) element(id).hidden = true;
+  for (const id of ['spending','transactions','fees','cashouts']) element(id).hidden = true;
   show('binding', 'No file selected.'); show('transaction-review', 'No finalized transaction.');
 }
 async function run(action: () => void | Promise<void>) {
@@ -112,7 +125,8 @@ async function privateAction<T>(action: (keys: PresignedParticipantKeys, secret:
     'recovery key has another length or a noncanonical encoding');
   try {
     return await withRestoredPresignedOfflineBackup({ envelope, expectedBinding: binding, offlineSecret: bytes, action: async restored => {
-      const derived = derivePresignedParticipantKeys(restored.participantSecret, restored.participantId, restored.publicKit.graph.roster.vaultId);
+      const derived = derivePresignedParticipantKeys(restored.participantSecret, restored.participantId,
+        restored.publicKit.graph.roster.vaultId, restored.publicKit.graph.protocol);
       try { return await action(derived.keys, restored.participantSecret, restored.publicKit); }
       finally { clearPresignedParticipantKeys(derived.keys); }
     } });
@@ -143,6 +157,7 @@ function reviewSpend() {
     show('review', { kind, proposalId: proposal.proposalId, proposalDigest: proposal.digest, graphDigest: graph.digest,
       txid: proposal.txid, source: proposal.source, threshold: proposal.threshold, feeSats: proposal.feeSats,
       minimumSourceConfirmations: kind === 'recovery' ? graph.roster.economics.recoveryDelayBlocks : 1,
+      ...(kind === 'recovery' ? { recoveryPolicy: recoveryNotice(publicKit) } : {}),
       outputs: txOutputs(proposal.unsignedTxHex) });
   }
   updatePeer(); show('status', 'Fixed transaction rebuilt. Check the source and outputs independently before signing.');
@@ -151,6 +166,11 @@ function txOutputs(hex: string) {
   const graph = requireKit().graph;
   return bitcoin.Transaction.fromHex(hex).outs.map((output, vout) => ({ vout, valueSats: Number(output.value),
     scriptPubKeyHex: Buffer.from(output.script).toString('hex'), address: bitcoin.address.fromOutputScript(output.script, networkParameters(graph.roster.network)) }));
+}
+function recoveryNotice(publicKit: PresignedPublicKit): string {
+  return publicKit.graph.version === 3
+    ? 'Fixed equal settlement to every current participant, including an absent member. Ends the game without the last-survivor bonus. The parent amounts, destinations and fee cannot be changed by the trigger quorum.'
+    : 'Legacy recovery risk: after this coin’s delay, the quorum can use other software to send the entire remaining vault anywhere. Equal payouts shown here are not Bitcoin-enforced.';
 }
 function updatePeer() {
   show('peer-status', exchange ? { proposalId: exchange.proposal.proposalId, proposalDigest: exchange.proposal.digest,
@@ -169,7 +189,8 @@ function setTransaction(value: PresignedOfflineTransaction) {
 }
 function publicTransaction(kind: PresignedOfflineTransaction['kind'], signed: { txid: string; transactionHex: string },
   spend: PresignedSpendProposal | null = null, exitId: string | null = null) {
-  setTransaction({ version: 2, protocol: PRESIGNED_PROTOCOL, format: 'presigned-offline-transaction-v1',
+  const graph = requireKit().graph;
+  setTransaction({ version: graph.version, protocol: graph.protocol, format: 'presigned-offline-transaction-v1',
     graphDigest: requireKit().graph.digest, kind, proposal: spend, exitId,
     txid: signed.txid, transactionHex: signed.transactionHex } as PresignedOfflineTransaction);
 }
@@ -189,9 +210,13 @@ click('verify', async () => {
   });
   kit = verified.publicKit; participant = binding.participantId;
   sameCanonical(presignedBackupBinding(kit, participant), binding, 'offline independently pinned binding');
-  show('binding', { ...binding, verifiedOwnerExits: verified.proof.exitProofs.map(item => item.exitId), proofDigest: verified.proof.proofDigest });
-  for (const id of ['spending','transactions','fees']) element(id).hidden = false;
-  updateSources(); show('status', 'Kit authenticated. All three of your owner exits were completed and verified locally; their witnesses were discarded. Select only the spend you intend to release.');
+  show('binding', { ...binding, verifiedOwnerExits: verified.proof.exitProofs.map(item => item.exitId),
+    ...(verified.proof.recoveryProofs ? { verifiedRecoveryTriggerKeys: verified.proof.recoveryProofs.map(item => item.recoveryId),
+      verifiedFixedRecoveryAuthorizations: kit.recoveryAuthorizations!.length } : {}), proofDigest: verified.proof.proofDigest });
+  for (const id of ['spending','transactions','fees','cashouts']) element(id).hidden = false;
+  updateSources(); show('status', 'Kit authenticated. All three of your owner exits were completed and verified locally; their witnesses were discarded. '
+    + (kit.graph.version === 3 ? 'All nine fixed-refund approvals and your three separate recovery-trigger keys were verified. ' : '')
+    + 'Select only the spend you intend to release.');
 });
 click('forget', () => { forget(); show('status', 'Session forgotten. No secrets or nonces were stored.'); });
 select('spend-kind').addEventListener('change', () => { void run(updateSources); });
@@ -213,16 +238,19 @@ click('sign-single', async () => {
   }
 });
 file('peer', raw => {
-  const publicKit = requireKit(); const incoming = validatePresignedOfflineExchange(publicKit, parsePresignedOfflinePublicJson(raw));
-  assert(incoming.proposal.participantIds.includes(participant!), 'this peer proposal belongs to another round');
-  if (!exchange) { resetSpend(); exchange = incoming; proposal = incoming.proposal; }
-  else { exchange = mergePresignedOfflineExchanges(publicKit, exchange, incoming); proposal = exchange.proposal; }
+  const publicKit = requireKit(); const incoming = parsePresignedOfflinePublicJson(raw);
+  const next = exchange ? mergePresignedOfflineExchanges(publicKit, exchange, incoming)
+    : validatePresignedOfflineExchange(publicKit, incoming);
+  assert(next.proposal.participantIds.includes(participant!), 'this peer proposal belongs to another round');
+  if (!exchange) resetSpend();
+  exchange = next; proposal = next.proposal;
   // A peer file can add only append-only public contributions. Still require
   // the user to review the exact proposal again before any private-key action.
   field('reviewed').checked = false;
   show('review', { proposalId: proposal.proposalId, proposalDigest: proposal.digest, kind: proposal.kind,
     source: proposal.source, txid: proposal.txid, feeSats: proposal.feeSats, threshold: proposal.threshold,
     minimumSourceConfirmations: proposal.kind === 'recovery' ? publicKit.graph.roster.economics.recoveryDelayBlocks : 1,
+    ...(proposal.kind === 'recovery' ? { recoveryPolicy: recoveryNotice(publicKit) } : {}),
     outputs: txOutputs(proposal.unsignedTxHex) }); updatePeer(); show('status', 'Public peer contributions verified. Compare the exact proposal ID and digest with the other signers.');
 });
 click('nonce', async () => {
@@ -255,8 +283,13 @@ click('recovery-share', async () => {
   requireReview(); assert(exchange?.proposal.kind === 'recovery', 'prepare or import a timelocked recovery proposal');
   assert(!exchange.recoveryContributions.some(item => item.participantId === participant), 'your recovery contribution is already present');
   const current = exchange;
-  const contribution = await privateAction(keys => createPresignedRecoveryContribution({ graph: requireKit().graph, proposal: current.proposal,
-    participantId: participant!, personalPrivateKey: keys.personalPrivateKey, approvedProposalDigest: current.proposal.digest }));
+  assert(current.recoveryContributions.length < current.proposal.threshold, 'the selected recovery quorum is already complete');
+  const contribution = await privateAction(keys => {
+    const graph = requireKit().graph;
+    return createPresignedRecoveryContribution({ graph, proposal: current.proposal, participantId: participant!,
+      ...(graph.version === 3 ? { recoveryTriggerPrivateKey: keys.recoveryTriggerPrivateKeys![current.proposal.source.roundId!]! }
+        : { personalPrivateKey: keys.personalPrivateKey }), approvedProposalDigest: current.proposal.digest });
+  });
   addToExchange({ recoveryContributions: [...current.recoveryContributions, contribution] });
   show('status', 'Recovery contribution verified. Save and exchange the public peer file; Core still enforces CSV maturity.');
 });
@@ -304,8 +337,8 @@ click('build-fee', () => {
       incrementalRelayRateMillisatsPerVbyte: Number(value('incremental-rate')) } : null };
   // Same-wallet sponsor change is deliberately fixed by this utility. There is
   // no arbitrary destination field and no implicit consume-the-whole-coin fee.
-  const base = { version: 2 as const, protocol: PRESIGNED_PROTOCOL, epochId: graph.funding.epochId,
-    ownerParticipantId: participant!, parentAuthorityDigest: commitmentDigest('vault/presigned-graph-v2/offline-parent', transaction) };
+  const base = { version: graph.version, protocol: graph.protocol, epochId: graph.funding.epochId,
+    ownerParticipantId: participant!, parentAuthorityDigest: commitmentDigest(`vault/${graph.protocol}/offline-parent`, transaction) };
   resetFee();
   if (transaction.kind === 'funding') feeDraft = { ...base, mode: 'funding', proposalId: null,
     request: { graph, fundingTransactionHex: transaction.transactionHex, changeParticipantId: participant!,
@@ -376,12 +409,70 @@ click('finalize-fee', () => {
     { payoutSignatureHex, sponsorSignedPsbtBase64 } } as PresignedFeePackage;
   const checked = validatePresignedFeePackage(packageValue);
   save('presigned-offline-signed-fee-package.json', checked.package);
-  save('presigned-offline-signed-fee-transactions.json', { version: 2, protocol: PRESIGNED_PROTOCOL,
+  save('presigned-offline-signed-fee-transactions.json', { version: requireKit().graph.version, protocol: requireKit().graph.protocol,
     format: 'presigned-offline-fee-transactions-v1', network: requireKit().graph.roster.network,
     genesisHash: requireKit().graph.roster.genesisHash, packageDigest: checked.packageDigest,
     parentTxid: checked.completed.parentTxid, childTxid: checked.completed.txid,
     transactionHexes: [checked.parentTransactionHex, checked.completed.transactionHex] });
   show('status', 'Signed parent and child saved. Independently verify their current coins and Core policy. Nothing was broadcast.');
+});
+
+// A cash-out is a NEW owner-only spend after settlement. It cannot change a
+// vault parent, another member's refund, or any committed recovery destination.
+file('cashout-observations', raw => {
+  cashoutObservations = null; resetCashout();
+  cashoutObservations = validatePresignedCoinObservations(requireKit().graph, parsePresignedOfflinePublicJson(raw));
+  show('status', `Cash-out coin observations loaded at height ${cashoutObservations.tip.height}. This file cannot prove current confirmations or spendability; recheck them with your own Core.`);
+});
+for (const id of ['cashout-parent','cashout-vout','cashout-address','cashout-fee','cashout-fee-cap'])
+  element(id).addEventListener('input', resetCashout);
+click('cashout-build', () => {
+  const publicKit = requireKit(); resetCashout();
+  assert(cashoutObservations, 'import independently checked cash-out coin observations first');
+  const parentTransactionHex = value('cashout-parent');
+  assert(parentTransactionHex.length <= 800_000 && /^(?:[0-9a-f]{2})+$/u.test(parentTransactionHex),
+    'enter the exact public parent transaction hex for your payout');
+  const parent = bitcoin.Transaction.fromHex(parentTransactionHex);
+  const report = validatePresignedCoinObservations(publicKit.graph, cashoutObservations);
+  const sourceObservation = presignedObservedFeeCoin(report, parent.getId(), Number(value('cashout-vout')), null);
+  const request: PresignedCashoutRequest = { publicKit, participantId: participant!, parentTransactionHex,
+    sourceObservation, destinationAddress: value('cashout-address'), feeSats: Number(value('cashout-fee')),
+    maxFeeSats: Number(value('cashout-fee-cap')) };
+  const built = buildPresignedCashout(request);
+  cashoutRequest = request; cashout = built;
+  show('cashout-review', { source: built.source, sourceConfirmationBlockHash: sourceObservation.confirmationBlockHash,
+    sourceConfirmations: sourceObservation.confirmations, destinationAddress: built.destinationAddress,
+    destinationScriptPubKeyHex: built.destinationScriptPubKeyHex, youReceiveSats: built.payoutSats,
+    additionalCashoutFeeSats: built.feeSats, maximumApprovedFeeSats: built.maxFeeSats,
+    signedVsize: built.vsize, transactionId: built.txid, approvalDigest: built.digest,
+    notice: 'Only your already-owned coin is spent. This does not change any vault payout or fixed refund. Offline coin observations are not a proof of current chain state.' });
+  show('status', 'Cash-out rebuilt. Independently check your coin, receiving address and exact additional fee before signing.');
+});
+click('cashout-sign', async () => {
+  requireKit(); assert(cashoutRequest && cashout && field('cashout-reviewed').checked,
+    'review and explicitly approve the cash-out destination, source and additional fee first');
+  const request = cashoutRequest; const approved = cashout;
+  const signed = await privateAction(keys => signPresignedCashout({ request, cashout: approved,
+    keys, approvedCashoutDigest: approved.digest }));
+  assert(cashoutRequest === request && cashout === approved && field('cashout-reviewed').checked,
+    'cash-out review changed during signing; rebuild before exporting');
+  cashoutSigned = signed;
+  show('cashout-result', { txid: signed.txid, destinationAddress: approved.destinationAddress,
+    youReceiveSats: approved.payoutSats, feeSats: signed.feeSats, locallyVerified: true, broadcast: false });
+  show('status', 'Cash-out signed locally. Nothing was broadcast. Save the signed transaction and independently verify it before broadcasting.');
+});
+function checkedCashout() {
+  requireKit(); assert(cashoutRequest && cashout && cashoutSigned, 'sign the exact reviewed cash-out before saving it');
+  const signed = authorizePresignedCashoutTransaction({ request: cashoutRequest, cashout, transactionHex: cashoutSigned.transactionHex });
+  return { request: cashoutRequest, cashout, signed };
+}
+click('cashout-save-hex', () => {
+  const { signed } = checkedCashout(); save(`presigned-cashout-${signed.txid}.hex.txt`, signed.transactionHex, true);
+});
+click('cashout-save-json', () => {
+  const checked = checkedCashout();
+  save(`presigned-cashout-${checked.signed.txid}.json`, { version: checked.cashout.version,
+    protocol: checked.cashout.protocol, format: 'presigned-offline-cashout-v1', ...checked });
 });
 
 window.addEventListener('pagehide', () => { burnNonce(); field('secret').value = ''; });

@@ -2,12 +2,12 @@ import { buildPresignedFeeChild, finalizePresignedFeeChild, type PresignedFeeReq
 import { buildPresignedFundingFeeChild, finalizePresignedFundingFeeChild,
   type PresignedFundingFeeRequest, type PresignedFundingFeeSignature } from './funding-fees.js';
 import { buildPresignedSpendFeeChild, finalizePresignedSpendFeeChild, type PresignedSpendFeeRequest } from './spend-fees.js';
-import { PRESIGNED_PROTOCOL, type ParticipantId } from './types.js';
+import { PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, type ParticipantId, type PresignedGraph } from './types.js';
 import { assert, commitmentDigest, exactKeys, hexBytes, identifier, participantId } from './validation.js';
 
 interface PackageBinding {
-  version: 2;
-  protocol: typeof PRESIGNED_PROTOCOL;
+  version: PresignedGraph['version'];
+  protocol: PresignedGraph['protocol'];
   epochId: string;
   proposalId: string | null;
   ownerParticipantId: ParticipantId;
@@ -59,18 +59,21 @@ export function validatePresignedFeePackage(value: unknown) {
       : finalizePresignedSpendFeeChild({ request: packageValue.request, approvalDigest: built.approvalDigest, ...packageValue.signatures });
   }
   return { package: packageValue, completed,
-    packageDigest: commitmentDigest('vault/presigned-graph-v2/fee-package', packageValue),
+    packageDigest: commitmentDigest(`vault/${packageValue.protocol}/fee-package`, packageValue),
     parentTransactionHex: packageValue.mode === 'funding' ? packageValue.request.fundingTransactionHex : packageValue.request.parentTransactionHex };
 }
 
 function validateBinding(draft: PresignedFeeDraft): void {
   exactKeys(draft, ['version', 'protocol', 'epochId', 'proposalId', 'ownerParticipantId', 'parentAuthorityDigest', 'mode', 'request',
     ...('signatures' in draft ? ['signatures'] : [])], 'fee draft');
-  assert(draft && draft.version === 2 && draft.protocol === PRESIGNED_PROTOCOL, 'wrong fee package protocol');
+  assert(draft && (draft.version === 2 && draft.protocol === PRESIGNED_PROTOCOL ||
+    draft.version === 3 && draft.protocol === PRESIGNED_PROTOCOL_V3), 'wrong fee package protocol');
   identifier(draft.epochId, 'fee package epoch');
   if (draft.proposalId !== null) identifier(draft.proposalId, 'fee package proposal');
   participantId(draft.ownerParticipantId);
   hexBytes(draft.parentAuthorityDigest, 32, 'fee parent authority');
   assert(draft.mode === 'funding' || draft.mode === 'solo' || draft.mode === 'spend', 'unknown fee package mode');
   assert(draft.request?.graph?.funding.epochId === draft.epochId, 'fee package changed epoch');
+  assert(draft.version === draft.request.graph.version && draft.protocol === draft.request.graph.protocol,
+    'fee package belongs to another graph protocol');
 }

@@ -2,8 +2,8 @@ import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { BitcoinNetworkName } from '../types.js';
 import { assertProtectedRegularFile } from '../operator-environment.js';
-import { PRESIGNED_PROTOCOL } from './types.js';
-import { assert, commitmentDigest, exactKeys, genesisHash, hexBytes, identifier, sameCanonical } from './validation.js';
+import { PRESIGNED_PROTOCOL_V3, type PresignedProtocol, type PresignedVersion } from './types.js';
+import { assert, commitmentDigest, exactKeys, genesisHash, hexBytes, identifier, sameCanonical, presignedDomain, validatePresignedProtocol } from './validation.js';
 
 /** Every category needs executable evidence; none is a substitute for another. */
 export const PRESIGNED_RELEASE_CHECKS = [
@@ -17,23 +17,32 @@ export const PRESIGNED_RELEASE_CHECKS = [
   'legacy-protocol-boundary-and-funding-intent-restart',
   'real-default-signet-lifecycle',
 ] as const;
+export const PRESIGNED_V3_RELEASE_CHECKS = [...PRESIGNED_RELEASE_CHECKS,
+  'fixed-refund-four-rounds-all-nine-trigger-quorums',
+  'fresh-colluder-signatures-no-unrestricted-tree-bypass',
+  'twenty-one-setup-signatures-before-funding-and-restoration',
+  'v3-server-independent-missing-participant-recovery',
+] as const;
+export function presignedReleaseChecks(protocol: PresignedProtocol) {
+  return protocol === PRESIGNED_PROTOCOL_V3 ? PRESIGNED_V3_RELEASE_CHECKS : PRESIGNED_RELEASE_CHECKS;
+}
 export interface PresignedAcceptanceReceipt {
-  version: 2;
-  protocol: typeof PRESIGNED_PROTOCOL;
-  kind: 'presigned-v2-executable-acceptance';
+  version: PresignedVersion;
+  protocol: PresignedProtocol;
+  kind: 'presigned-v2-executable-acceptance' | 'presigned-v3-executable-acceptance';
   createdAt: string;
   sourceDigest: string;
   testedImageManifestDigest: string;
   offlineUtilityDigest: string;
   physicalPasskeys: 'deferred-to-friends-onboarding';
-  evidence: Array<{ check: typeof PRESIGNED_RELEASE_CHECKS[number]; artifactDigest: string }>;
+  evidence: Array<{ check: typeof PRESIGNED_V3_RELEASE_CHECKS[number]; artifactDigest: string }>;
   liveSignetReceiptDigest: string;
   receiptDigest: string;
 }
 export interface PresignedFundingRelease {
-  version: 2;
-  protocol: typeof PRESIGNED_PROTOCOL;
-  kind: 'presigned-v2-funding-release-review';
+  version: PresignedVersion;
+  protocol: PresignedProtocol;
+  kind: 'presigned-v2-funding-release-review' | 'presigned-v3-funding-release-review';
   network: BitcoinNetworkName;
   genesisHash: string;
   createdAt: string;
@@ -58,21 +67,23 @@ export function validatePresignedAcceptanceReceipt(value: unknown): PresignedAcc
   exactKeys(value, ['version','protocol','kind','createdAt','sourceDigest','testedImageManifestDigest','offlineUtilityDigest',
     'physicalPasskeys','evidence','liveSignetReceiptDigest','receiptDigest'], 'v2 executable acceptance receipt');
   const receipt = value as PresignedAcceptanceReceipt;
-  assert(receipt.version === 2 && receipt.protocol === PRESIGNED_PROTOCOL && receipt.kind === 'presigned-v2-executable-acceptance' &&
+  validatePresignedProtocol(receipt.version, receipt.protocol);
+  assert(receipt.kind === `presigned-v${receipt.version}-executable-acceptance` &&
     receipt.physicalPasskeys === 'deferred-to-friends-onboarding', 'wrong v2 acceptance identity or physical-test claim');
   timestamp(receipt.createdAt);
   imageDigest(receipt.testedImageManifestDigest);
   for (const field of ['sourceDigest','offlineUtilityDigest','liveSignetReceiptDigest','receiptDigest'] as const) hexBytes(receipt[field], 32, field);
-  assert(Array.isArray(receipt.evidence) && receipt.evidence.length === PRESIGNED_RELEASE_CHECKS.length,
+  const checks: readonly string[] = presignedReleaseChecks(receipt.protocol);
+  assert(Array.isArray(receipt.evidence) && receipt.evidence.length === checks.length,
     'v2 release requires every mandatory executable acceptance category');
   receipt.evidence.forEach(item => {
     exactKeys(item, ['check','artifactDigest'], 'v2 acceptance evidence');
-    assert(PRESIGNED_RELEASE_CHECKS.includes(item.check), 'unknown acceptance evidence category');
+    assert(checks.includes(item.check), 'unknown acceptance evidence category');
     hexBytes(item.artifactDigest, 32, 'acceptance artifact digest');
   });
-  sameCanonical(receipt.evidence.map(item => item.check).sort(), [...PRESIGNED_RELEASE_CHECKS].sort(), 'mandatory v2 acceptance checks');
+  sameCanonical(receipt.evidence.map(item => item.check).sort(), [...checks].sort(), 'mandatory protocol-specific acceptance checks');
   const { receiptDigest, ...body } = receipt;
-  assert(commitmentDigest('vault/presigned-graph-v2/executable-acceptance', body) === receiptDigest, 'acceptance receipt digest changed');
+  assert(commitmentDigest(presignedDomain(receipt.protocol, 'executable-acceptance'), body) === receiptDigest, 'acceptance receipt digest changed');
   return receipt;
 }
 
@@ -81,7 +92,8 @@ export function validatePresignedFundingRelease(value: unknown): PresignedFundin
     'finalizationDigest','acceptanceReceiptDigest','sourceDigest','deployedImageManifestDigest','databaseRestoreReceiptDigest','fundingRestoreReceiptDigest',
     'physicalPasskeysCheckedForThisVault','manualReviewAcknowledged','fundingAllowed','reportDigest'], 'v2 funding release');
   const report = value as PresignedFundingRelease;
-  assert(report.version === 2 && report.protocol === PRESIGNED_PROTOCOL && report.kind === 'presigned-v2-funding-release-review' &&
+  validatePresignedProtocol(report.version, report.protocol);
+  assert(report.kind === `presigned-v${report.version}-funding-release-review` &&
     report.genesisHash === genesisHash(report.network) && report.physicalPasskeysCheckedForThisVault === true &&
     report.manualReviewAcknowledged === true && report.fundingAllowed === false, 'v2 release lacks exact network or manual/physical review');
   timestamp(report.createdAt); identifier(report.vaultId, 'release vault'); identifier(report.epochId, 'release epoch');
@@ -89,7 +101,7 @@ export function validatePresignedFundingRelease(value: unknown): PresignedFundin
     hexBytes(report[field], 32, field);
   imageDigest(report.deployedImageManifestDigest);
   const { reportDigest, ...body } = report;
-  assert(commitmentDigest('vault/presigned-graph-v2/funding-release', body) === reportDigest, 'v2 release digest changed');
+  assert(commitmentDigest(presignedDomain(report.protocol, 'funding-release'), body) === reportDigest, 'presigned release digest changed');
   return report;
 }
 
@@ -110,6 +122,7 @@ export function assertPresignedReleaseBindings(report: PresignedFundingRelease, 
   buildSourceDigest: string; deployedImageManifestDigest: string; databaseRestoreReceiptDigest: string; fundingRestoreReceiptDigest: string; now?: number;
 }) {
   validatePresignedFundingRelease(report); validatePresignedAcceptanceReceipt(receipt);
+  assert(report.protocol === receipt.protocol && report.version === receipt.version, 'release and acceptance protocols differ');
   assert(report.reportDigest === expected.reviewedReportDigest && receipt.receiptDigest === expected.reviewedAcceptanceDigest &&
     report.acceptanceReceiptDigest === receipt.receiptDigest, 'v2 release evidence differs from independently reviewed digests');
   assert(report.network === expected.network && report.vaultId === expected.vaultId && report.epochId === expected.epochId &&

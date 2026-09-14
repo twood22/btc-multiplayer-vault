@@ -6,15 +6,15 @@ import { nonWitnessTransactionHex, validatePresignedGraph } from './graph.js';
 import type { PresignedOutputAvailability } from './core.js';
 import { validatePresignedRuntimeProposal, type PresignedRuntimeProposal } from './runtime.js';
 import { buildPresignedSpend, type PresignedSpendProposal } from './spends.js';
-import { PRESIGNED_PROTOCOL, type PresignedGraph } from './types.js';
-import { assert, commitmentDigest, safeInteger, sameCanonical } from './validation.js';
+import type { PresignedGraph, PresignedProtocol, PresignedVersion } from './types.js';
+import { assert, commitmentDigest, safeInteger, sameCanonical, presignedDomain } from './validation.js';
 
 export interface PresignedTerminalConfirmation {
   proposalId: string; txid: string; kind: 'cooperative' | 'recovery' | 'final-sweep';
   sourceTxid: string; sourceVout: number; blockHash: string; height: number;
 }
 export interface PresignedWatchState {
-  version: 2; protocol: typeof PRESIGNED_PROTOCOL;
+  version: PresignedVersion; protocol: PresignedProtocol;
   graph: PresignedGraphChainState;
   terminals: PresignedTerminalConfirmation[];
 }
@@ -31,7 +31,7 @@ export interface PresignedWatchBackend extends PresignedChainBackend {
   getOutputAvailability(output: PresignedProjectedOutput): Promise<PresignedOutputAvailability>;
 }
 export function initialPresignedWatchState(graph: PresignedGraph): PresignedWatchState {
-  return { version: 2, protocol: PRESIGNED_PROTOCOL, graph: initialPresignedGraphChainState(graph), terminals: [] };
+  return { version: graph.version, protocol: graph.protocol, graph: initialPresignedGraphChainState(graph), terminals: [] };
 }
 
 /** Observation targets only. These are NOT signed proposals or broadcast authority.
@@ -43,7 +43,7 @@ export function presignedTerminalWatchTargets(graph: PresignedGraph): PresignedS
   validatePresignedGraph(graph);
   const targets: PresignedSpendProposal[] = [];
   const add = (kind: PresignedSpendProposal['kind'], sourceExitId: string | null) => {
-    const hash = commitmentDigest('vault/presigned-graph-v2/watch/terminal-id', { graphDigest: graph.digest, kind, sourceExitId });
+    const hash = commitmentDigest(presignedDomain(graph.protocol, 'watch/terminal-id'), { graphDigest: graph.digest, kind, sourceExitId });
     const proposalId = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
     targets.push(buildPresignedSpend({ graph, proposalId, kind, sourceExitId }));
   };
@@ -61,7 +61,7 @@ export async function collectPresignedEpochWatch(input: {
 }): Promise<PresignedEpochWatch> {
   const { graph, current, backend } = input;
   validatePresignedGraph(graph);
-  assert(current.version === 2 && current.protocol === PRESIGNED_PROTOCOL && current.graph.graphDigest === graph.digest,
+  assert(current.version === graph.version && current.protocol === graph.protocol && current.graph.graphDigest === graph.digest,
     'watch state has another protocol or graph');
   safeInteger(input.requiredConfirmations, 1, 144, 'watch confirmation depth');
   const retained = input.proposals.map(proposal => validatePresignedRuntimeProposal(graph, proposal)).filter(item => item.kind !== 'solo');
@@ -152,7 +152,7 @@ export async function collectPresignedEpochWatch(input: {
     }
     const after = await backend.getTip();
     sameCanonical(before, after, 'complete watch tip');
-    const state: PresignedWatchState = { version: 2, protocol: PRESIGNED_PROTOCOL, graph: reconciled.state, terminals };
+    const state: PresignedWatchState = { version: graph.version, protocol: graph.protocol, graph: reconciled.state, terminals };
     const oldByTxid = new Map(current.terminals.map(item => [item.txid, item]));
     const newByTxid = new Map(terminals.map(item => [item.txid, item]));
     return { kind: 'snapshot', state, tip: after, output,

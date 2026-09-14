@@ -7,14 +7,15 @@ import postgres from 'postgres';
 import { withPresignedRegtest } from '../../scripts/lib/presigned-regtest.js';
 import { createPresignedCoreBackend, type PresignedCoreRpc } from '../../src/presigned/core.js';
 import { newPresignedCeremony, type PresignedFundingEpoch } from '../../src/presigned/ceremony.js';
-import { createPresignedFixture, preauthorizePresignedFixture, signPresignedFixtureFunding } from '../../src/presigned/fixtures.js';
+import { authorizePresignedFixtureRecoveries, createPresignedFixture, preauthorizePresignedFixture, signPresignedFixtureFunding } from '../../src/presigned/fixtures.js';
 import { buildPresignedGraph } from '../../src/presigned/graph.js';
 import { derivePresignedParticipantKeys } from '../../src/presigned/roster.js';
 import { completePresignedExit } from '../../src/presigned/signing.js';
-import { createPresignedCooperativeNonce, signPresignedCooperativePartial, signPresignedFinalSweep } from '../../src/presigned/spends.js';
+import { buildPresignedSpend, createPresignedCooperativeNonce, createPresignedRecoveryContribution,
+  finalizePresignedRecovery, signPresignedCooperativePartial, signPresignedFinalSweep } from '../../src/presigned/spends.js';
 import { validatePresignedRuntimeAction, type PresignedRuntimeState, type PresignedRuntimeKind } from '../../src/presigned/runtime.js';
-import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, type ParticipantId } from '../../src/presigned/types.js';
-import { commitmentDigest } from '../../src/presigned/validation.js';
+import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, FIXED_RECOVERY_POLICY, isPresignedProtocol, type PresignedProtocol, type ParticipantId } from '../../src/presigned/types.js';
+import { commitmentDigest, presignedDomain, presignedVersion } from '../../src/presigned/validation.js';
 import { EXPECTED_MIGRATION_FILES } from '../lib/migrations.js';
 import { closeDatabase } from '../lib/server/db.js';
 import { getPresignedChainStatus, pollPresignedVaultChains } from '../lib/server/presigned-chain-store.js';
@@ -32,6 +33,9 @@ const dbUrl = new URL(process.env.DATABASE_URL);
 assert(['127.0.0.1', 'localhost', '[::1]'].includes(dbUrl.hostname) && /(?:test|acceptance)/u.test(dbUrl.pathname));
 assert.equal(process.env.PRESIGNED_V2_BROADCAST_NETWORK, 'signet', 'explicit disposable Signet-format policy flag required');
 const sql = postgres(process.env.DATABASE_URL, { max: 1, onnotice: () => {} });
+const selectedProtocol = process.env.PRESIGNED_DB_PROTOCOL ?? PRESIGNED_PROTOCOL;
+assert(isPresignedProtocol(selectedProtocol), 'chain acceptance requires a known protocol');
+const protocol: PresignedProtocol = selectedProtocol; const v3 = protocol === PRESIGNED_PROTOCOL_V3;
 const bytes = (hex: string) => Buffer.from(hex, 'hex');
 const json = (value: unknown): any => JSON.parse(JSON.stringify(value));
 const results: string[] = []; const findings: string[] = [];
@@ -101,11 +105,11 @@ try {
     }
     const secretsByVault = new Map<string, ReturnType<typeof createPresignedFixture>['participantSecrets']>();
     async function fixtureFor(vaultId: string = randomUUID()) {
-      const fixture = createPresignedFixture();
+      const fixture = createPresignedFixture({ protocol });
       if (!secretsByVault.has(vaultId)) secretsByVault.set(vaultId,
         Object.fromEntries(PARTICIPANT_IDS.map(id => [id, randomBytes(32).toString('base64url')])) as typeof fixture.participantSecrets);
       fixture.participantSecrets = secretsByVault.get(vaultId)!;
-      const derived = PARTICIPANT_IDS.map(id => derivePresignedParticipantKeys(fixture.participantSecrets[id], id, vaultId));
+      const derived = PARTICIPANT_IDS.map(id => derivePresignedParticipantKeys(fixture.participantSecrets[id], id, vaultId, protocol));
       fixture.keysById = Object.fromEntries(derived.map(item => [item.publicIdentity.id, item.keys])) as typeof fixture.keysById;
       fixture.roster = { ...fixture.roster, vaultId, participants: derived.map(item => item.publicIdentity) };
       const coins = await core.fundScripts(PARTICIPANT_IDS.map(id => ({ scriptPubKeyHex: fixture.walletKeys[id].scriptPubKeyHex, valueSats: 12_000 })));
@@ -123,13 +127,14 @@ try {
       const credentials = existing?.credentials ?? Object.fromEntries(PARTICIPANT_IDS.map(id => [id, `test-watch-${randomUUID()}`])) as Record<ParticipantId, string>;
       const funding = signPresignedFixtureFunding(fixture); const tx = bitcoin.Transaction.fromHex(funding.transactionHex);
       const preauthorizations = preauthorizePresignedFixture(fixture);
-      const signatures = PARTICIPANT_IDS.map((id, index) => ({ version: 2 as const, protocol: PRESIGNED_PROTOCOL,
+      const signatures = PARTICIPANT_IDS.map((id, index) => ({ version: graph.version, protocol,
         graphDigest: graph.digest, participantId: id, inputIndex: index, witness: tx.ins[index]!.witness.map(value => Buffer.from(value).toString('hex')) }));
       const epoch: PresignedFundingEpoch = { epochId, status, inputs: graph.funding.inputs, graph, preauthorizations, backups: [],
+        ...(v3 ? { recoveryAuthorizations: authorizePresignedFixtureRecoveries(fixture) } : {}),
         walletSigningStarted: status === 'retired' ? [] : [...PARTICIPANT_IDS], signatures: status === 'retired' ? [] : signatures,
         finalization: status === 'retired' ? null : funding, fundingApprovals: status === 'approved' ? [...PARTICIPANT_IDS] : [], restartApprovals: [] };
       if (!existing) {
-        await sql`INSERT INTO vaults(id, name, protocol) VALUES (${vaultId}, 'Isolated Core watch acceptance', ${PRESIGNED_PROTOCOL})`;
+        await sql`INSERT INTO vaults(id, name, protocol) VALUES (${vaultId}, 'Isolated Core watch acceptance', ${protocol})`;
         for (const id of PARTICIPANT_IDS) {
           await sql`INSERT INTO users(id, display_name) VALUES (${users[id]}, ${`Synthetic ${id}`})`;
           await sql`INSERT INTO vault_members(vault_id, user_id, participant_id) VALUES (${vaultId}, ${users[id]}, ${id})`;
@@ -142,16 +147,17 @@ try {
             VALUES (${credentials[id]}, 1, ${randomBytes(32)}, ${randomBytes(12)}, ${randomBytes(64)}, ${randomBytes(32)})`;
         }
         const ceremony = newPresignedCeremony(vaultId, { network: graph.roster.network, genesisHash: graph.roster.genesisHash,
+          ...(v3 ? { protocol: PRESIGNED_PROTOCOL_V3, recoveryPolicy: FIXED_RECOVERY_POLICY } : {}),
           economics: graph.roster.economics, feePolicy: graph.roster.feePolicy, fundingFeeSats: graph.funding.feeSats });
         ceremony.identities = graph.roster.participants; ceremony.roster = graph.roster; ceremony.rosterDigest = graph.rosterDigest;
         ceremony.rosterApprovals = [...PARTICIPANT_IDS]; ceremony.epochs = [epoch];
-        await sql`INSERT INTO presigned_ceremonies(vault_id, settings_json, settings_digest, state_json, state_digest)
-          VALUES (${vaultId}, ${sql.json(json(ceremony.settings))}, ${bytes(ceremony.settingsDigest)}, ${sql.json(json(ceremony))},
-            ${bytes(commitmentDigest('vault/presigned-graph-v2/ceremony/state', ceremony))})`;
+        await sql`INSERT INTO presigned_ceremonies(vault_id, protocol, settings_json, settings_digest, state_json, state_digest)
+          VALUES (${vaultId}, ${protocol}, ${sql.json(json(ceremony.settings))}, ${bytes(ceremony.settingsDigest)}, ${sql.json(json(ceremony))},
+            ${bytes(commitmentDigest(presignedDomain(protocol, 'ceremony/state'), ceremony))})`;
       }
-      await sql`INSERT INTO presigned_funding_epochs(epoch_id, vault_id, ordinal, status, graph_digest, funding_txid, snapshot_json, snapshot_digest)
-        VALUES (${epochId}, ${vaultId}, ${ordinal}, ${status}, ${bytes(graph.digest)}, ${bytes(graph.fundingTxid)}, ${sql.json(json(epoch))},
-          ${bytes(commitmentDigest('vault/presigned-graph-v2/ceremony/epoch', epoch))})`;
+      await sql`INSERT INTO presigned_funding_epochs(epoch_id, vault_id, protocol, ordinal, status, graph_digest, funding_txid, snapshot_json, snapshot_digest)
+        VALUES (${epochId}, ${vaultId}, ${protocol}, ${ordinal}, ${status}, ${bytes(graph.digest)}, ${bytes(graph.fundingTxid)}, ${sql.json(json(epoch))},
+          ${bytes(commitmentDigest(presignedDomain(protocol, 'ceremony/epoch'), epoch))})`;
       return { fixture, users, credentials, epoch, funding, preauthorizations };
     }
     async function poll(stored: Stored, override = backend) {
@@ -159,7 +165,7 @@ try {
       return { result, status: await getPresignedChainStatus(stored.users.alice) };
     }
     async function perform(stored: Stored, id: ParticipantId, body: Record<string, unknown>) {
-      const action = validatePresignedRuntimeAction({ version: 2, protocol: PRESIGNED_PROTOCOL, ...body });
+      const action = validatePresignedRuntimeAction({ version: presignedVersion(protocol), protocol, ...body });
       const deps = { requiredConfirmations: 1, observeCoin: ({ source }: { source: { txid: string; vout: number } }) => backend.observeConfirmedCoin(source) };
       const challenge = await createPresignedRuntimeActionChallenge({ userId: stored.users[id], credentialId: stored.credentials[id],
         challenge: randomBytes(32).toString('base64url'), action }, deps);
@@ -221,7 +227,7 @@ try {
       if (!changedSnapshot) {
         changedSnapshot = true; stored.epoch.status = 'approved'; stored.epoch.fundingApprovals = [...PARTICIPANT_IDS];
         await sql`UPDATE presigned_funding_epochs SET status = 'approved', snapshot_json = ${sql.json(json(stored.epoch))},
-          snapshot_digest = ${bytes(commitmentDigest('vault/presigned-graph-v2/ceremony/epoch', stored.epoch))} WHERE epoch_id = ${stored.epoch.epochId}`;
+          snapshot_digest = ${bytes(commitmentDigest(presignedDomain(protocol, 'ceremony/epoch'), stored.epoch))} WHERE epoch_id = ${stored.epoch.epochId}`;
       }
       return backend.getTip();
     } });
@@ -410,6 +416,33 @@ try {
     assert.equal((await sql`SELECT status FROM vaults WHERE id = ${stored.fixture.roster.vaultId}`)[0]!.status, 'closed');
     pass('same-transaction restart epochs retain histories without a false double-funding alarm; proposal-free terminal detection closes both and survives a real reorg');
 
+    if (v3) {
+      // No coordinator proposal or runtime signature rows are created. The
+      // complete portable kit alone supplies the fixed-refund authority.
+      const offline = await persist(await fixtureFor());
+      await core.rpc('sendrawtransaction', [offline.funding.transactionHex]);
+      await mine(offline.fixture.graph.roster.economics.recoveryDelayBlocks);
+      const graph = offline.fixture.graph;
+      const proposal = buildPresignedSpend({ graph, kind: 'recovery', proposalId: randomUUID(), sourceExitId: null });
+      const transaction = finalizePresignedRecovery({ graph, proposal, recoveryAuthorizations: offline.epoch.recoveryAuthorizations!,
+        contributions: (['alice', 'bob'] as const).map(participantId => createPresignedRecoveryContribution({ graph, proposal, participantId,
+          recoveryTriggerPrivateKey: offline.fixture.keysById[participantId].recoveryTriggerPrivateKeys!.alicebobcarol!,
+          approvedProposalDigest: proposal.digest })) });
+      assert.equal((await sql`SELECT count(*)::int AS count FROM presigned_runtime_proposals WHERE vault_id=${graph.roster.vaultId}`)[0]!.count, 0);
+      await core.rpc('sendrawtransaction', [transaction.transactionHex]); const [refundBlock] = await mine();
+      const watched = await poll(offline);
+      assert.equal(watched.result.deferredVaults, 0);
+      assert.equal(watched.status.epochs[0]!.snapshot!.output!.knownTerminalTxid, transaction.txid);
+      assert.equal((await sql`SELECT status FROM vaults WHERE id=${graph.roster.vaultId}`)[0]!.status, 'closed');
+      await core.rpc('invalidateblock', [refundBlock]);
+      const reorg = await poll(offline);
+      assert(reorg.status.epochs[0]!.snapshot!.invalidatedTxids.includes(transaction.txid));
+      assert.equal((await sql`SELECT status FROM vaults WHERE id=${graph.roster.vaultId}`)[0]!.status, 'active');
+      await core.rpc('reconsiderblock', [refundBlock]); await poll(offline);
+      assert.equal((await sql`SELECT status FROM vaults WHERE id=${graph.roster.vaultId}`)[0]!.status, 'closed');
+      pass('V3 fixed recovery with no server proposal is recognized from the graph, closes the vault, and invalidates/restores across a real reorg');
+    }
+
     // Emulate a worker that lost its separate session lease after collecting
     // the final Core tip but before acquiring the publication transaction.
     // A content hash alone does not order different observations of one state.
@@ -497,9 +530,9 @@ try {
     // Public queue metadata fixtures, not 100 genuine accepted transactions.
     // Their deliberately mismatched authority is rejected before any Core send;
     // accepted and deferred rows are equally eligible on subsequent polls.
-    await sql`INSERT INTO presigned_broadcast_intents (vault_id, epoch_id, kind,
+    await sql`INSERT INTO presigned_broadcast_intents (vault_id, protocol, epoch_id, kind,
       authorization_digest, transaction_json, txids_json, status, created_at, updated_at)
-      SELECT ${stored.fixture.roster.vaultId}::uuid, ${stored.epoch.epochId}::uuid, 'funding',
+      SELECT ${stored.fixture.roster.vaultId}::uuid, ${protocol}, ${stored.epoch.epochId}::uuid, 'funding',
         decode(lpad(to_hex(i), 64, '0'), 'hex'), ${sql.json([stored.funding.transactionHex])},
         ${sql.json([stored.funding.txid])}, 'accepted',
         '2000-01-01'::timestamptz + i * interval '1 second', '2000-01-01'::timestamptz + i * interval '1 second'
@@ -514,12 +547,17 @@ try {
     assert.equal(firstRetry.results.length, 100);
     assert(!firstRetry.results.some(row => row.intentId === fundingIntent.intentId));
     const secondRetry = await retryPresignedBroadcasts(retryDependencies);
-    if (!secondRetry.results.some(row => row.intentId === fundingIntent.intentId && row.status === 'accepted'))
+    const retriedFunding = secondRetry.results.find(row => row.intentId === fundingIntent.intentId);
+    if (!retriedFunding)
       note('100 old accepted/deferred broadcast rows permanently starve a newer interrupted exact transaction');
-    else pass('broadcast retry queue rotates beyond 100 retained rows and discovers a newer lost-reply transaction without resending');
+    else {
+      assert.equal(retriedFunding.status, 'accepted',
+        'queue selected the funding intent but exact accepted-transaction rediscovery deferred; inspect Core availability, not queue ordering');
+      pass('broadcast retry queue rotates beyond 100 retained rows and discovers a newer lost-reply transaction without resending');
+    }
     assert.equal(retrySends, 0);
 
-    const summary = { passed: findings.length === 0, completedChecks: results.length, findings, results,
+    const summary = { passed: findings.length === 0, protocol, completedChecks: results.length, findings, results,
       coreVersion: core.coreVersion, chain: 'network-disabled-regtest-with-test-only-signet-format-bridge',
       database: 'disposable-loopback-PostgreSQL', publicNetworkBroadcasts: 0,
       actualWebAuthnVerification: false, setupPrerequisites: 'synthetic-DB-fixtures-with-real-wallet-signatures',
@@ -527,5 +565,7 @@ try {
     core.record('chain-broadcast-db-acceptance', summary);
     console.log(JSON.stringify({ evidence: core.directory, ...summary }, null, 2));
     if (findings.length) process.exitCode = 1;
-  });
+  // V3's additional graph/signature audits exceeded the previous 15-minute
+  // owned-node lifetime. Bound the full drill without changing any RPC limit.
+  }, { maximumMinutes: v3 ? 45 : 15 });
 } finally { await closeDatabase(); await sql.end(); }

@@ -39,7 +39,8 @@ const inputs = Object.keys(result.metafile.inputs).map(path => {
 for (const path of ['offline/recovery.html','offline/recovery.css','scripts/build-presigned-offline.mjs','package-lock.json'])
   inputs.push({ path, sha256: hash(readFileSync(path)) });
 inputs.sort((a, b) => a.path.localeCompare(b.path));
-const manifest = { version: 2, protocol: 'presigned-graph-v2', format: 'presigned-offline-utility-v1',
+const manifest = { version: 3, protocol: 'presigned-graph-v3', format: 'presigned-offline-utility-v3',
+  supportedProtocols: ['presigned-graph-v2', 'presigned-graph-v3'],
   artifact: 'presigned-recovery.html', sha256: hash(html), inputDigest: hash(JSON.stringify(inputs)),
   byteLength: Buffer.byteLength(html), networkRequests: false, persistentSecretStorage: false, inputs };
 mkdirSync('public/offline', { recursive: true });

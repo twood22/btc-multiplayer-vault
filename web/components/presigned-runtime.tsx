@@ -8,8 +8,9 @@ import { completePresignedExit } from '../../src/presigned/signing';
 import { createPresignedCooperativeNonce, createPresignedRecoveryContribution, signPresignedCooperativePartial,
   signPresignedFinalSweep, verifyPresignedCooperativePartial, type PresignedCooperativePartial,
   type PresignedCooperativePublicNonce } from '../../src/presigned/spends';
-import { PRESIGNED_PROTOCOL, type PresignedParticipant, type PresignedPublicKit } from '../../src/presigned/types';
-import { assert, networkParameters } from '../../src/presigned/validation';
+import { PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, type PresignedProtocol,
+  type PresignedParticipant, type PresignedPublicKit } from '../../src/presigned/types';
+import { assert, networkParameters, presignedVersion } from '../../src/presigned/validation';
 import { observePresignedConfirmedSource } from '../lib/client/presigned-chain';
 import { presignedPost } from '../lib/client/presigned-ceremony';
 import { withUnlockedPresignedParticipant } from '../lib/client/presigned-custody';
@@ -20,14 +21,14 @@ import { approvePresignedRuntimeAction, verifyPresignedRuntimeView,
 import { consumeCooperativeSecnonce, hasCooperativeSecnonce, storeCooperativeSecnonce,
   storedCooperativePubnonce } from '../lib/client/musig2-nonce-vault';
 
-const BASE = { version: 2 as const, protocol: PRESIGNED_PROTOCOL };
 type OwnIdentity = Pick<PresignedParticipant, 'id' | 'personalPublicKeyHex' | 'payoutXonlyPublicKeyHex'>;
 
-export function PresignedRuntime({ vaultId, ownIdentity, passkeys, chainConfig, requiredConfirmations }: {
+export function PresignedRuntime({ vaultId, ownIdentity, passkeys, chainConfig, requiredConfirmations, protocol = PRESIGNED_PROTOCOL }: {
   vaultId: string; ownIdentity: OwnIdentity; passkeys: Array<{ id: string; name: string }>;
-  chainConfig: { apiUrl: string; allowedOrigins: string[] }; requiredConfirmations: number;
+  chainConfig: { apiUrl: string; allowedOrigins: string[] }; requiredConfirmations: number; protocol?: PresignedProtocol;
 }) {
-  const binding = presignedLocalBinding(vaultId, ownIdentity);
+  const BASE = { version: presignedVersion(protocol), protocol };
+  const binding = presignedLocalBinding(vaultId, ownIdentity, protocol);
   const [status, setStatus] = useState<PresignedBrowserRuntimeStatus | null>(null);
   const [credentialId, setCredentialId] = useState(passkeys[0]?.id ?? '');
   const [apiUrl, setApiUrl] = useState(chainConfig.apiUrl);
@@ -39,7 +40,7 @@ export function PresignedRuntime({ vaultId, ownIdentity, passkeys, chainConfig, 
     const response = await fetch('/api/vault/presigned/runtime/status', { credentials: 'same-origin', cache: 'no-store' });
     const value = await response.json();
     assert(response.ok, value.error || 'Runtime status is unavailable');
-    const checked = verifyPresignedRuntimeView(value, { vaultId, participantId: ownIdentity.id });
+    const checked = verifyPresignedRuntimeView(value, { vaultId, participantId: ownIdentity.id, protocol });
     setStatus(checked);
     return checked;
   }
@@ -126,7 +127,10 @@ export function PresignedRuntime({ vaultId, ownIdentity, passkeys, chainConfig, 
       } else if (proposal.kind === 'recovery') {
         const contribution = await withUnlockedPresignedParticipant({ credentialId, expectedVaultId: vaultId,
           expectedParticipant: participant, action: unlocked => createPresignedRecoveryContribution({ graph: kit.graph,
-            proposal: proposal.spend!, participantId: ownIdentity.id, personalPrivateKey: unlocked.keys.personalPrivateKey,
+            proposal: proposal.spend!, participantId: ownIdentity.id,
+            ...(protocol === PRESIGNED_PROTOCOL_V3
+              ? { recoveryTriggerPrivateKey: unlocked.keys.recoveryTriggerPrivateKeys![proposal.source.roundId!]! }
+              : { personalPrivateKey: unlocked.keys.personalPrivateKey }),
             approvedProposalDigest: proposal.spend!.digest }) });
         action = { ...BASE, kind: 'contribute-recovery', proposalId: proposal.proposalId, proposalDigest: proposal.digest, contribution };
       } else if (!state.publicNonces.some(item => item.participantId === ownIdentity.id)) {
@@ -147,7 +151,7 @@ export function PresignedRuntime({ vaultId, ownIdentity, passkeys, chainConfig, 
         action = { ...BASE, kind: 'contribute-nonce', proposalId: proposal.proposalId, proposalDigest: proposal.digest, publicNonce };
       } else {
         assert(state.nonceSetDigest, 'Wait for every participant public nonce before signing a partial');
-        const publicKey = `presigned-v2-public-partial:${vaultId}:${proposal.proposalId}:${ownIdentity.id}`;
+        const publicKey = `presigned-v${BASE.version}-public-partial:${vaultId}:${proposal.proposalId}:${ownIdentity.id}`;
         const retained = localStorage.getItem(publicKey);
         let partial: PresignedCooperativePartial;
         if (retained) {
@@ -208,7 +212,7 @@ export function PresignedRuntime({ vaultId, ownIdentity, passkeys, chainConfig, 
   }
 
   return <section className="panel" aria-label="Presigned transaction coordination">
-    <p className="eyebrow">Live vault · Presigned v2</p><h2>Exit and recovery transactions</h2>
+    <p className="eyebrow">Live vault · Presigned v{BASE.version}</p><h2>Exit and recovery transactions</h2>
     <p role="status">{message}</p>
     <label>Signing passkey<select value={credentialId} onChange={event => setCredentialId(event.target.value)} disabled={working}>
       {passkeys.map(key => <option key={key.id} value={key.id}>{key.name}</option>)}</select></label>

@@ -6,12 +6,33 @@ security audit, mainnet release, or funding authorization**. Protocol identifier
 and merged commit `202345ffd8bab35590fe15b98d966c4267f194ef` remain the rollback
 baseline. Existing funded addresses/transactions cannot change protocol.
 
+2026-09-13 successor design: [V3 fixed-refund recovery](PRESIGNED-V3-FIXED-RECOVERY-DESIGN.md)
+would replace unrestricted quorum spending with preauthorized exact refunds and
+separate delayed triggers. It is NOT implemented; this document continues to
+describe V2, including its recovery collusion risk.
+
 ## Invariants and authority
 
-Exactly three participants deposit equal amounts. First solo payout is 95% of
-one deposit; second is 102.5%; the final participant receives the remainder
-after the committed fees. Cooperative exits refund current participants equally
-with deterministic fee allocation. Economics, scripts, network/genesis hash,
+Exactly three participants deposit equal amounts. New ceremonies use the explicit
+economics marker `payoutSchedule: "last-survivor-net-v1"` (authorized 2026-09-13).
+For each deposit D, first-round base fee F and final-sweep fee S, reserve 3F + S
+from the 3D pool. With N = 3D - 3F - S, first receives floor(19N/60), second
+receives floor(20N/60), and last receives the remainder after the final sweep.
+Thus the net-of-base-fees split is 19:20:21 (95%, 100%, 105% of an equal net
+share), with rounding in favor of last. Integer arithmetic, non-dust payouts,
+and strict first < second < last are validated before any ceremony approval.
+Funding fees and optional fee boosts are additional costs, not covered by that
+ordering guarantee; this is not a guarantee of profit or confirmation.
+
+An absent marker means the ORIGINAL schedule: first 95% of D, second 102.5%
+of D, last the remaining coin minus its fees. Existing rosters, graph digests,
+keys, signatures and backups are not migrated. Unknown markers or inconsistent
+amounts reject. The marker is included in settings, roster, graph, signatures'
+approval bindings and backup commitments. Old clients reject the new field;
+new ceremonies need the rebuilt app and offline utility.
+
+Cooperative exits refund current participants equally with deterministic fee
+allocation. Economics, scripts, network/genesis hash,
 participant identities, recovery delay and fee rules are immutable commitments.
 Mainnet is the production target; default global Signet is real-chain validation.
 
@@ -23,7 +44,13 @@ conditions; BIP-341 SIGHASH_DEFAULT signatures commit the full transaction.
 Unanimous participants may always cooperate to change their allocation. After
 the existing CSV delay, N-1 current participants may take the coin; in a pair
 round that is either person. That is an explicit inherited collusion tradeoff,
-not unilateral safety after recovery matures.
+not unilateral safety after recovery matures. The recovery quorum can freshly
+sign a spend of the entire current coin to arbitrary Bitcoin destinations.
+The app's equal-refund builder is not an on-chain destination or allocation
+restriction. Recovery refunds only the current members; a participant who has
+already exited is not paid again. Recovery and unanimous cooperation can bypass
+the normal solo schedule, so the last-survivor incentive is not protected from
+that trusted quorum after its delay expires.
 
 The browser code and participant device are trust boundaries. Local digest pins,
 independent chain queries and restored kits defend against coordinator **data**
@@ -183,10 +210,14 @@ pinning attacks, not all liveness failures: high-fee competing children, sponsor
 liquidity, wallet compatibility and heterogeneous relay remain constraints.
 Local package acceptance is not a promise of propagation or confirmation.
 
-The UI must display the final payout after base fees, not promise monotonically
-increasing net returns. For the 10,000-sat isolated fixture, the payouts are
-9,500, 10,250 and 9,350 sats: 300 + 600 base fees outweigh the last-player bonus.
-Sponsored fee children preserve these exact amounts, not repair that arithmetic.
+The UI displays the actual committed schedule and last payout both before and
+after its configured sweep. With D=10,000, F=300 and S=300, new-schedule payouts
+are 9,120 / 9,600 / 10,080 sats after the base exit and sweep fees; the final
+pre-sweep coin is 10,380 sats. The ORIGINAL isolated fixture remains
+9,500 / 10,250 / 9,350 before its sweep (9,050 after). It is explicitly labeled
+as not guaranteeing the largest last payout. Optional fee children do not change
+the committed graph payouts, but their costs can change an individual's actual
+net proceeds.
 
 ## Runtime, failure and release boundaries
 

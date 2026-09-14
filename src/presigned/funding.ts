@@ -2,13 +2,13 @@ import { Buffer } from 'buffer';
 import * as bitcoin from 'bitcoinjs-lib';
 import { nonWitnessTransactionHex, psbtUnsignedTransaction, validatePresignedGraph } from './graph.js';
 import type { AuthorizedPresignedTransaction } from './signing.js';
-import { PRESIGNED_PROTOCOL, type ParticipantId, type PresignedGraph } from './types.js';
+import { type ParticipantId, type PresignedGraph } from './types.js';
 import { assert, commitmentDigest, exactKeys, networkParameters, participantId } from './validation.js';
 import { hasWalletSignature, nativeWalletWitnessFromPsbt, verifyNativeWalletWitness } from './wallet.js';
 
 export interface PresignedFundingSignature {
-  version: 2;
-  protocol: typeof PRESIGNED_PROTOCOL;
+  version: PresignedGraph['version'];
+  protocol: PresignedGraph['protocol'];
   graphDigest: string;
   participantId: ParticipantId;
   inputIndex: number;
@@ -37,14 +37,14 @@ export function authorizePresignedFundingSignedPsbt(input: {
   }
   const witness = nativeWalletWitnessFromPsbt(submitted.data.inputs[index]!);
   verifyNativeWalletWitness(tx, index, graph.funding.inputs, witness);
-  return { version: 2, protocol: PRESIGNED_PROTOCOL, graphDigest: graph.digest,
+  return { version: graph.version, protocol: graph.protocol, graphDigest: graph.digest,
     participantId: input.participantId, inputIndex: index, witness: witness.map(item => item.toString('hex')) };
 }
 
 export function verifyPresignedFundingSignature(graphInput: PresignedGraph, contribution: PresignedFundingSignature): PresignedFundingSignature {
   const graph = validatePresignedGraph(graphInput);
   exactKeys(contribution, ['version', 'protocol', 'graphDigest', 'participantId', 'inputIndex', 'witness'], 'funding signature');
-  assert(contribution.version === 2 && contribution.protocol === PRESIGNED_PROTOCOL && contribution.graphDigest === graph.digest, 'funding signature has wrong protocol or graph');
+  assert(contribution.version === graph.version && contribution.protocol === graph.protocol && contribution.graphDigest === graph.digest, 'funding signature has wrong protocol or graph');
   participantId(contribution.participantId);
   const index = graph.funding.inputs.findIndex(coin => coin.participantId === contribution.participantId);
   assert(index >= 0 && index === contribution.inputIndex, 'funding signature has wrong input');
@@ -65,8 +65,8 @@ export function finalizePresignedFunding(input: {
   const tx = bitcoin.Transaction.fromHex(graph.fundingUnsignedTxHex);
   verified.forEach(signature => tx.setWitness(signature.inputIndex, signature.witness.map(item => Buffer.from(item, 'hex'))));
   const authorized = authorizePresignedFundingTransaction({ graph, transactionHex: tx.toHex() });
-  return { ...authorized, finalizationDigest: commitmentDigest('vault/presigned-graph-v2/funding-finalization', {
-    protocol: PRESIGNED_PROTOCOL, graphDigest: graph.digest, ...authorized,
+  return { ...authorized, finalizationDigest: commitmentDigest(`vault/${graph.protocol}/funding-finalization`, {
+    protocol: graph.protocol, graphDigest: graph.digest, ...authorized,
   }) };
 }
 

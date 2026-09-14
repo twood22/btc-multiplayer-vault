@@ -84,6 +84,18 @@ export function vaultPolicyFloors(economics: VaultEconomics): {
 }
 
 export function validateVaultEconomics(input: VaultEconomics): VaultEconomics {
+  const economics = validateVaultEconomicsAmounts(input);
+  if (
+    economics.firstWithdrawalSats + economics.secondWithdrawalSats * 2 !==
+    economics.depositSatsPerParticipant * PARTICIPANTS.length
+  ) {
+    throw new Error('withdrawal schedule must conserve exactly three participant deposits');
+  }
+  return economics;
+}
+
+/** Shared amount/delay checks only; each protocol validates its own payout schedule. */
+export function validateVaultEconomicsAmounts(input: VaultEconomics): VaultEconomics {
   const economics: VaultEconomics = {
     depositSatsPerParticipant: asSats(input.depositSatsPerParticipant),
     firstWithdrawalSats: asSats(input.firstWithdrawalSats),
@@ -101,12 +113,6 @@ export function validateVaultEconomics(input: VaultEconomics): VaultEconomics {
   if (!Number.isSafeInteger(economics.recoveryDelayBlocks) ||
       economics.recoveryDelayBlocks < 1 || economics.recoveryDelayBlocks > 65_535) {
     throw new Error('recovery delay must be an integer from 1 through 65535 blocks');
-  }
-  if (
-    economics.firstWithdrawalSats + economics.secondWithdrawalSats * 2 !==
-    economics.depositSatsPerParticipant * PARTICIPANTS.length
-  ) {
-    throw new Error('withdrawal schedule must conserve exactly three participant deposits');
   }
   for (const [name, value] of Object.entries({
     soloFeeBudgetSats: economics.soloFeeBudgetSats,

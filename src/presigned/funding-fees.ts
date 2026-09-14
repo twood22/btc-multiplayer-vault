@@ -2,7 +2,7 @@ import { Buffer } from 'buffer';
 import * as bitcoin from 'bitcoinjs-lib';
 import { authorizePresignedFundingTransaction } from './funding.js';
 import { fundingFeeShare, validatePresignedGraph } from './graph.js';
-import { PRESIGNED_PROTOCOL, type ParticipantId, type PresignedGraph } from './types.js';
+import { type ParticipantId, type PresignedGraph } from './types.js';
 import { assert, commitmentDigest, exactKeys, hexBytes, networkParameters, participantId, safeInteger, supportedWalletScript } from './validation.js';
 import { nativeWalletWitnessFromPsbt, verifyNativeWalletWitness } from './wallet.js';
 import {
@@ -34,8 +34,8 @@ export interface PresignedFundingFeeChild extends Omit<PresignedFeeChild, 'exitI
 
 /** Public verified witness contribution, never a wallet private key or participant root. */
 export interface PresignedFundingFeeSignature {
-  version: 2;
-  protocol: typeof PRESIGNED_PROTOCOL;
+  version: PresignedGraph['version'];
+  protocol: PresignedGraph['protocol'];
   graphDigest: string;
   approvalDigest: string;
   changeParticipantId: ParticipantId;
@@ -83,6 +83,7 @@ export function buildPresignedFundingFeeChild(request: PresignedFundingFeeReques
   assert(supportedWalletScript(sponsor.scriptPubKeyHex), 'funding fee sponsor must be native P2WPKH or key-path P2TR');
   assert(!graph.rounds.some(round => round.outputScriptHex === sponsor.scriptPubKeyHex), 'a vault cannot sponsor funding fees');
   assert(sponsor.txid !== graph.fundingTxid && !graph.exits.some(exit => exit.txid === sponsor.txid), 'funding sponsor must be outside every funding and graph output');
+  assert(!graph.recoveries?.some(item => item.txid === sponsor.txid), 'fixed recovery refunds cannot sponsor funding fees');
   assert(!graph.funding.inputs.some(coin => coin.txid === sponsor.txid && coin.vout === sponsor.vout), 'funding sponsor must not repeat a funding input');
   safeInteger(changeSats + sponsor.valueSats, 1, FEE_MONEY_MAX, 'funding fee child input total');
   const approval = request.approval;
@@ -122,12 +123,12 @@ export function buildPresignedFundingFeeChild(request: PresignedFundingFeeReques
     preview.setWitness(index, script.startsWith('0014') ? [Buffer.alloc(73), Buffer.alloc(33)] : [Buffer.alloc(65)]));
   assert(preview.virtualSize() <= FEE_TRUC_MAX_CHILD_VSIZE, 'funding fee child exceeds the TRUC descendant size limit');
   const approvalDigest = commitmentDigest('btc-multiplayer-vault/presigned-funding-fee-approval/v1', {
-    protocol: PRESIGNED_PROTOCOL, kind: SPONSORED_PAYOUT_FEE_KIND, graphDigest: graph.digest,
+    protocol: graph.protocol, kind: SPONSORED_PAYOUT_FEE_KIND, graphDigest: graph.digest,
     fundingTransactionHex: request.fundingTransactionHex, changeParticipantId: request.changeParticipantId,
     changeVout, unsignedTxHex: tx.toHex(), fundingInputObservations: request.fundingInputObservations,
     sponsorInput: sponsor, approval,
   });
-  return { version: 2, protocol: PRESIGNED_PROTOCOL, kind: SPONSORED_PAYOUT_FEE_KIND, graphDigest: graph.digest,
+  return { version: graph.version, protocol: graph.protocol, kind: SPONSORED_PAYOUT_FEE_KIND, graphDigest: graph.digest,
     changeParticipantId: request.changeParticipantId, changeVout, changeSats, changeScriptPubKeyHex,
     approvalDigest, psbtBase64: psbt.toBase64(), unsignedTxid: tx.getId(), parentTxid: parent.txid,
     parentFeeSats: parent.feeSats, parentVsize: parent.vsize, sponsorChangeSats,
@@ -164,7 +165,7 @@ export function authorizePresignedFundingFeeWalletPsbt(input: {
     const inputIndex = indexes[index]!;
     const witness = nativeWalletWitnessFromPsbt(submitted.data.inputs[inputIndex]!);
     verifyNativeWalletWitness(tx, inputIndex, fundingFeePrevouts(input.request, built), witness);
-    return { version: 2, protocol: PRESIGNED_PROTOCOL, graphDigest: built.graphDigest, approvalDigest: built.approvalDigest,
+    return { version: built.version, protocol: built.protocol, graphDigest: built.graphDigest, approvalDigest: built.approvalDigest,
       changeParticipantId: built.changeParticipantId, role, inputIndex, witness: witness.map(item => item.toString('hex')) };
   });
 }
@@ -175,7 +176,7 @@ export function verifyPresignedFundingFeeSignature(input: {
   const built = approvedChild(input.request, input.approvalDigest);
   const signature = input.signature;
   exactKeys(signature, ['version', 'protocol', 'graphDigest', 'approvalDigest', 'changeParticipantId', 'role', 'inputIndex', 'witness'], 'funding fee signature');
-  assert(signature.version === 2 && signature.protocol === PRESIGNED_PROTOCOL && signature.graphDigest === built.graphDigest &&
+  assert(signature.version === built.version && signature.protocol === built.protocol && signature.graphDigest === built.graphDigest &&
     signature.approvalDigest === built.approvalDigest && signature.changeParticipantId === built.changeParticipantId,
   'funding fee signature differs from its exact approval');
   const inputIndex = roleIndex(signature.role);

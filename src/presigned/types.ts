@@ -1,6 +1,14 @@
-import type { BitcoinNetworkName, VaultEconomics } from '../types.js';
+import type { BitcoinNetworkName } from '../types.js';
+import type { PresignedEconomics } from './economics.js';
 
 export const PRESIGNED_PROTOCOL = 'presigned-graph-v2' as const;
+export const PRESIGNED_PROTOCOL_V3 = 'presigned-graph-v3' as const;
+export const FIXED_RECOVERY_POLICY = 'fixed-equal-quorum-v1' as const;
+export type PresignedProtocol = typeof PRESIGNED_PROTOCOL | typeof PRESIGNED_PROTOCOL_V3;
+export type PresignedVersion = 2 | 3;
+export function isPresignedProtocol(value: unknown): value is PresignedProtocol {
+  return value === PRESIGNED_PROTOCOL || value === PRESIGNED_PROTOCOL_V3;
+}
 export const LEGACY_PROTOCOL = 'sigbash-v1' as const;
 export const PARTICIPANT_IDS = ['alice', 'bob', 'carol'] as const;
 export type ParticipantId = typeof PARTICIPANT_IDS[number];
@@ -12,15 +20,18 @@ export interface PresignedParticipant {
   personalPublicKeyHex: string;
   payoutXonlyPublicKeyHex: string;
   soloPublicKeys: Partial<Record<RoundId, string>>;
+  recoveryAuthorizationPublicKeys?: Partial<Record<RoundId, string>>;
+  recoveryTriggerPublicKeys?: Partial<Record<RoundId, string>>;
 }
 
 export interface PresignedRoster {
-  version: 2;
-  protocol: typeof PRESIGNED_PROTOCOL;
+  version: PresignedVersion;
+  protocol: PresignedProtocol;
+  recoveryPolicy?: typeof FIXED_RECOVERY_POLICY;
   vaultId: string;
   network: BitcoinNetworkName;
   genesisHash: string;
-  economics: VaultEconomics;
+  economics: PresignedEconomics;
   feePolicy: {
     kind: 'confirmed-truc-payout-cpfp-v1';
     maxChildFeeSats: number;
@@ -36,6 +47,10 @@ export interface PresignedLeaf {
   scriptHex: string;
   leafHash: string;
   controlBlockHex: string;
+  /** V3 recovery only: a mandatory, independent N-of-N setup-signature layer. */
+  authorizationParticipantIds?: ParticipantId[];
+  authorizationPublicKeys?: string[];
+  authorizationThreshold?: number;
 }
 
 export interface PresignedRound {
@@ -90,8 +105,8 @@ export interface PresignedExit {
 }
 
 export interface PresignedGraph {
-  version: 2;
-  protocol: typeof PRESIGNED_PROTOCOL;
+  version: PresignedVersion;
+  protocol: PresignedProtocol;
   roster: PresignedRoster;
   rosterDigest: string;
   funding: PresignedFundingTemplate;
@@ -100,12 +115,14 @@ export interface PresignedGraph {
   fundingTxid: string;
   rounds: PresignedRound[];
   exits: PresignedExit[];
+  /** Present only in V3; one terminal fixed refund per graph round. */
+  recoveries?: PresignedRecovery[];
   digest: string;
 }
 
 export interface Preauthorization {
-  version: 2;
-  protocol: typeof PRESIGNED_PROTOCOL;
+  version: PresignedVersion;
+  protocol: PresignedProtocol;
   graphDigest: string;
   participantId: ParticipantId;
   exitId: string;
@@ -115,10 +132,38 @@ export interface Preauthorization {
 
 /** Entire public capability bundle; still no designated leaver signatures. */
 export interface PresignedPublicKit {
-  version: 2;
-  protocol: typeof PRESIGNED_PROTOCOL;
+  version: PresignedVersion;
+  protocol: PresignedProtocol;
   graph: PresignedGraph;
   preauthorizations: Preauthorization[];
+  recoveryAuthorizations?: RecoveryAuthorization[];
+}
+
+export interface PresignedRecovery {
+  id: string;
+  roundId: RoundId;
+  parentExitId: string | null;
+  recipientIds: ParticipantId[];
+  inputTxid: string;
+  inputVout: number;
+  inputValueSats: number;
+  inputScriptPubKeyHex: string;
+  unsignedTxHex: string;
+  txid: string;
+  psbtBase64: string;
+  feeSats: number;
+  signatureHash: string;
+}
+
+/** Setup-only authorization; never a runtime trigger or a solo capability. */
+export interface RecoveryAuthorization {
+  version: 3;
+  protocol: typeof PRESIGNED_PROTOCOL_V3;
+  purpose: 'fixed-recovery-authorization';
+  graphDigest: string;
+  participantId: ParticipantId;
+  recoveryId: string;
+  signatureHex: string;
 }
 
 /** Client-only. Never accepted by a coordinator route or a log formatter. */
@@ -127,4 +172,6 @@ export interface PresignedParticipantKeys {
   personalPrivateKey: Uint8Array;
   payoutPrivateKey: Uint8Array;
   soloPrivateKeys: Partial<Record<RoundId, Uint8Array>>;
+  recoveryAuthorizationPrivateKeys?: Partial<Record<RoundId, Uint8Array>>;
+  recoveryTriggerPrivateKeys?: Partial<Record<RoundId, Uint8Array>>;
 }

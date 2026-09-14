@@ -17,7 +17,9 @@ import { beginHostRestorationAttempt, completeHostRestorationAttempt, hasHostRes
 import { acquirePersistentSignetOperationLocks, assertPersistentSignetIdentity, DEFAULT_SIGNET_GENESIS,
   launchPersistentSignetDaemon, persistentSignetPid, persistentSignetRpc, readPersistentSignetControl,
   readPersistentSignetRecoveryControl, receivingWalletRecoveryBinding, startPersistentSignetHost,
-  stopPersistentSignetHost, verifyReceivingWalletRecovery, type PersistentSignetControl } from './lib/presigned-signet-host-state.js';
+  stopPersistentSignetHost, verifyReceivingWalletRecovery, persistentSignetProtocol, persistentSignetLifecycleDirectory,
+  type PersistentSignetControl } from './lib/presigned-signet-host-state.js';
+import { presignedVersion } from '../src/presigned/validation.js';
 
 process.umask(0o077);
 const [operation, filename, cacheArgument] = process.argv.slice(2);
@@ -29,10 +31,11 @@ assert(filename && ['journal', 'host', 'host-stage', 'host-resume'].includes(ope
 const control = operation === 'journal' ? readPersistentSignetControl(filename) : readPersistentSignetRecoveryControl(filename);
 verifyReceivingWalletRecovery(control);
 const binding = { chain: 'default-Signet' as const, sourceDigest: control.sourceDigest, actualGenesisHash: DEFAULT_SIGNET_GENESIS };
-const runDirectory = `${control.directory}/lifecycle-v2`;
+const protocol = persistentSignetProtocol(control); const version = presignedVersion(protocol);
+const runDirectory = persistentSignetLifecycleDirectory(control);
 function offlineCustodyCore(journal: DurableLifecycleJournal): LiveLifecycleCore {
   const denied = async (): Promise<never> => { throw new Error('restoration custody audit cannot call a transaction or wallet RPC'); };
-  return { ...binding, rpc: denied, walletRpc: denied, observeCoin: denied, durableJournal: journal,
+  return { ...binding, protocol, rpc: denied, walletRpc: denied, observeCoin: denied, durableJournal: journal,
     restorationParent: control.restorationParent, nativeWalletBackup: { binary: control.binaryPath,
       binarySha256: control.binarySha256, parentDirectory: control.nativeWalletBackupParent } };
 }
@@ -61,7 +64,7 @@ if (operation === 'journal') {
       assert(!existsSync(control.directory), 'host path still exists; retain/inspect it explicitly before whole-host restoration');
       assertNoOwnedProcessUsesDatadir(`${control.directory}/core`);
       const source = cacheArgument!.slice('--stopped-chain-cache='.length); checkStoppedPublicSignetCache(source);
-      const staging = mkdtempSync(`${dirname(control.directory)}/presigned-v2-signet-restore.`);
+      const staging = mkdtempSync(`${dirname(control.directory)}/presigned-v${version}-signet-restore.`);
       syncPrivateJournalDirectory(dirname(staging));
       for (const path of [`${staging}/core`, `${staging}/core/signet`, `${staging}/wallets`, `${staging}/restores`]) mkdirSync(path, { mode: 0o700 });
       syncPrivateJournalDirectory(staging); syncPrivateJournalDirectory(`${staging}/core`);
@@ -70,9 +73,9 @@ if (operation === 'journal') {
       let checkpointDigest: string | null = null;
       let native = { directory: control.receivingWalletRecovery.directory, binding: receivingWalletRecoveryBinding(control) };
       if (existsSync(`${control.journalBackupDirectory}/identity.json`)) {
-        mkdirSync(`${staging}/lifecycle-v2`, { mode: 0o700 });
+        mkdirSync(`${staging}/lifecycle-v${version}`, { mode: 0o700 });
         const journal = restoreDurableLifecycleJournal(runDirectory, control.journalBackupDirectory,
-          control.journalAnchorDirectory, `${staging}/lifecycle-v2`, binding);
+          control.journalAnchorDirectory, `${staging}/lifecycle-v${version}`, binding);
         const custody = await verifyRestoredLiveLifecycleCustody(offlineCustodyCore(journal), journal.directory);
         if (custody.nativeWalletProof) {
           assert.equal(custody.nativeWalletProof.binding.chain, 'signet');

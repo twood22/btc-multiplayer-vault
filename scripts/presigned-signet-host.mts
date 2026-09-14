@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createServer } from 'node:net';
+import { PRESIGNED_PROTOCOL_V3, isPresignedProtocol, type PresignedProtocol } from '../src/presigned/types.js';
+import { presignedVersion } from '../src/presigned/validation.js';
 import { presignedSourceDigest } from './presigned-build-identity.mjs';
 import { privateJournalDirectory, syncPrivateJournalDirectory, writePrivateJournalBytes } from './lib/presigned-durable-journal.js';
 import { createNativeWalletRestoreProof } from './lib/presigned-wallet-restore-proof.js';
@@ -14,6 +16,9 @@ import { assertPersistentSignetIdentity, launchPersistentSignetDaemon, persisten
   startPersistentSignetHost, stopPersistentSignetHost, verifySignetBinary, type PersistentSignetControl } from './lib/presigned-signet-host-state.js';
 
 process.umask(0o077);
+const protocolValue = process.env.PRESIGNED_SIGNET_PROTOCOL ?? PRESIGNED_PROTOCOL_V3;
+assert(isPresignedProtocol(protocolValue)); const protocol: PresignedProtocol = protocolValue;
+const version = presignedVersion(protocol);
 const argument = process.argv[2];
 assert(process.argv.length === 3 && argument?.startsWith('--stopped-chain-cache=/'),
   'usage: tsx scripts/presigned-signet-host.mts --stopped-chain-cache=/absolute/stopped/public/chain-cache/signet');
@@ -22,9 +27,9 @@ checkStoppedPublicSignetCache(source);
 verifySignetBinary();
 const root = resolve(process.cwd(), 'live-run'); privateJournalDirectory(root, true);
 
-const directory = mkdtempSync(`${root}/presigned-v2-signet-host.`);
-const backupRoot = mkdtempSync(`${root}/presigned-v2-signet-backup.`);
-const anchorRoot = mkdtempSync(`${root}/presigned-v2-signet-anchor.`);
+const directory = mkdtempSync(`${root}/presigned-v${version}-signet-host.`);
+const backupRoot = mkdtempSync(`${root}/presigned-v${version}-signet-backup.`);
+const anchorRoot = mkdtempSync(`${root}/presigned-v${version}-signet-anchor.`);
 syncPrivateJournalDirectory(root);
 for (const path of [`${directory}/core`, `${directory}/core/signet`, `${directory}/wallets`, `${directory}/restores`,
   `${backupRoot}/journal`, `${backupRoot}/native-wallet`, `${anchorRoot}/journal`]) mkdirSync(path, { mode: 0o700 });
@@ -37,11 +42,12 @@ const port = (listener.address() as { port: number }).port;
 await new Promise<void>((resolveClose, reject) => listener.close(error => error ? reject(error) : resolveClose()));
 // This incomplete object is never published as control or as a funding address.
 // The only publication comes after an actual offline receiving-wallet restore.
-const control: PersistentSignetControl = { version: 3, kind: 'persistent-isolated-default-signet', network: 'signet',
+const control: PersistentSignetControl = { version: protocol === PRESIGNED_PROTOCOL_V3 ? 4 : 3,
+  ...(protocol === PRESIGNED_PROTOCOL_V3 ? { protocol } : {}), kind: 'persistent-isolated-default-signet', network: 'signet',
   sourceDigest: presignedSourceDigest(), hostId: randomUUID(), startedAt: new Date().toISOString(), directory, backupRoot, anchorRoot,
   journalBackupDirectory: `${backupRoot}/journal`, journalAnchorDirectory: `${anchorRoot}/journal`,
   restorationParent: `${directory}/restores`, nativeWalletBackupParent: `${backupRoot}/native-wallet`,
-  walletName: 'presigned-v2-signet-acceptance', address: '', addressScriptPubKeyHex: '', rpcUrl: `http://127.0.0.1:${port}`,
+  walletName: `presigned-v${version}-signet-acceptance`, address: '', addressScriptPubKeyHex: '', rpcUrl: `http://127.0.0.1:${port}`,
   cookiePath: `${directory}/core/signet/.cookie`, port, binaryPath: SIGNET_CORE_BINARY, binarySha256: SIGNET_CORE_SHA256,
   existingOperationalWalletsUsed: false, publicListeners: false, walletBroadcastDisabled: true,
   receivingWalletRecovery: { directory: '', backupSha256: '', proofSha256: '', actualRestoredNativeSignatures: 0 } };

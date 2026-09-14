@@ -9,7 +9,8 @@ import { privateJournalDirectory, readPrivateJournalBytes, parsePrivateJournalJs
 import { assertHostRestorationReady } from './presigned-host-restoration-gate.js';
 import { acquireLifecycleProcessLock } from './presigned-lifecycle-lock.js';
 import { presignedSourceDigest } from '../presigned-build-identity.mjs';
-import { commitmentDigest } from '../../src/presigned/validation.js';
+import { commitmentDigest, presignedDomain, presignedVersion } from '../../src/presigned/validation.js';
+import { PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, type PresignedProtocol } from '../../src/presigned/types.js';
 import { verifyNativeWalletRestoreProof } from './presigned-wallet-restore-proof.js';
 
 export const SIGNET_CORE_BINARY = '/home/codex/.cache/btc-multiplayer-vault/bitcoin-core-31.1/bin/bitcoind';
@@ -17,13 +18,22 @@ export const SIGNET_CORE_SHA256 = '986e63b3c8770f08d0059820ad3dd085d1ab9e1bea239
 export const DEFAULT_SIGNET_GENESIS = '00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6';
 export const DEFAULT_SIGNET_BLOCK_ONE = '00000086d6b2636cb2a392d45edc4ec544a10024d30141c9adf4bfd9de533b53';
 export interface PersistentSignetControl {
-  version: 3; kind: 'persistent-isolated-default-signet'; network: 'signet'; sourceDigest: string;
+  version: 3 | 4; protocol?: typeof PRESIGNED_PROTOCOL_V3;
+  kind: 'persistent-isolated-default-signet'; network: 'signet'; sourceDigest: string;
   hostId: string; startedAt: string; directory: string; backupRoot: string; anchorRoot: string;
   journalBackupDirectory: string; journalAnchorDirectory: string; restorationParent: string; nativeWalletBackupParent: string;
-  walletName: 'presigned-v2-signet-acceptance'; address: string; addressScriptPubKeyHex: string;
+  walletName: 'presigned-v2-signet-acceptance' | 'presigned-v3-signet-acceptance'; address: string; addressScriptPubKeyHex: string;
   rpcUrl: string; cookiePath: string; port: number; binaryPath: string; binarySha256: string;
   existingOperationalWalletsUsed: false; publicListeners: false; walletBroadcastDisabled: true;
   receivingWalletRecovery: { directory: string; backupSha256: string; proofSha256: string; actualRestoredNativeSignatures: number };
+}
+export function persistentSignetProtocol(control: Pick<PersistentSignetControl, 'version' | 'protocol'>): PresignedProtocol {
+  assert((control.version === 3 && control.protocol === undefined) ||
+    (control.version === 4 && control.protocol === PRESIGNED_PROTOCOL_V3), 'persistent host protocol/version changed');
+  return control.protocol ?? PRESIGNED_PROTOCOL;
+}
+export function persistentSignetLifecycleDirectory(control: PersistentSignetControl) {
+  return `${control.directory}/lifecycle-v${presignedVersion(persistentSignetProtocol(control))}`;
 }
 export function verifySignetBinary() {
   const stat = lstatSync(SIGNET_CORE_BINARY);
@@ -34,17 +44,18 @@ export function verifySignetBinary() {
 function validatePersistentSignetControl(control: PersistentSignetControl, bytes: Buffer, filename: string,
   requireCurrentSource: boolean, requireIndependentCustody: boolean, requirePrimary: boolean) {
   const root = resolve(process.cwd(), 'live-run');
+  const protocol = persistentSignetProtocol(control); const version = presignedVersion(protocol);
   assert(filename === resolve(filename) && dirname(dirname(filename)) === root && basename(filename) === 'control.json' &&
-    /^presigned-v2-signet-host\.[A-Za-z0-9]{6}$/u.test(basename(dirname(filename))), 'not a persistent isolated Signet control path');
+    new RegExp(`^presigned-v${version}-signet-host\\.[A-Za-z0-9]{6}$`, 'u').test(basename(dirname(filename))), 'not a persistent isolated Signet control path');
   privateJournalDirectory(root, true);
   if (requirePrimary) privateJournalDirectory(dirname(filename), true);
-  assert(control.version === 3 && control.kind === 'persistent-isolated-default-signet' && control.network === 'signet' &&
+  assert(control.kind === 'persistent-isolated-default-signet' && control.network === 'signet' &&
     control.directory === dirname(filename) && /^[0-9a-f-]{36}$/u.test(control.hostId) &&
     /^[0-9a-f]{64}$/u.test(control.sourceDigest) && (!requireCurrentSource || control.sourceDigest === presignedSourceDigest()) &&
-    control.walletName === 'presigned-v2-signet-acceptance' &&
+    control.walletName === `presigned-v${version}-signet-acceptance` &&
     control.existingOperationalWalletsUsed === false && control.publicListeners === false && control.walletBroadcastDisabled === true,
     'isolated host version, source or wallet provenance changed; never reinterpret a funded run');
-  for (const [directory, prefix] of [[control.backupRoot, 'presigned-v2-signet-backup.'], [control.anchorRoot, 'presigned-v2-signet-anchor.']]) {
+  for (const [directory, prefix] of [[control.backupRoot, `presigned-v${version}-signet-backup.`], [control.anchorRoot, `presigned-v${version}-signet-anchor.`]]) {
     assert(dirname(directory!) === root && basename(directory!).startsWith(prefix!) && /^[A-Za-z0-9]{6}$/u.test(basename(directory!).slice(prefix!.length)),
       'isolated backup or anchor root escaped its exact persistent scope');
     if (requireIndependentCustody) privateJournalDirectory(directory!, true);
@@ -67,7 +78,7 @@ function validatePersistentSignetControl(control: PersistentSignetControl, bytes
 export function readPersistentSignetControl(filename: string, requireCurrentSource = true, requireIndependentCustody = true,
   allowIncompleteRestoration = false): PersistentSignetControl {
   assert(filename === resolve(filename) && dirname(dirname(filename)) === resolve(process.cwd(), 'live-run') && basename(filename) === 'control.json' &&
-    /^presigned-v2-signet-host\.[A-Za-z0-9]{6}$/u.test(basename(dirname(filename))), 'not a persistent isolated Signet control path');
+    /^presigned-v[23]-signet-host\.[A-Za-z0-9]{6}$/u.test(basename(dirname(filename))), 'not a persistent isolated Signet control path');
   const bytes = readPrivateJournalBytes(filename);
   const control = parsePrivateJournalJson<PersistentSignetControl>(bytes);
   validatePersistentSignetControl(control, bytes, filename, requireCurrentSource, requireIndependentCustody, true);
@@ -78,7 +89,7 @@ export function readPersistentSignetControl(filename: string, requireCurrentSour
  * replacement identity. The exact missing primary path and both replicas bind. */
 export function readPersistentSignetRecoveryControl(filename: string) {
   assert(filename === resolve(filename) && dirname(dirname(filename)) === resolve(process.cwd(), 'live-run') && basename(filename) === 'host-control.json' &&
-    /^presigned-v2-signet-backup\.[A-Za-z0-9]{6}$/u.test(basename(dirname(filename))), 'not an independent isolated Signet control path');
+    /^presigned-v[23]-signet-backup\.[A-Za-z0-9]{6}$/u.test(basename(dirname(filename))), 'not an independent isolated Signet control path');
   const bytes = readPrivateJournalBytes(filename);
   const control = parsePrivateJournalJson<PersistentSignetControl>(bytes);
   assert(filename === `${control.backupRoot}/host-control.json`, 'restore requires the exact independent full-backup control');
@@ -102,7 +113,7 @@ export function persistentSignetArguments(control: Pick<PersistentSignetControl,
 }
 
 export function persistentSignetRpc(control: Pick<PersistentSignetControl, 'rpcUrl' | 'cookiePath' | 'walletName'>) {
-  assert(/^http:\/\/127\.0\.0\.1:[0-9]+$/u.test(control.rpcUrl) && control.walletName === 'presigned-v2-signet-acceptance');
+  assert(/^http:\/\/127\.0\.0\.1:[0-9]+$/u.test(control.rpcUrl) && /^presigned-v[23]-signet-acceptance$/u.test(control.walletName));
   return async (method: string, params: unknown[] = [], wallet = false): Promise<any> => {
     const cookie = readPrivateJournalBytes(control.cookiePath, 512).toString().trim();
     const response = await fetch(`${control.rpcUrl}/${wallet ? `wallet/${control.walletName}` : ''}`, {
@@ -152,9 +163,11 @@ export async function assertPersistentSignetIdentity(control: PersistentSignetCo
   return { network, chain, indexes };
 }
 export function receivingWalletRecoveryBinding(control: Pick<PersistentSignetControl,
-  'hostId' | 'sourceDigest' | 'address' | 'addressScriptPubKeyHex' | 'binarySha256'>) {
+  'hostId' | 'sourceDigest' | 'address' | 'addressScriptPubKeyHex' | 'binarySha256'> &
+  Partial<Pick<PersistentSignetControl, 'version' | 'protocol'>>) {
+  const protocol = control.version === undefined ? PRESIGNED_PROTOCOL : persistentSignetProtocol(control as PersistentSignetControl);
   return { chain: 'signet' as const, binarySha256: control.binarySha256,
-    bindingDigest: commitmentDigest('vault/presigned-graph-v2/persistent-isolated-host-wallet', {
+    bindingDigest: commitmentDigest(presignedDomain(protocol, 'persistent-isolated-host-wallet'), {
       hostId: control.hostId, sourceDigest: control.sourceDigest, address: control.address, scriptPubKeyHex: control.addressScriptPubKeyHex }),
     targets: [{ address: control.address, scriptPubKeyHex: control.addressScriptPubKeyHex }] };
 }

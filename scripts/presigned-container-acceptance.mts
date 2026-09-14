@@ -4,7 +4,8 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { assertReviewedNodeRuntime } from '../src/runtime-version.js';
-import { commitmentDigest } from '../src/presigned/validation.js';
+import { commitmentDigest, presignedDomain, presignedVersion } from '../src/presigned/validation.js';
+import { PRESIGNED_PROTOCOL_V3, isPresignedProtocol, type PresignedProtocol } from '../src/presigned/types.js';
 import { acceptanceEnvironment, parseAcceptanceJson, readPrivateAcceptanceFile, validateBrowserAcceptance, writeAcceptanceJson } from './lib/presigned-acceptance-run.js';
 import { imageExecutionCommand, type ImageExecutionStage } from './lib/presigned-image-commands.js';
 import { assertOciRuntimeImage, protectOwnedOciExport, verifyOciDirectory } from './lib/presigned-oci.js';
@@ -12,6 +13,10 @@ import { presignedSourceDigest } from './presigned-build-identity.mjs';
 
 process.umask(0o077); assertReviewedNodeRuntime();
 const network = process.argv[2];
+const protocolValue = process.env.PRESIGNED_BUILD_PROTOCOL ?? PRESIGNED_PROTOCOL_V3;
+assert(isPresignedProtocol(protocolValue));
+const protocol: PresignedProtocol = protocolValue;
+const version = presignedVersion(protocol);
 assert(process.argv.length === 3 && (network === 'signet' || network === 'mainnet'),
   'usage: tsx scripts/presigned-container-acceptance.mts signet|mainnet (format only; no public Bitcoin broadcast)');
 assert(process.platform === 'linux' && process.getuid?.() !== 0, 'this runner requires local Linux rootless Podman');
@@ -30,7 +35,7 @@ const commands: Array<{ stage: ImageExecutionStage; command: ReturnType<typeof i
 const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 async function run(stage: ImageExecutionStage, imageId?: string) {
   assert.equal(presignedSourceDigest(), sourceDigest, 'source changed during exact-image acceptance');
-  const command = imageExecutionCommand(stage, network as 'signet' | 'mainnet', directory, imageId);
+  const command = imageExecutionCommand(stage, network as 'signet' | 'mainnet', directory, imageId, protocol);
   const startedAt = new Date().toISOString();
   console.log(JSON.stringify({ stage, network, evidence: directory }));
   const stdout: Buffer[] = []; const stderr: Buffer[] = []; let length = 0;
@@ -50,7 +55,7 @@ async function run(stage: ImageExecutionStage, imageId?: string) {
   assert(code === 0 && length <= 32 * 1024 * 1024, `${stage} failed; inspect its protected log, not a fabricated success receipt`);
   assert.equal(presignedSourceDigest(), sourceDigest, 'source changed during exact-image execution');
   commands.push({ stage, command, startedAt, completedAt: new Date().toISOString(), exitCode: 0,
-    commandDigest: commitmentDigest('vault/presigned-graph-v2/image-command', command),
+    commandDigest: commitmentDigest(presignedDomain(protocol, 'image-command'), command),
     stdoutSha256: sha256(out), stderrSha256: sha256(err) });
   return out;
 }
@@ -70,7 +75,7 @@ try {
   assert.equal(image.architecture, process.arch === 'x64' ? 'amd64' : process.arch === 'arm64' ? 'arm64' : 'unsupported',
     'only actual native-platform image execution counts');
   const identity = parseAcceptanceJson(await run('runtime-identity', imageId)) as any;
-  assert(identity.build?.version === 2 && identity.build.protocol === 'presigned-graph-v2' && identity.build.sourceDigest === sourceDigest &&
+  assert(identity.build?.version === version && identity.build.protocol === protocol && identity.build.sourceDigest === sourceDigest &&
     identity.build.network === network && identity.network?.version === 1 && identity.network.network === network);
   assert(identity.nodeVersion === readFileSync('.node-version', 'utf8').trim() && identity.uid > 0 && /^[0-9a-f]{64}$/u.test(identity.utilityDigest));
   writeAcceptanceJson(`${directory}/build-identity.json`, identity.build);
@@ -80,7 +85,8 @@ try {
   assert.equal(paths.length, 1, 'exact image browser runner did not retain one private evidence directory');
   const browserBytes = readPrivateAcceptanceFile(`${paths[0]![1]}/presigned-browser-acceptance.json`);
   const browser = parseAcceptanceJson(browserBytes) as any;
-  validateBrowserAcceptance(browser, sourceDigest, network);
+  validateBrowserAcceptance(browser, sourceDigest, network, protocol);
+  assert.equal(browser.protocol, protocol, 'image browser proof belongs to a different protocol');
   const runtimeBytes = readPrivateAcceptanceFile(`${paths[0]![1]}/container-runtime.json`);
   const runtime = parseAcceptanceJson(runtimeBytes) as any;
   assert(typeof runtime.image === 'string' && `sha256:${runtime.image.replace(/^sha256:/u, '')}` === imageId &&
@@ -89,13 +95,13 @@ try {
     mount.Type === 'tmpfs' && ['/tmp', '/run', '/var/tmp'].includes(mount.Destination)), 'container mounted code or data over the tested image');
   writeFileSync(`${directory}/browser.json`, browserBytes, { mode: 0o600, flag: 'wx' });
   writeFileSync(`${directory}/runtime.json`, runtimeBytes, { mode: 0o600, flag: 'wx' });
-  const body = { version: 2, protocol: 'presigned-graph-v2', kind: 'presigned-v2-exact-oci-execution',
+  const body = { version, protocol, kind: `presigned-v${version}-exact-oci-execution`,
     createdAt, completedAt: new Date().toISOString(), executionDirectory: directory, sourceDigest, network, image,
     testedImageManifestDigest: image.manifestDigest, executedImageConfigDigest: imageId,
     offlineUtilityDigest: identity.utilityDigest, browserDigest: sha256(browserBytes), runtimeDigest: sha256(runtimeBytes),
     commands, actualRootlessContainerExecution: true, codeMounts: false, readonlyRootFilesystem: true,
     realDefaultSignetVerified: false, physicalPasskeysVerified: false, imagePublished: false, fundingAuthorized: false };
-  const receipt = { ...body, receiptDigest: commitmentDigest('vault/presigned-graph-v2/exact-oci-execution', body) };
+  const receipt = { ...body, receiptDigest: commitmentDigest(presignedDomain(protocol, 'exact-oci-execution'), body) };
   writeAcceptanceJson(`${directory}/image-acceptance.json`, receipt);
   console.log(JSON.stringify({ passed: true, network, sourceDigest, testedImageManifestDigest: image.manifestDigest,
     receiptDigest: receipt.receiptDigest, evidence: directory, imagePublished: false, fundingAuthorized: false }));

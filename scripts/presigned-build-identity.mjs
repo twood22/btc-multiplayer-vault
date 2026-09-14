@@ -3,7 +3,9 @@ import { existsSync, lstatSync, readFileSync, readdirSync, writeFileSync } from 
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const protocol = 'presigned-graph-v2';
+// This inventory namespace stays stable across protocol versions. It identifies
+// source bytes only; protocol-specific release receipts supply authorization.
+const sourceInventoryNamespace = 'presigned-graph-v2';
 const roots = ['app', 'src', 'web', 'db', 'scripts', 'offline', '.github'];
 const files = ['package.json', 'package-lock.json', '.node-version', '.npmrc', 'next.config.ts', 'proxy.ts', 'instrumentation.ts',
   'tsconfig.json', 'tsconfig.web.json', 'tsconfig.offline.json', 'tsconfig.scripts.json', 'Dockerfile', '.dockerignore', 'playwright.config.ts'];
@@ -22,13 +24,15 @@ export function presignedSourceDigest(repository = process.cwd()) {
   }
   for (const item of [...roots, ...files]) add(item);
   entries.sort((left, right) => left.path.localeCompare(right.path));
-  return createHash('sha256').update(JSON.stringify({ protocol, entries })).digest('hex');
+  return createHash('sha256').update(JSON.stringify({ protocol: sourceInventoryNamespace, entries })).digest('hex');
 }
 export function recordPresignedBuildIdentity() {
   const network = process.env.VAULT_NETWORK;
   if (!['mainnet', 'signet'].includes(network) || process.env.NEXT_PUBLIC_VAULT_NETWORK !== network)
     throw new Error('presigned build needs explicit matching browser/runtime networks');
-  const profile = { version: 2, protocol, network, sourceDigest: presignedSourceDigest() };
+  const protocol = process.env.PRESIGNED_BUILD_PROTOCOL ?? 'presigned-graph-v3';
+  if (!['presigned-graph-v2', 'presigned-graph-v3'].includes(protocol)) throw new Error('unsupported presigned build protocol');
+  const profile = { version: protocol === 'presigned-graph-v3' ? 3 : 2, protocol, network, sourceDigest: presignedSourceDigest() };
   writeFileSync('vault-presigned-build.json', `${JSON.stringify(profile)}\n`, { mode: 0o644 });
   return profile;
 }

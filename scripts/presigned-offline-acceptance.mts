@@ -5,16 +5,20 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chromium, expect, type BrowserContext, type Page, type Download } from '@playwright/test';
 import * as bitcoin from 'bitcoinjs-lib';
-import { encryptPresignedOfflineBackup, serializePresignedOfflineBackup } from '../src/presigned/backup.js';
+import { createPresignedPublicKit, encryptPresignedOfflineBackup, serializePresignedOfflineBackup } from '../src/presigned/backup.js';
 import { validatePresignedCoinObservations, type PresignedCoinObservations } from '../src/presigned/coin-observations.js';
-import { createPresignedFixture, preauthorizePresignedFixture, signPresignedFixtureFunding } from '../src/presigned/fixtures.js';
+import { authorizePresignedCashoutTransaction } from '../src/presigned/cashout.js';
+import { createPresignedFixture, preauthorizePresignedFixture, signPresignedFixtureFunding,
+  authorizePresignedFixtureRecoveries } from '../src/presigned/fixtures.js';
+import { LAST_SURVIVOR_PAYOUT_SCHEDULE } from '../src/presigned/economics.js';
 import { validatePresignedFeePackage } from '../src/presigned/fee-package.js';
 import { authorizePresignedFundingSignedPsbt, finalizePresignedFunding } from '../src/presigned/funding.js';
 import { buildPresignedGraph } from '../src/presigned/graph.js';
 import { validatePresignedOfflineExchange, validatePresignedOfflineTransaction, type PresignedOfflineTransaction } from '../src/presigned/offline.js';
 import { completePresignedExit } from '../src/presigned/signing.js';
 import { nativeWalletWitnessFromPsbt } from '../src/presigned/wallet.js';
-import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, type ParticipantId, type PresignedPublicKit } from '../src/presigned/types.js';
+import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, type ParticipantId, type PresignedProtocol,
+  type PresignedPublicKit } from '../src/presigned/types.js';
 import { withPresignedRegtest, type PresignedRegtest, type PresignedRegtestCoin } from './lib/presigned-regtest.js';
 
 // Direct Playwright API: never enable traces, screenshots, videos or automatic
@@ -24,7 +28,25 @@ process.umask(0o077);
 const directory = mkdtempSync('/tmp/btc-presigned-offline.');
 const artifact = resolve('public/offline/presigned-recovery.html');
 const manifest = JSON.parse(readFileSync('public/offline/presigned-recovery.manifest.json', 'utf8'));
-assert.equal(createHash('sha256').update(readFileSync(artifact)).digest('hex'), manifest.sha256);
+const selectedProtocol = process.env.PRESIGNED_OFFLINE_TEST_PROTOCOL ?? PRESIGNED_PROTOCOL_V3;
+assert(selectedProtocol === PRESIGNED_PROTOCOL || selectedProtocol === PRESIGNED_PROTOCOL_V3, 'unknown offline test protocol');
+const protocol: PresignedProtocol = selectedProtocol;
+assert.equal(manifest.version, 3);
+assert.equal(manifest.protocol, PRESIGNED_PROTOCOL_V3);
+assert.equal(manifest.format, 'presigned-offline-utility-v3');
+assert.deepEqual(manifest.supportedProtocols, [PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3]);
+function verifyArtifactInputs() {
+  assert.equal(createHash('sha256').update(readFileSync(artifact)).digest('hex'), manifest.sha256);
+  assert.equal(createHash('sha256').update(JSON.stringify(manifest.inputs)).digest('hex'), manifest.inputDigest);
+  assert(Array.isArray(manifest.inputs) && manifest.inputs.length > 0);
+  for (const input of manifest.inputs) {
+    assert(typeof input.path === 'string' && input.path.length > 0 && !input.path.startsWith('/') &&
+      !input.path.split('/').includes('..'), 'offline manifest input escapes the repository');
+    assert.equal(createHash('sha256').update(readFileSync(input.path)).digest('hex'), input.sha256,
+      `offline source changed after the artifact build: ${input.path}`);
+  }
+}
+verifyArtifactInputs();
 const browser = await chromium.launch({ headless: true });
 const actors: Actor[] = [];
 const requests: string[] = [];
@@ -35,15 +57,27 @@ let signedTransactions = 0;
 let restoredKits = 0;
 const boundaryOnly = process.argv[2] === '--boundary-only';
 const feesOnly = process.argv[2] === '--fees-only';
-const lifecycle = !boundaryOnly && !feesOnly;
-assert(process.argv.length === (boundaryOnly || feesOnly ? 3 : 2), 'unknown offline acceptance option');
+const cooperativeOnly = process.argv[2] === '--cooperative-only';
+const cashoutsOnly = process.argv[2] === '--cashouts-only';
+const lifecycle = !boundaryOnly && !feesOnly && !cooperativeOnly && !cashoutsOnly;
+assert(process.argv.length === (boundaryOnly || feesOnly || cooperativeOnly || cashoutsOnly ? 3 : 2), 'unknown offline acceptance option');
 let feeCases = 0;
 let feeChildren = 0;
+let cashoutsConfirmed = 0;
+let cashoutRefusals = 0;
+const cashoutFamilies = new Set<string>();
 let failureDetail: { locations: Array<{ line: number; column: number }>; statuses: string[] } | null = null;
 type Fixture = ReturnType<typeof createPresignedFixture>;
 interface Actor { id: ParticipantId; context: BrowserContext; page: Page; kit: PresignedPublicKit; key: Uint8Array; encrypted: string }
-const publicKit = (fixture: Fixture): PresignedPublicKit => ({ version: 2, protocol: PRESIGNED_PROTOCOL,
-  graph: fixture.graph, preauthorizations: preauthorizePresignedFixture(fixture) });
+const publicKits = new WeakMap<Fixture['graph'], PresignedPublicKit>();
+function publicKit(fixture: Fixture): PresignedPublicKit {
+  const retained = publicKits.get(fixture.graph);
+  if (retained) return retained;
+  const kit = createPresignedPublicKit({ graph: fixture.graph, preauthorizations: preauthorizePresignedFixture(fixture),
+    ...(fixture.graph.version === 3 ? { recoveryAuthorizations: authorizePresignedFixtureRecoveries(fixture) } : {}) });
+  publicKits.set(fixture.graph, kit);
+  return kit;
+}
 async function secretInput(actor: Actor) {
   try { await actor.page.locator('#secret').fill(Buffer.from(actor.key).toString('base64url')); }
   catch { throw new Error('recovery-key input failed; private value redacted'); }
@@ -70,6 +104,11 @@ async function restoreActor(actor: Actor) {
   await actor.page.locator('#expected-funding').fill(actor.kit.graph.fundingTxid);
   await secretInput(actor); await actor.page.locator('#verify').click();
   await expect(actor.page.locator('#status')).toContainText('Kit authenticated');
+  if (actor.kit.version === 3) {
+    const verified = JSON.parse(await actor.page.locator('#binding').textContent() ?? '{}');
+    assert.equal(verified.verifiedFixedRecoveryAuthorizations, 9);
+    assert.equal(verified.verifiedRecoveryTriggerKeys.length, 3);
+  }
   assert.equal(await actor.page.locator('#secret').inputValue(), '');
   assert.equal(await actor.page.evaluate(() => localStorage.length + sessionStorage.length), 0);
   restoredKits++;
@@ -90,6 +129,8 @@ async function prepare(actor: Actor, kind: string, source: string) {
   await actor.page.locator('#source').selectOption(source);
   await actor.page.locator('#prepare').click();
   await expect(actor.page.locator('#status')).toContainText('Fixed transaction rebuilt');
+  if (kind === 'recovery') await expect(actor.page.locator('#review')).toContainText(actor.kit.version === 3
+    ? 'Fixed equal settlement' : 'Legacy recovery risk');
   await actor.page.locator('#reviewed').check();
 }
 async function signedFile(actor: Actor): Promise<PresignedOfflineTransaction> {
@@ -174,10 +215,84 @@ async function observationsFor(core: PresignedRegtest, kit: PresignedPublicKit,
   assert.equal((await core.rpc('getblockchaininfo')).bestblockhash, info.bestblockhash);
   // Explicit TEST-ONLY format mapping: actual coins/anchors are regtest, never
   // call this synthetic identity bridge real Signet or a production receipt.
-  return validatePresignedCoinObservations(graph, { version: 2, protocol: PRESIGNED_PROTOCOL,
+  return validatePresignedCoinObservations(graph, { version: graph.version, protocol: graph.protocol,
     format: 'presigned-private-core-observations-v1', network: graph.roster.network, genesisHash: graph.roster.genesisHash,
     tip: { network: graph.roster.network, genesisHash: graph.roster.genesisHash, hash: info.bestblockhash, height: info.blocks },
     observedAt: new Date().toISOString(), coins: observed, availability });
+}
+async function cashOut(core: PresignedRegtest, actor: Actor, parentHex: string, family: string, wrongOwnerVout?: number) {
+  const parent = bitcoin.Transaction.fromHex(parentHex);
+  const owner = actor.kit.graph.roster.participants.find(item => item.id === actor.id)!;
+  const ownScript = bitcoin.payments.p2tr({ internalPubkey: Buffer.from(owner.payoutXonlyPublicKeyHex, 'hex') }).output!;
+  const vout = parent.outs.findIndex(output => Buffer.from(output.script).equals(ownScript));
+  assert(vout >= 0, 'cash-out test source must pay the restored owner');
+  const report = await observationsFor(core, actor.kit, [vout, ...(wrongOwnerVout === undefined ? [] : [wrongOwnerVout])]
+    .map(index => ({ txid: parent.getId(), vout: index })));
+  const walletAddress = await core.walletRpc('getnewaddress', ['offline-owned-cashout', 'bech32m']);
+  const externalScript = bitcoin.address.toOutputScript(walletAddress, bitcoin.networks.regtest);
+  // The wallet and chain are isolated regtest. Only the script is shared with
+  // the explicit Signet-format fixture; this is never live Signet evidence.
+  const destination = bitcoin.address.fromOutputScript(externalScript, bitcoin.networks.testnet);
+  await loadPublic(actor, '#cashout-observations', report);
+  await expect(actor.page.locator('#status')).toContainText('Cash-out coin observations loaded');
+  await actor.page.locator('#cashout-parent').fill(parentHex);
+  await actor.page.locator('#cashout-vout').fill(String(wrongOwnerVout ?? vout));
+  await actor.page.locator('#cashout-address').fill(destination);
+  await actor.page.locator('#cashout-fee').fill('300');
+  await actor.page.locator('#cashout-fee-cap').fill('2000');
+  if (wrongOwnerVout !== undefined) {
+    await actor.page.locator('#cashout-build').click();
+    await expect(actor.page.locator('#status')).toContainText('owned by this participant payout key');
+    assert.equal(await actor.page.locator('#cashout-reviewed').isChecked(), false); cashoutRefusals++;
+    await actor.page.locator('#cashout-vout').fill(String(vout));
+  }
+  await actor.page.locator('#cashout-build').click();
+  await expect(actor.page.locator('#status')).toContainText('Cash-out rebuilt');
+  const review = JSON.parse(await actor.page.locator('#cashout-review').textContent() ?? '{}');
+  assert.equal(review.destinationAddress, destination); assert.equal(review.additionalCashoutFeeSats, 300);
+  assert.equal(review.youReceiveSats, Number(parent.outs[vout]!.value) - 300);
+  assert.equal(review.source.txid, parent.getId()); assert.equal(review.source.vout, vout);
+  await actor.page.locator('#cashout-reviewed').check();
+  // Changing an input destroys the approval and any signed export. This check
+  // is performed in the real saved page, without injecting state or signers.
+  await actor.page.locator('#cashout-fee').fill('301');
+  assert.equal(await actor.page.locator('#cashout-reviewed').isChecked(), false);
+  await actor.page.locator('#cashout-sign').click();
+  await expect(actor.page.locator('#status')).toContainText('review and explicitly approve'); cashoutRefusals++;
+  await actor.page.locator('#cashout-fee').fill('300'); await actor.page.locator('#cashout-build').click();
+  await expect(actor.page.locator('#status')).toContainText('Cash-out rebuilt');
+  await actor.page.locator('#cashout-reviewed').check(); await secretInput(actor);
+  await actor.page.locator('#cashout-sign').click();
+  await expect(actor.page.locator('#status')).toContainText('Cash-out signed locally. Nothing was broadcast');
+  assert.equal(await actor.page.locator('#secret').inputValue(), '');
+  const saved = JSON.parse(await download(actor, '#cashout-save-json'));
+  assert.equal(saved.format, 'presigned-offline-cashout-v1');
+  assert.equal(saved.version, actor.kit.version); assert.equal(saved.protocol, actor.kit.protocol);
+  assert.deepEqual(saved.request.publicKit, actor.kit);
+  const signed = authorizePresignedCashoutTransaction({ request: saved.request, cashout: saved.cashout,
+    transactionHex: saved.signed.transactionHex });
+  assert.deepEqual(signed, saved.signed);
+  assert.equal((await download(actor, '#cashout-save-hex')).trim(), signed.transactionHex);
+  const tx = bitcoin.Transaction.fromHex(signed.transactionHex);
+  assert.equal(tx.ins.length, 1); assert.equal(tx.outs.length, 1);
+  assert(Buffer.from(tx.outs[0]!.script).equals(externalScript));
+  assert.equal(Number(tx.outs[0]!.value), Number(parent.outs[vout]!.value) - 300);
+  const changed = tx.clone(); changed.outs[0]!.value -= 1n;
+  assert.throws(() => authorizePresignedCashoutTransaction({ request: saved.request, cashout: saved.cashout,
+    transactionHex: changed.toHex() })); cashoutRefusals++;
+  await actor.page.locator('#cashout-address').fill(destination.slice(0, -1));
+  await actor.page.locator('#cashout-save-hex').click();
+  await expect(actor.page.locator('#status')).toContainText('sign the exact reviewed cash-out before saving'); cashoutRefusals++;
+  assert.equal((await core.rpc('testmempoolaccept', [[signed.transactionHex]]))[0].allowed, true);
+  assert.equal(await core.rpc('sendrawtransaction', [signed.transactionHex]), signed.txid); await core.mine();
+  assert((await core.rpc('getrawtransaction', [signed.txid, true])).confirmations >= 1);
+  assert.equal(await core.rpc('gettxout', [parent.getId(), vout, true]), null);
+  const received = await core.rpc('gettxout', [signed.txid, 0, true]);
+  assert(received.confirmations >= 1 && received.scriptPubKey.hex === Buffer.from(externalScript).toString('hex'));
+  assert.equal(await actor.page.evaluate(() => localStorage.length + sessionStorage.length), 0);
+  cashoutsConfirmed++; cashoutFamilies.add(family);
+  checks.push(`offline owner-only ${family} cash-out: external destination, exact additional fee, confirmed; edits invalidate approval/export`);
+  console.log(JSON.stringify({ stage: `offline owner-only ${family} cash-out`, passed: true, confirmed: true }));
 }
 async function feeWallet(core: PresignedRegtest, actor: Actor, funding: boolean) {
   const unsigned = await download(actor, '#save-fee-psbt');
@@ -210,12 +325,13 @@ async function feeWallet(core: PresignedRegtest, actor: Actor, funding: boolean)
     const raw = files.find(value => value.format === 'presigned-offline-fee-transactions-v1');
     assert.deepEqual(raw.transactionHexes, [checked.parentTransactionHex, checked.completed.transactionHex]);
     assert.equal(raw.packageDigest, checked.packageDigest);
+    assert.equal(raw.version, actor.kit.version); assert.equal(raw.protocol, actor.kit.protocol);
     return checked;
   } finally { actor.page.off('download', listener); }
 }
 async function feeCase(core: PresignedRegtest, kind: PresignedOfflineTransaction['kind'], walletKind: 'p2tr' | 'p2wpkh') {
   stage = `offline browser ${kind} fee rescue, ${walletKind} external wallet`;
-  const fixture = createPresignedFixture();
+  const fixture = createPresignedFixture({ protocol });
   const scripts = [];
   for (let index = 0; index < 4; index++) {
     const address = await core.walletRpc('getnewaddress', ['offline-fee-acceptance', walletKind === 'p2tr' ? 'bech32m' : 'bech32']);
@@ -226,6 +342,7 @@ async function feeCase(core: PresignedRegtest, kind: PresignedOfflineTransaction
   fixture.graph = buildPresignedGraph({ roster: fixture.roster, funding: { ...fixture.graph.funding,
     inputs: coins.slice(0, 3).map((coin, index) => ({ ...coin, participantId: PARTICIPANT_IDS[index]!, changeScriptPubKeyHex: coin.scriptPubKeyHex })) } });
   const graph = fixture.graph;
+  publicKit(fixture); // Complete every setup authorization before funding signatures.
   const walletSigned = bitcoin.Psbt.fromBase64((await core.walletRpc('walletprocesspsbt', [graph.fundingPsbtBase64, true, 'ALL', true, false])).psbt);
   const funding = finalizePresignedFunding({ graph, signatures: PARTICIPANT_IDS.map((id, index) => {
     const witness = nativeWalletWitnessFromPsbt(walletSigned.data.inputs[index]!);
@@ -294,6 +411,7 @@ async function feeCase(core: PresignedRegtest, kind: PresignedOfflineTransaction
     assert.deepEqual(child.outs[0], original.outs[0]);
     await core.mine(); assert((await core.rpc('getrawtransaction', [replacement.completed.txid, true])).confirmations >= 1);
     assert((await core.rpc('getrawtransaction', [parent.txid, true])).confirmations >= 1);
+    if (kind !== 'funding') await cashOut(core, actor, replacement.completed.transactionHex, 'cpfp-preserved-payout');
     // First child was Core-accepted then replaced, not falsely counted as mined.
     feeCases++; feeChildren++; checks.push(`${stage}: package accepted, public draft restored, exact child replaced and confirmed`);
     console.log(JSON.stringify({ stage, passed: true, replacedChildConfirmed: false, replacementConfirmed: true }));
@@ -308,10 +426,11 @@ async function feeCase(core: PresignedRegtest, kind: PresignedOfflineTransaction
 try {
   await withPresignedRegtest(async core => {
     async function fixture(source: string | null = null) {
-      const result = createPresignedFixture();
+      const result = createPresignedFixture({ protocol, payoutSchedule: LAST_SURVIVOR_PAYOUT_SCHEDULE });
       const coins = await core.fundScripts(PARTICIPANT_IDS.map(id => ({ scriptPubKeyHex: result.walletKeys[id].scriptPubKeyHex, valueSats: 12_000 })));
       result.graph = buildPresignedGraph({ roster: result.roster, funding: { ...result.graph.funding,
         inputs: coins.map((coin, index) => ({ ...coin, participantId: PARTICIPANT_IDS[index]!, changeScriptPubKeyHex: coin.scriptPubKeyHex })) } });
+      publicKit(result); // Four immutable V3 refunds and all 21 setup signatures precede funding.
       await core.rpc('sendrawtransaction', [signPresignedFixtureFunding(result).transactionHex]); await core.mine();
       if (source !== null) {
         const exit = result.graph.exits.find(item => item.id === source)!;
@@ -327,26 +446,41 @@ try {
       assert.equal(await core.rpc('sendrawtransaction', [transaction.transactionHex]), transaction.txid); await core.mine();
       assert((await core.rpc('getrawtransaction', [transaction.txid, true])).confirmations >= 1); signedTransactions++;
     }
-    if (lifecycle) for (const first of PARTICIPANT_IDS) for (const second of PARTICIPANT_IDS.filter(id => id !== first)) {
+    if (lifecycle || cashoutsOnly) for (const first of PARTICIPANT_IDS) for (const second of PARTICIPANT_IDS.filter(id => id !== first)) {
+      if (cashoutsOnly && (first !== 'alice' || second !== 'bob')) continue;
       stage = `offline browser ${first}/${second} full solo ordering and final sweep`;
       const current = await fixture(); const last = PARTICIPANT_IDS.find(id => id !== first && id !== second)!;
       const group = await Promise.all([first, second, last].map(id => createActor(current, id)));
       try {
-        await confirm(await single(group[0]!, 'solo', first));
+        const solo = await single(group[0]!, 'solo', first); await confirm(solo);
+        if (first === 'alice' && second === 'bob') await cashOut(core, group[0]!, solo.transactionHex, 'solo');
         await confirm(await single(group[1]!, 'solo', `${first}/${second}`));
-        await confirm(await single(group[2]!, 'final-sweep', `${first}/${second}`));
+        const final = await single(group[2]!, 'final-sweep', `${first}/${second}`); await confirm(final);
+        if (first === 'alice' && second === 'bob') await cashOut(core, group[2]!, final.transactionHex, 'final-sweep');
       } finally { for (const actor of group) await closeActor(actor); }
       checks.push(stage); console.log(JSON.stringify({ stage, passed: true }));
     }
-    if (lifecycle) for (const source of [null, ...PARTICIPANT_IDS]) {
+    if (lifecycle || cooperativeOnly || cashoutsOnly) for (const source of [null, ...PARTICIPANT_IDS]) {
+      if (cashoutsOnly && source !== null) continue;
       stage = `offline browser cooperative round after ${source ?? 'funding'}`;
       const current = await fixture(source); const ids = PARTICIPANT_IDS.filter(id => id !== source);
       const group = await Promise.all(ids.map(id => createActor(current, id)));
-      try { await confirm(await cooperate(group, source ?? '', source === null)); }
+      try {
+        const transaction = await cooperate(group, source ?? '', source === null); await confirm(transaction);
+        if (!cooperativeOnly && source === null) await cashOut(core, group[0]!, transaction.transactionHex, 'cooperative');
+      }
+      catch (error) {
+        failureDetail = { locations: error instanceof Error ? [...(error.stack ?? '').matchAll(/presigned-offline-acceptance\.mts:(\d+):(\d+)/gu)]
+          .map(match => ({ line: Number(match[1]), column: Number(match[2]) })) : [],
+          statuses: (await Promise.all(group.map(member => member.page.locator('#status').textContent().catch(() => 'page unavailable'))))
+            .map(value => (value ?? '').replace(/[A-Za-z0-9_+\/=.-]{32,}/gu, '[redacted]').slice(0, 500)) };
+        throw error;
+      }
       finally { for (const actor of group) await closeActor(actor); }
       checks.push(stage); console.log(JSON.stringify({ stage, passed: true }));
     }
-    if (lifecycle) for (const source of [null, ...PARTICIPANT_IDS]) for (const omitted of PARTICIPANT_IDS.filter(id => id !== source)) {
+    if (lifecycle || cashoutsOnly) for (const source of [null, ...PARTICIPANT_IDS]) for (const omitted of PARTICIPANT_IDS.filter(id => id !== source)) {
+      if (cashoutsOnly && (source !== null || omitted !== 'carol')) continue;
       stage = `offline browser recovery after ${source ?? 'funding'}, without ${omitted}`;
       const current = await fixture(source);
       const group = await Promise.all(PARTICIPANT_IDS.filter(id => id !== source && id !== omitted).map(id => createActor(current, id)));
@@ -355,13 +489,24 @@ try {
         const early = await core.rpc('testmempoolaccept', [[transaction.transactionHex]]);
         assert.equal(early[0].allowed, false); assert.equal(early[0]['reject-reason'], 'non-BIP68-final');
         await core.mine(current.graph.roster.economics.recoveryDelayBlocks - 1); await confirm(transaction);
+        if (source === null && omitted === 'carol') {
+          const otherVout = bitcoin.Transaction.fromHex(transaction.transactionHex).outs.findIndex(output => {
+            const carol = current.roster.participants.find(item => item.id === 'carol')!;
+            return Buffer.from(output.script).equals(bitcoin.payments.p2tr({ internalPubkey: Buffer.from(carol.payoutXonlyPublicKeyHex, 'hex') }).output!);
+          });
+          assert(otherVout >= 0); await cashOut(core, group[0]!, transaction.transactionHex, 'recovery', otherVout);
+        }
       } finally { for (const actor of group) await closeActor(actor); }
       checks.push(stage); console.log(JSON.stringify({ stage, passed: true }));
     }
-    if (!boundaryOnly) for (const walletKind of ['p2tr','p2wpkh'] as const)
-      for (const kind of ['funding','solo','cooperative','recovery','final-sweep'] as const) await feeCase(core, kind, walletKind);
-    stage = 'mainnet-format kit restoration and offline security boundary';
-    const mainnet = createPresignedFixture({ network: 'mainnet' }); const actor = await createActor(mainnet, 'alice');
+    if (!boundaryOnly && !cooperativeOnly) for (const walletKind of ['p2tr','p2wpkh'] as const)
+      for (const kind of ['funding','solo','cooperative','recovery','final-sweep'] as const) {
+        if (cashoutsOnly && (walletKind !== 'p2tr' || kind !== 'solo')) continue;
+        await feeCase(core, kind, walletKind);
+      }
+    for (const boundaryProtocol of [PRESIGNED_PROTOCOL_V3, PRESIGNED_PROTOCOL]) {
+    stage = `${boundaryProtocol} mainnet-format kit restoration and offline security boundary`;
+    const mainnet = createPresignedFixture({ network: 'mainnet', protocol: boundaryProtocol }); const actor = await createActor(mainnet, 'alice');
     try {
       stage = 'mainnet-format CSP network prohibition';
       // navigator.onLine is not a reliable file:-origin transport assertion.
@@ -385,16 +530,24 @@ try {
       assert.deepEqual(requests, []); assert.deepEqual(errors, []);
     } finally { await closeActor(actor); }
     checks.push(stage);
-    assert.equal(signedTransactions, lifecycle ? 31 : 0);
-    assert.equal(feeCases, boundaryOnly ? 0 : 10); assert.equal(feeChildren, feeCases);
-    const summary = { passed: true, protocol: PRESIGNED_PROTOCOL, utilitySha256: manifest.sha256,
+    }
+    assert.equal(signedTransactions, lifecycle ? 31 : cooperativeOnly ? 4 : cashoutsOnly ? 5 : 0);
+    assert.equal(feeCases, boundaryOnly || cooperativeOnly ? 0 : cashoutsOnly ? 1 : 10); assert.equal(feeChildren, feeCases);
+    assert.equal(cashoutsConfirmed, lifecycle ? 12 : feesOnly ? 8 : cashoutsOnly ? 5 : 0);
+    if (lifecycle || cashoutsOnly) assert.deepEqual([...cashoutFamilies].sort(),
+      ['cooperative','cpfp-preserved-payout','final-sweep','recovery','solo']);
+    verifyArtifactInputs();
+    const summary = { passed: true, protocol, utilitySha256: manifest.sha256,
       utilityInputDigest: manifest.inputDigest, browserOfflineMode: true, networkRequests: requests.length,
+      exactArtifactInputsVerified: true, mainnetBoundaryProtocols: [PRESIGNED_PROTOCOL_V3, PRESIGNED_PROTOCOL],
       persistentSecretStorage: false, actualBrowserSignedTransactionsConfirmedByCore: signedTransactions,
-      restoredKits, fullSoloOrderings: lifecycle ? 6 : 0, cooperativeRounds: lifecycle ? 4 : 0, recoverySignerSubsets: lifecycle ? 9 : 0,
+      restoredKits, fullSoloOrderings: lifecycle ? 6 : 0, cooperativeRounds: lifecycle || cooperativeOnly ? 4 : 0, recoverySignerSubsets: lifecycle ? 9 : 0,
       feeRescueWalletAndParentCases: feeCases, feeChildrenAcceptedThenReplaced: feeCases, replacementFeeChildrenConfirmedByCore: feeChildren,
-      completeLifecycleEvidence: lifecycle, completeFeeEvidence: !boundaryOnly,
+      ownedPayoutCashoutsConfirmed: cashoutsConfirmed, cashoutPayoutFamilies: [...cashoutFamilies].sort(),
+      cashoutOwnerAndReviewMutationRefusals: cashoutRefusals,
+      completeLifecycleEvidence: lifecycle, completeFeeEvidence: lifecycle || feesOnly, completeCashoutEvidence: lifecycle || cashoutsOnly,
       publicNetworkBroadcasts: 0, chain: 'isolated-regtest', realDefaultSignetEvidence: false, checks };
-    writeFileSync(`${directory}/offline-browser${boundaryOnly ? '-boundary' : feesOnly ? '-fees' : ''}-acceptance.json`, JSON.stringify(summary, null, 2), { mode: 0o600, flag: 'wx' });
+    writeFileSync(`${directory}/offline-browser${boundaryOnly ? '-boundary' : feesOnly ? '-fees' : cooperativeOnly ? '-cooperative' : cashoutsOnly ? '-cashouts' : ''}-acceptance.json`, JSON.stringify(summary, null, 2), { mode: 0o600, flag: 'wx' });
     core.record('offline-browser-acceptance', summary);
     console.log(JSON.stringify({ evidence: directory, ...summary }, null, 2));
   }, { maximumMinutes: lifecycle ? 45 : 15 });

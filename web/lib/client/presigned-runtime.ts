@@ -5,8 +5,8 @@ import { presignedRuntimeActionDigest, presignedRuntimeTransactionDigest, valida
 import { authorizePresignedExitTransaction } from '../../../src/presigned/signing';
 import { authorizePresignedSpendTransaction, validatePresignedCooperativeNonces,
   verifyPresignedCooperativePartial, verifyPresignedRecoveryContribution } from '../../../src/presigned/spends';
-import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL } from '../../../src/presigned/types';
-import { assert, sameCanonical } from '../../../src/presigned/validation';
+import { PARTICIPANT_IDS, type PresignedProtocol } from '../../../src/presigned/types';
+import { assert, sameCanonical, validatePresignedProtocol } from '../../../src/presigned/validation';
 import type { PresignedChainStatus } from '../server/presigned-chain-store';
 import type { PresignedRuntimeStatus } from '../server/presigned-runtime-store';
 import { presignedPost } from './presigned-ceremony';
@@ -18,16 +18,18 @@ export type PresignedBrowserRuntimeStatus = Omit<PresignedRuntimeStatus, 'broadc
 
 /** Public signatures, not presentation phase labels, establish exact transaction content. */
 export function verifyPresignedRuntimeView(status: PresignedBrowserRuntimeStatus, expected: {
-  vaultId: string; participantId: string;
+  vaultId: string; participantId: string; protocol?: PresignedProtocol;
 }): PresignedBrowserRuntimeStatus {
-  assert(status.version === 2 && status.protocol === PRESIGNED_PROTOCOL && status.vaultId === expected.vaultId &&
+  validatePresignedProtocol(status.version, status.protocol);
+  assert((expected.protocol === undefined || status.protocol === expected.protocol) && status.vaultId === expected.vaultId &&
     status.participantId === expected.participantId, 'runtime changed protocol or membership');
-  assert(status.chain.protocol === PRESIGNED_PROTOCOL && status.chain.vaultId === expected.vaultId, 'runtime watch changed vault');
+  assert(status.chain.protocol === status.protocol && status.chain.version === status.version && status.chain.vaultId === expected.vaultId, 'runtime watch changed vault');
   assert(Array.isArray(status.kits) && status.kits.length <= 64 && Array.isArray(status.proposals) && status.proposals.length <= 1024,
     'runtime response exceeds retained-state bounds');
   const kits = status.kits.map(item => {
     const publicKit = validatePresignedPublicKit(item.publicKit);
-    assert(publicKit.graph.roster.vaultId === expected.vaultId && publicKit.graph.funding.epochId === item.epochId,
+    assert(publicKit.protocol === status.protocol && publicKit.version === status.version &&
+      publicKit.graph.roster.vaultId === expected.vaultId && publicKit.graph.funding.epochId === item.epochId,
       'runtime kit changed its vault or funding epoch');
     return publicKit;
   });
@@ -35,7 +37,7 @@ export function verifyPresignedRuntimeView(status: PresignedBrowserRuntimeStatus
   assert(new Set(status.proposals.map(state => state.proposal.proposalId)).size === status.proposals.length, 'runtime repeats a proposal');
   for (const state of status.proposals) {
     const graph = kits.find(kit => kit.graph.digest === state.proposal.graphDigest)?.graph;
-    assert(graph && state.version === 2 && state.protocol === PRESIGNED_PROTOCOL, 'runtime proposal lacks its exact retained kit');
+    assert(graph && state.version === graph.version && state.protocol === graph.protocol, 'runtime proposal lacks its exact retained kit');
     const proposal = validatePresignedRuntimeProposal(graph, state.proposal);
     assert(['collecting', 'finalized', 'abandoned'].includes(state.status), 'unknown runtime proposal status');
     assert(state.publicNonces.length <= proposal.participantIds.length && state.partials.length <= proposal.participantIds.length &&
@@ -80,7 +82,7 @@ export async function approvePresignedRuntimeAction(credentialId: string, action
   const approval = await presignedPost<{ challengeId: string; protocol: string; action: PresignedRuntimeAction;
     actionDigest: string; proposal: PresignedRuntimeProposal; options: Record<string, unknown> }>(
     '/api/vault/presigned/runtime/action/options', { credentialId, action });
-  assert(approval.protocol === PRESIGNED_PROTOCOL && approval.actionDigest === digest &&
+  assert(approval.protocol === action.protocol && approval.actionDigest === digest &&
     presignedRuntimeActionDigest(approval.action) === digest, 'coordinator changed the runtime action before approval');
   sameCanonical(approval.proposal, expectedProposal, 'runtime passkey proposal');
   const credentials = approval.options.allowCredentials as Array<{ id: string; type: string }>;

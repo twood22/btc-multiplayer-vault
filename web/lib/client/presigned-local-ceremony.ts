@@ -2,16 +2,17 @@
 import { presignedBackupBinding, type PresignedRestorationProof } from '../../../src/presigned/backup';
 import { validatePresignedRestorationReceipt } from '../../../src/presigned/ceremony';
 import { validatePresignedGraph } from '../../../src/presigned/graph';
-import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, type ParticipantId, type PresignedFundingInput,
+import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, type PresignedProtocol, type ParticipantId, type PresignedFundingInput,
   type PresignedGraph, type PresignedParticipant, type PresignedPublicKit } from '../../../src/presigned/types';
 import { assert, canonicalJson, commitmentDigest, exactKeys, hexBytes, identifier, publicKey,
-  safeInteger, sameCanonical, supportedWalletScript } from '../../../src/presigned/validation';
+  safeInteger, sameCanonical, supportedWalletScript, presignedDomain } from '../../../src/presigned/validation';
 import type { PresignedCeremonyStatus } from '../server/presigned-store';
 
 const DOMAIN = 'vault/presigned-graph-v2/local-ceremony';
 const MAX_RECORDS = 512;
 const MAX_RECORD_BYTES = 4096;
 export interface PresignedLocalBinding {
+  protocol?: typeof PRESIGNED_PROTOCOL_V3;
   vaultId: string; participantId: ParticipantId; personalPublicKeyHex: string; payoutXonlyPublicKeyHex: string;
 }
 interface GraphBinding { epochId: string; rosterDigest: string; graphDigest: string; fundingTxid: string }
@@ -28,9 +29,11 @@ export type PresignedLocalStorage = Pick<Storage, 'length' | 'key' | 'getItem' |
  * This protects trusted browser code from coordinator DATA equivocation, not malicious served JavaScript,
  * cleared browser storage, compromised extensions, or a user editing their own storage. */
 export function presignedLocalBinding(vaultId: string, identity: Pick<PresignedParticipant,
-  'id' | 'personalPublicKeyHex' | 'payoutXonlyPublicKeyHex'>): PresignedLocalBinding {
+  'id' | 'personalPublicKeyHex' | 'payoutXonlyPublicKeyHex'>, protocol: PresignedProtocol = PRESIGNED_PROTOCOL): PresignedLocalBinding {
+  assert(protocol === PRESIGNED_PROTOCOL || protocol === PRESIGNED_PROTOCOL_V3, 'unknown local binding protocol');
   const binding = { vaultId, participantId: identity.id, personalPublicKeyHex: identity.personalPublicKeyHex,
-    payoutXonlyPublicKeyHex: identity.payoutXonlyPublicKeyHex };
+    payoutXonlyPublicKeyHex: identity.payoutXonlyPublicKeyHex,
+    ...(protocol === PRESIGNED_PROTOCOL_V3 ? { protocol } : {}) };
   validateBinding(binding);
   return binding;
 }
@@ -87,7 +90,8 @@ export async function withPresignedLocalCeremonyLock<T>(binding: PresignedLocalB
 
 export function assertPresignedLocalStatus(status: PresignedCeremonyStatus, local: PresignedLocalCeremony): void {
   validateLocalState(local);
-  assert(status.vaultId === local.binding.vaultId && status.participantId === local.binding.participantId,
+  assert(status.protocol === (local.binding.protocol ?? PRESIGNED_PROTOCOL) &&
+    status.vaultId === local.binding.vaultId && status.participantId === local.binding.participantId,
     'coordinator changed the local identity binding');
   const own = status.identities.find(identity => identity.id === local.binding.participantId);
   if (own) assert(own.personalPublicKeyHex === local.binding.personalPublicKeyHex &&
@@ -143,7 +147,8 @@ export function assertPresignedLocalGraphApproved(graphInput: PresignedGraph, lo
   const graph = validatePresignedGraph(graphInput);
   validateLocalState(local);
   const own = graph.roster.participants.find(identity => identity.id === local.binding.participantId);
-  assert(graph.roster.vaultId === local.binding.vaultId && own?.personalPublicKeyHex === local.binding.personalPublicKeyHex &&
+  assert(graph.protocol === (local.binding.protocol ?? PRESIGNED_PROTOCOL) &&
+    graph.roster.vaultId === local.binding.vaultId && own?.personalPublicKeyHex === local.binding.personalPublicKeyHex &&
     own.payoutXonlyPublicKeyHex === local.binding.payoutXonlyPublicKeyHex, 'runtime graph changed the locally bound identity');
   assert(local.records.some(record => record.kind === 'roster-compared' && record.rosterDigest === graph.rosterDigest),
     'compare the runtime roster locally before signing');
@@ -171,7 +176,7 @@ export function presignedLocallyRestoredRecord(input: { publicKit: PresignedPubl
   proof: PresignedRestorationProof; backupKind: 'offline' | 'passkey'; credentialId: string | null;
   backupFileDigest: string | null }): PresignedLocalRecord {
   validatePresignedRestorationReceipt({ graph: input.publicKit.graph, preauthorizations: input.publicKit.preauthorizations,
-    participantId: input.participantId, proof: input.proof });
+    recoveryAuthorizations: input.publicKit.recoveryAuthorizations, participantId: input.participantId, proof: input.proof });
   sameCanonical(presignedBackupBinding(input.publicKit, input.participantId), input.proof.binding, 'local restoration binding');
   const binding = input.proof.binding;
   return { kind: 'backup-restored', epochId: binding.epochId, rosterDigest: binding.rosterDigest,
@@ -180,7 +185,8 @@ export function presignedLocallyRestoredRecord(input: { publicKit: PresignedPubl
 }
 
 function validateBinding(binding: PresignedLocalBinding) {
-  exactKeys(binding, ['vaultId', 'participantId', 'personalPublicKeyHex', 'payoutXonlyPublicKeyHex'], 'local ceremony identity');
+  exactKeys(binding, ['vaultId', 'participantId', 'personalPublicKeyHex', 'payoutXonlyPublicKeyHex',
+    ...(binding.protocol === PRESIGNED_PROTOCOL_V3 ? ['protocol'] : [])], 'local ceremony identity');
   identifier(binding.vaultId, 'local vault');
   assert(PARTICIPANT_IDS.includes(binding.participantId), 'invalid local participant');
   publicKey(binding.personalPublicKeyHex, true, 'local personal key');
@@ -264,9 +270,14 @@ function validateLocalState(state: PresignedLocalCeremony) {
 }
 function storagePrefix(binding: PresignedLocalBinding): string {
   validateBinding(binding);
-  return `presigned-local-v2:${commitmentDigest(`${DOMAIN}/identity`, { protocol: PRESIGNED_PROTOCOL, ...binding })}:`;
+  const protocol = binding.protocol ?? PRESIGNED_PROTOCOL;
+  return `presigned-local-v${protocol === PRESIGNED_PROTOCOL_V3 ? 3 : 2}:${commitmentDigest(
+    presignedDomain(protocol, 'local-ceremony/identity'), { protocol, ...binding })}:`;
 }
-function recordKey(prefix: string, record: PresignedLocalRecord): string { return `${prefix}${commitmentDigest(`${DOMAIN}/record`, record)}`; }
+function recordKey(prefix: string, record: PresignedLocalRecord): string {
+  const domain = prefix.startsWith('presigned-local-v3:') ? presignedDomain(PRESIGNED_PROTOCOL_V3, 'local-ceremony') : DOMAIN;
+  return `${prefix}${commitmentDigest(`${domain}/record`, record)}`;
+}
 function browserStorage(): PresignedLocalStorage {
   assert(typeof window !== 'undefined' && window.localStorage, 'persistent local browser storage is required for vault safety');
   return window.localStorage;

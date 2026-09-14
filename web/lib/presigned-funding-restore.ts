@@ -5,8 +5,8 @@ import { finalizePresignedFunding } from '../../src/presigned/funding.js';
 import { validatePresignedGraph } from '../../src/presigned/graph.js';
 import { createPresignedFundingRestoreReceipt, validatePresignedRestoredFundingBinding, type PresignedRestoredFundingBinding } from '../../src/presigned/restore.js';
 import { createDatabaseRestoreReceipt } from '../../src/database-restore-receipt.js';
-import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, type ParticipantId } from '../../src/presigned/types.js';
-import { assert, commitmentDigest, identifier, sameCanonical } from '../../src/presigned/validation.js';
+import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL_V3, type ParticipantId } from '../../src/presigned/types.js';
+import { assert, commitmentDigest, identifier, sameCanonical, presignedDomain, validatePresignedProtocol } from '../../src/presigned/validation.js';
 import { captureDatabaseRuntimeIdentity, captureDatabaseSnapshotInTransaction, compareDatabaseSnapshots } from './database-snapshot.js';
 
 /** Capture from the supplied connection, never a hidden environment-selected DB. */
@@ -19,26 +19,28 @@ export async function readPresignedFundingRestoreBinding(sql: TransactionSql, va
   const rows = await sql<Array<{ state_json: PresignedCeremonyState; state_digest: Buffer; settings_digest: Buffer; settings_json: unknown }>>`
     SELECT c.state_json, c.state_digest, c.settings_digest, c.settings_json FROM presigned_ceremonies c
     JOIN vaults v ON v.id = c.vault_id AND v.protocol = c.protocol
-    WHERE c.vault_id = ${vaultId}::uuid AND c.protocol = ${PRESIGNED_PROTOCOL}`;
-  assert(rows.length === 1, 'restore database does not contain the exact V2 ceremony');
+    WHERE c.vault_id = ${vaultId}::uuid AND c.protocol IN ('presigned-graph-v2', 'presigned-graph-v3')`;
+  assert(rows.length === 1, 'restore database does not contain the exact presigned ceremony');
   const row = rows[0]!; const state = row.state_json;
-  assert(state.version === 2 && state.protocol === PRESIGNED_PROTOCOL && state.vaultId === vaultId &&
-    commitmentDigest('vault/presigned-graph-v2/ceremony/state', state) === row.state_digest.toString('hex'), 'restored ceremony identity or digest changed');
+  validatePresignedProtocol(state.version, state.protocol);
+  const protocol = state.protocol;
+  assert(state.vaultId === vaultId &&
+    commitmentDigest(presignedDomain(protocol, 'ceremony/state'), state) === row.state_digest.toString('hex'), 'restored ceremony identity or digest changed');
   sameCanonical(state.settings, row.settings_json, 'restored settings');
   assert(state.settingsDigest === row.settings_digest.toString('hex') &&
     newPresignedCeremony(vaultId, state.settings).settingsDigest === state.settingsDigest, 'restored settings digest changed');
   const epochs = await sql<Array<{ epoch_id: string; ordinal: number; status: string; snapshot_json: PresignedFundingEpoch;
     snapshot_digest: Buffer; graph_digest: Buffer | null; funding_txid: Buffer | null }>>`
     SELECT epoch_id, ordinal, status, snapshot_json, snapshot_digest, graph_digest, funding_txid FROM presigned_funding_epochs
-    WHERE vault_id = ${vaultId}::uuid AND protocol = ${PRESIGNED_PROTOCOL} ORDER BY ordinal`;
+    WHERE vault_id = ${vaultId}::uuid AND protocol = ${protocol} ORDER BY ordinal`;
   assert(epochs.length >= 1 && epochs.length <= 64 && epochs.length === state.epochs.length, 'restore lost a retained funding epoch');
   for (const [index, epoch] of epochs.entries()) {
     assert(epoch.ordinal === index + 1 && epoch.epoch_id === epoch.snapshot_json.epochId && epoch.status === epoch.snapshot_json.status &&
-      commitmentDigest('vault/presigned-graph-v2/ceremony/epoch', epoch.snapshot_json) === epoch.snapshot_digest.toString('hex'), 'restored epoch order or digest changed');
+      commitmentDigest(presignedDomain(protocol, 'ceremony/epoch'), epoch.snapshot_json) === epoch.snapshot_digest.toString('hex'), 'restored epoch order or digest changed');
     sameCanonical(epoch.snapshot_json, state.epochs[index], 'restored immutable epoch history');
     if (epoch.snapshot_json.graph) {
       const graph = validatePresignedGraph(epoch.snapshot_json.graph);
-      assert(graph.digest === epoch.graph_digest?.toString('hex') && graph.fundingTxid === epoch.funding_txid?.toString('hex') &&
+      assert(graph.protocol === protocol && graph.digest === epoch.graph_digest?.toString('hex') && graph.fundingTxid === epoch.funding_txid?.toString('hex') &&
         graph.roster.vaultId === vaultId && graph.funding.epochId === epoch.epoch_id, 'restored retained graph binding changed');
     } else assert(epoch.graph_digest === null && epoch.funding_txid === null, 'restored collecting epoch has unexplained graph commitments');
   }
@@ -68,19 +70,20 @@ export async function readPresignedFundingRestoreBinding(sql: TransactionSql, va
     custody.filter(item => item.participant_id === id).map(item => item.credential_id)])) as PresignedEligibleCredentials;
   assert(presignedWalletSigningReady(state, eligible), 'restored funding lacks every offline and two-passkey restoration prerequisite');
   for (const receipt of epoch.backups) validatePresignedRestorationReceipt({ graph, preauthorizations: epoch.preauthorizations,
-    participantId: receipt.participantId, proof: receipt.proof });
+    recoveryAuthorizations: epoch.recoveryAuthorizations, participantId: receipt.participantId, proof: receipt.proof });
   sameCanonical([...state.rosterApprovals].sort(), [...PARTICIPANT_IDS], 'restored roster approvals');
   sameCanonical([...epoch.walletSigningStarted].sort(), [...PARTICIPANT_IDS], 'restored wallet signing intents');
   sameCanonical([...epoch.fundingApprovals].sort(), [...PARTICIPANT_IDS], 'restored exact final approvals');
   sameCanonical(finalizePresignedFunding({ graph, signatures: epoch.signatures }), epoch.finalization, 'restored funding signatures and final bytes');
-  return validatePresignedRestoredFundingBinding({ network: graph.roster.network, genesisHash: graph.roster.genesisHash,
+  return validatePresignedRestoredFundingBinding({ ...(protocol === PRESIGNED_PROTOCOL_V3 ? { protocol } : {}),
+    network: graph.roster.network, genesisHash: graph.roster.genesisHash,
     vaultId, epochId, graphDigest: graph.digest, fundingTxid: graph.fundingTxid, finalizationDigest: epoch.finalization.finalizationDigest,
     ceremonyStateDigest: row.state_digest.toString('hex'),
-    retainedEpochsDigest: commitmentDigest('vault/presigned-graph-v2/restored-epochs', epochs.map(item => ({ epochId: item.epoch_id,
+    retainedEpochsDigest: commitmentDigest(presignedDomain(protocol, 'restored-epochs'), epochs.map(item => ({ epochId: item.epoch_id,
       ordinal: item.ordinal, snapshotDigest: item.snapshot_digest.toString('hex') }))),
     // Authentication counters and last-used timestamps legitimately advance
     // after a restore drill. The actual key/ciphertext and ownership cannot.
-    custodyMaterialDigest: commitmentDigest('vault/presigned-graph-v2/restored-custody', custody) });
+    custodyMaterialDigest: commitmentDigest(presignedDomain(protocol, 'restored-custody'), custody) });
 }
 
 /** Read-only proof producer. The CLI separately enforces protected TLS endpoints. */

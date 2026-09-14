@@ -8,20 +8,27 @@ import { buildPresignedGraph } from './graph.js';
 import { authorizePresignedFundingSignedPsbt, finalizePresignedFunding } from './funding.js';
 import { derivePresignedParticipantKeys } from './roster.js';
 import { createPreauthorizations } from './signing.js';
-import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, type ParticipantId, type PresignedParticipantKeys, type PresignedRoster } from './types.js';
-import { genesisHash, networkParameters } from './validation.js';
+import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, FIXED_RECOVERY_POLICY, type ParticipantId, type PresignedParticipantKeys, type PresignedProtocol, type PresignedRoster } from './types.js';
+import { genesisHash, networkParameters, presignedVersion } from './validation.js';
+import { createLastSurvivorEconomics, type PresignedEconomics } from './economics.js';
+import { createRecoveryAuthorizations } from './fixed-recovery.js';
 
-export function createPresignedFixture(input: { walletKinds?: ('p2wpkh' | 'p2tr')[]; network?: BitcoinNetworkName } = {}) {
+export function createPresignedFixture(input: { walletKinds?: ('p2wpkh' | 'p2tr')[]; network?: BitcoinNetworkName;
+  payoutSchedule?: PresignedEconomics['payoutSchedule']; protocol?: PresignedProtocol } = {}) {
   const vaultId = '22222222-2222-4222-8222-222222222222';
   const participantSecrets = Object.fromEntries(PARTICIPANT_IDS.map((id, index) => [id, Buffer.alloc(32, index + 1).toString('base64url')])) as Record<ParticipantId, string>;
-  const derived = PARTICIPANT_IDS.map(id => derivePresignedParticipantKeys(participantSecrets[id], id, vaultId));
+  const protocol = input.protocol ?? PRESIGNED_PROTOCOL;
+  const derived = PARTICIPANT_IDS.map(id => derivePresignedParticipantKeys(participantSecrets[id], id, vaultId, protocol));
   const keysById = Object.fromEntries(derived.map(item => [item.publicIdentity.id, item.keys])) as Record<ParticipantId, PresignedParticipantKeys>;
   const network = input.network ?? 'signet';
-  const roster: PresignedRoster = { version: 2, protocol: PRESIGNED_PROTOCOL, vaultId, network, genesisHash: genesisHash(network),
+  const roster: PresignedRoster = { version: presignedVersion(protocol), protocol,
+    ...(protocol === PRESIGNED_PROTOCOL_V3 ? { recoveryPolicy: FIXED_RECOVERY_POLICY } : {}), vaultId, network, genesisHash: genesisHash(network),
     economics: { depositSatsPerParticipant: asSats(10_000), firstWithdrawalSats: asSats(9500), secondWithdrawalSats: asSats(10_250),
       soloWithdrawalFeeSats: asSats(300), soloFeeBudgetSats: asSats(2000), cooperativeFeeSats: asSats(300),
       recoveryFeeSats: asSats(500), finalSweepFeeSats: asSats(300), recoveryDelayBlocks: 12 },
     feePolicy: { kind: 'confirmed-truc-payout-cpfp-v1', maxChildFeeSats: 100_000 }, participants: derived.map(item => item.publicIdentity) };
+  // Historical fixtures deliberately keep the original committed schedule.
+  if (input.payoutSchedule || protocol === PRESIGNED_PROTOCOL_V3) roster.economics = createLastSurvivorEconomics(roster.economics);
   const wallets = PARTICIPANT_IDS.map((id, index) => {
     const pair = deterministicKeypair('public-presigned-v2-offline-fixture', `${id}:external-wallet`);
     const kind = input.walletKinds?.[index] ?? (index === 1 ? 'p2wpkh' : 'p2tr');
@@ -42,6 +49,11 @@ export function createPresignedFixture(input: { walletKinds?: ('p2wpkh' | 'p2tr'
 export function preauthorizePresignedFixture(fixture: ReturnType<typeof createPresignedFixture>) {
   return PARTICIPANT_IDS.flatMap(id => createPreauthorizations({ graph: fixture.graph, participantId: id,
     privateKeys: fixture.keysById[id].soloPrivateKeys, approvedGraphDigest: fixture.graph.digest }));
+}
+
+export function authorizePresignedFixtureRecoveries(fixture: ReturnType<typeof createPresignedFixture>) {
+  return PARTICIPANT_IDS.flatMap(id => createRecoveryAuthorizations({ graph: fixture.graph, participantId: id,
+    privateKeys: fixture.keysById[id].recoveryAuthorizationPrivateKeys!, approvedGraphDigest: fixture.graph.digest }));
 }
 
 export function signPresignedFixtureFunding(fixture: ReturnType<typeof createPresignedFixture>) {

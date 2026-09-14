@@ -1,30 +1,36 @@
-import { validateVaultEconomics } from '../config.js';
-import type { BitcoinNetworkName, VaultEconomics } from '../types.js';
-import { presignedBackupBinding, type PresignedRestorationProof } from './backup.js';
+import { LAST_SURVIVOR_PAYOUT_SCHEDULE, validatePresignedEconomics, type PresignedEconomics } from './economics.js';
+import type { BitcoinNetworkName } from '../types.js';
+import { createPresignedPublicKit, presignedBackupBinding, presignedBackupDomain,
+  verifyPresignedRecoveryRestorationProof, type PresignedRestorationProof } from './backup.js';
+import { verifyRecoveryAuthorizations } from './fixed-recovery.js';
 import { buildPresignedGraph, fundingFeeShare } from './graph.js';
 import { finalizePresignedFunding, verifyPresignedFundingSignature, type PresignedFundingSignature } from './funding.js';
 import { buildPresignedRounds, validatePresignedRoster } from './roster.js';
 import { verifyPreauthorizations } from './signing.js';
-import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, type ParticipantId, type Preauthorization,
-  type PresignedFundingInput, type PresignedGraph, type PresignedParticipant, type PresignedRoster } from './types.js';
+import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, FIXED_RECOVERY_POLICY,
+  type ParticipantId, type Preauthorization, type RecoveryAuthorization, type PresignedProtocol, type PresignedVersion,
+  type PresignedFundingInput, type PresignedGraph, type PresignedParticipant, type PresignedPublicKit, type PresignedRoster } from './types.js';
 import { assert, canonicalJson, commitmentDigest, exactKeys, genesisHash, hexBytes, identifier,
-  memberRounds, participantId, publicKey, safeInteger, sameCanonical, supportedWalletScript } from './validation.js';
+  memberRounds, participantId, publicKey, safeInteger, sameCanonical, supportedWalletScript,
+  presignedDomain, presignedVersion, validatePresignedProtocol } from './validation.js';
 
-const DOMAIN = 'vault/presigned-graph-v2/ceremony';
-const BACKUP_DOMAIN = 'btc-multiplayer-vault/presigned-offline-recovery/v1';
 export interface PresignedCeremonySettings {
+  /** Absent means immutable V2 settings. New V3 settings require both markers. */
+  protocol?: typeof PRESIGNED_PROTOCOL_V3;
+  recoveryPolicy?: typeof FIXED_RECOVERY_POLICY;
   network: BitcoinNetworkName;
   genesisHash: string;
-  economics: VaultEconomics;
+  economics: PresignedEconomics;
   feePolicy: PresignedRoster['feePolicy'];
   fundingFeeSats: number;
 }
-type ActionBase = { version: 2; protocol: typeof PRESIGNED_PROTOCOL };
+type ActionBase = { version: PresignedVersion; protocol: PresignedProtocol };
 export type PresignedAction = ActionBase & (
   { kind: 'register-identity'; settingsDigest: string; identity: PresignedParticipant } |
   { kind: 'confirm-roster'; rosterDigest: string } |
   { kind: 'commit-funding-input'; epochId: string; rosterDigest: string; input: PresignedFundingInput } |
-  { kind: 'contribute-preauthorizations'; epochId: string; graphDigest: string; preauthorizations: Preauthorization[] } |
+  { kind: 'contribute-preauthorizations'; epochId: string; graphDigest: string; preauthorizations: Preauthorization[];
+    recoveryAuthorizations?: RecoveryAuthorization[] } |
   { kind: 'confirm-backup'; epochId: string; graphDigest: string; backupKind: 'offline' | 'passkey';
     restoreCredentialId: string | null; backupFileDigest: string | null; proof: PresignedRestorationProof } |
   { kind: 'begin-wallet-signing'; epochId: string; graphDigest: string } |
@@ -47,6 +53,7 @@ export interface PresignedFundingEpoch {
   inputs: PresignedFundingInput[];
   graph: PresignedGraph | null;
   preauthorizations: Preauthorization[];
+  recoveryAuthorizations?: RecoveryAuthorization[];
   backups: PresignedBackupReceipt[];
   /** Recorded before honest-client export/wallet invocation; signatures may exist even if upload is lost. */
   walletSigningStarted: ParticipantId[];
@@ -56,8 +63,8 @@ export interface PresignedFundingEpoch {
   restartApprovals: Array<{ participantId: ParticipantId; stateDigest: string; reason: string }>;
 }
 export interface PresignedCeremonyState {
-  version: 2;
-  protocol: typeof PRESIGNED_PROTOCOL;
+  version: PresignedVersion;
+  protocol: PresignedProtocol;
   vaultId: string;
   settings: PresignedCeremonySettings;
   settingsDigest: string;
@@ -86,35 +93,34 @@ export type PresignedFundingInputVerifier = (input: {
 }) => Promise<PresignedFundingObservation>;
 
 export function validatePresignedCeremonySettings(input: PresignedCeremonySettings): PresignedCeremonySettings {
-  exactKeys(input, ['network', 'genesisHash', 'economics', 'feePolicy', 'fundingFeeSats'], 'ceremony settings');
+  const v3 = input.protocol === PRESIGNED_PROTOCOL_V3;
+  exactKeys(input, ['network', 'genesisHash', 'economics', 'feePolicy', 'fundingFeeSats',
+    ...(v3 ? ['protocol', 'recoveryPolicy'] : [])], 'ceremony settings');
   assert(input.genesisHash === genesisHash(input.network), 'wrong ceremony genesis');
-  exactKeys(input.economics, ['depositSatsPerParticipant', 'firstWithdrawalSats', 'secondWithdrawalSats',
-    'soloFeeBudgetSats', 'soloWithdrawalFeeSats', 'cooperativeFeeSats', 'recoveryFeeSats', 'finalSweepFeeSats', 'recoveryDelayBlocks'], 'ceremony economics');
-  const economics = validateVaultEconomics(input.economics);
-  const haircut = Math.round(economics.depositSatsPerParticipant * 0.05);
-  assert(economics.firstWithdrawalSats === economics.depositSatsPerParticipant - haircut &&
-    economics.secondWithdrawalSats === economics.depositSatsPerParticipant + Math.floor(haircut / 2), 'ceremony changed withdrawal proportions');
-  safeInteger(economics.depositSatsPerParticipant, 10_000, 700_000_000_000_000, 'ceremony deposit');
-  assert(economics.depositSatsPerParticipant * 3 - economics.firstWithdrawalSats - economics.secondWithdrawalSats -
-    economics.soloWithdrawalFeeSats * 3 >= 330, 'ceremony would create a dust final payout');
+  const economics = validatePresignedEconomics(input.economics);
+  if (v3) assert(input.recoveryPolicy === FIXED_RECOVERY_POLICY && economics.payoutSchedule === LAST_SURVIVOR_PAYOUT_SCHEDULE,
+    'V3 requires fixed fair recovery and last-survivor economics');
   exactKeys(input.feePolicy, ['kind', 'maxChildFeeSats'], 'ceremony fee policy');
   assert(input.feePolicy.kind === 'confirmed-truc-payout-cpfp-v1', 'unsupported ceremony fee policy');
   safeInteger(input.feePolicy.maxChildFeeSats, 1, 100_000_000, 'fee child cap');
   safeInteger(input.fundingFeeSats, 1, Math.min(100_000_000, economics.depositSatsPerParticipant), 'funding fee');
   return { network: input.network, genesisHash: input.genesisHash, economics,
-    feePolicy: { ...input.feePolicy }, fundingFeeSats: input.fundingFeeSats };
+    feePolicy: { ...input.feePolicy }, fundingFeeSats: input.fundingFeeSats,
+    ...(v3 ? { protocol: PRESIGNED_PROTOCOL_V3, recoveryPolicy: FIXED_RECOVERY_POLICY } : {}) };
 }
 
 export function newPresignedCeremony(vaultId: string, candidate: PresignedCeremonySettings): PresignedCeremonyState {
   identifier(vaultId, 'ceremony vault');
   const settings = validatePresignedCeremonySettings(candidate);
-  return { version: 2, protocol: PRESIGNED_PROTOCOL, vaultId, settings,
-    settingsDigest: commitmentDigest(`${DOMAIN}/settings`, { vaultId, ...settings }),
+  const protocol = settings.protocol ?? PRESIGNED_PROTOCOL;
+  return { version: presignedVersion(protocol), protocol, vaultId, settings,
+    settingsDigest: commitmentDigest(presignedDomain(protocol, 'ceremony/settings'), { vaultId, ...settings }),
     identities: [], roster: null, rosterDigest: null, rosterApprovals: [], epochs: [] };
 }
 
 export function presignedActionDigest(action: PresignedAction): string {
-  return commitmentDigest(`${DOMAIN}/action`, validatePresignedAction(action));
+  const validated = validatePresignedAction(action);
+  return commitmentDigest(presignedDomain(validated.protocol, 'ceremony/action'), validated);
 }
 
 /** Exact public schemas reject accidental private keys, seeds, PRF results and nonce fields. */
@@ -122,11 +128,12 @@ export function validatePresignedAction(candidate: unknown): PresignedAction {
   boundedPublicAction(candidate);
   assert(candidate !== null && typeof candidate === 'object' && !Array.isArray(candidate), 'action must be an object');
   const action = candidate as PresignedAction;
-  assert(action.version === 2 && action.protocol === PRESIGNED_PROTOCOL, 'wrong action protocol');
+  validatePresignedProtocol(action.version, action.protocol);
   const fields: Record<PresignedAction['kind'], string[]> = {
     'register-identity': ['settingsDigest', 'identity'], 'confirm-roster': ['rosterDigest'],
     'commit-funding-input': ['epochId', 'rosterDigest', 'input'],
-    'contribute-preauthorizations': ['epochId', 'graphDigest', 'preauthorizations'],
+    'contribute-preauthorizations': ['epochId', 'graphDigest', 'preauthorizations',
+      ...(action.protocol === PRESIGNED_PROTOCOL_V3 ? ['recoveryAuthorizations'] : [])],
     'confirm-backup': ['epochId', 'graphDigest', 'backupKind', 'restoreCredentialId', 'backupFileDigest', 'proof'],
     'begin-wallet-signing': ['epochId', 'graphDigest'],
     'submit-funding-signature': ['epochId', 'graphDigest', 'signature'],
@@ -139,15 +146,26 @@ export function validatePresignedAction(candidate: unknown): PresignedAction {
     if (field in action) hexBytes((action as unknown as Record<string, string>)[field]!, 32, field);
   }
   if ('epochId' in action) identifier(action.epochId, 'action epoch');
-  if (action.kind === 'register-identity') validatePublicIdentity(action.identity);
+  if (action.kind === 'register-identity') validatePublicIdentity(action.identity, action.protocol);
   if (action.kind === 'commit-funding-input') validateFundingInput(action.input);
   if (action.kind === 'contribute-preauthorizations') {
     assert(Array.isArray(action.preauthorizations) && action.preauthorizations.length === 4, 'one participant must contribute all four preauthorizations');
     for (const entry of action.preauthorizations) {
       exactKeys(entry, ['version', 'protocol', 'graphDigest', 'participantId', 'exitId', 'signatureHex'], 'preauthorization');
-      assert(entry.version === 2 && entry.protocol === PRESIGNED_PROTOCOL, 'wrong preauthorization protocol');
+      assert(entry.version === action.version && entry.protocol === action.protocol, 'wrong preauthorization protocol');
       participantId(entry.participantId); hexBytes(entry.graphDigest, 32, 'preauthorization graph');
       exitIdentifier(entry.exitId); hexBytes(entry.signatureHex, 64, 'preauthorization signature');
+    }
+    if (action.protocol === PRESIGNED_PROTOCOL_V3) {
+      assert(Array.isArray(action.recoveryAuthorizations) && action.recoveryAuthorizations.length === 3,
+        'one V3 participant must authorize all three applicable refunds');
+      for (const entry of action.recoveryAuthorizations) {
+        exactKeys(entry, ['version', 'protocol', 'purpose', 'graphDigest', 'participantId', 'recoveryId', 'signatureHex'], 'recovery authorization');
+        assert(entry.version === 3 && entry.protocol === PRESIGNED_PROTOCOL_V3 && entry.purpose === 'fixed-recovery-authorization',
+          'wrong recovery authorization purpose or protocol');
+        participantId(entry.participantId); hexBytes(entry.graphDigest, 32, 'recovery authorization graph');
+        recoveryIdentifier(entry.recoveryId); hexBytes(entry.signatureHex, 64, 'recovery authorization signature');
+      }
     }
   }
   if (action.kind === 'confirm-backup') {
@@ -160,11 +178,12 @@ export function validatePresignedAction(candidate: unknown): PresignedAction {
       assert(action.backupFileDigest === null, 'passkey restore cannot claim an offline file');
     }
     validateRestoreProofShape(action.proof);
+    assert(action.proof.protocol === action.protocol && action.proof.version === action.version, 'backup proof protocol differs from action');
   }
   if (action.kind === 'submit-funding-signature') {
     const signature = action.signature;
     exactKeys(signature, ['version', 'protocol', 'graphDigest', 'participantId', 'inputIndex', 'witness'], 'funding signature');
-    assert(signature.version === 2 && signature.protocol === PRESIGNED_PROTOCOL, 'wrong funding signature protocol');
+    assert(signature.version === action.version && signature.protocol === action.protocol, 'wrong funding signature protocol');
     participantId(signature.participantId); hexBytes(signature.graphDigest, 32, 'funding signature graph');
     safeInteger(signature.inputIndex, 0, 2, 'funding signature input');
     assert(Array.isArray(signature.witness) && signature.witness.length >= 1 && signature.witness.length <= 2 &&
@@ -185,6 +204,10 @@ export function presignedWalletSigningReady(state: PresignedCeremonyState, eligi
   const epoch = currentPresignedEpoch(state);
   if (!epoch?.graph || state.rosterApprovals.length !== 3 || epoch.preauthorizations.length !== 12) return false;
   verifyPreauthorizations(epoch.graph, epoch.preauthorizations, true);
+  if (state.protocol === PRESIGNED_PROTOCOL_V3) {
+    if (epoch.recoveryAuthorizations?.length !== 9) return false;
+    verifyRecoveryAuthorizations(epoch.graph, epoch.recoveryAuthorizations, true);
+  }
   return PARTICIPANT_IDS.every(id => {
     const available = new Set(eligible[id]);
     const receipts = epoch.backups.filter(receipt => receipt.participantId === id);
@@ -198,7 +221,7 @@ export function presignedRestartStateDigest(state: PresignedCeremonyState): stri
   const epoch = currentPresignedEpoch(state);
   if (!epoch || epoch.walletSigningStarted.length || epoch.signatures.length || epoch.finalization) return null;
   const { restartApprovals: _approvals, ...snapshot } = epoch;
-  return commitmentDigest(`${DOMAIN}/restart-state`, { vaultId: state.vaultId, settingsDigest: state.settingsDigest,
+  return commitmentDigest(presignedDomain(state.protocol, 'ceremony/restart-state'), { vaultId: state.vaultId, settingsDigest: state.settingsDigest,
     rosterDigest: state.rosterDigest, epoch: snapshot });
 }
 
@@ -209,6 +232,9 @@ export function applyPresignedAction(input: {
 }): PresignedCeremonyState {
   const action = validatePresignedAction(input.action);
   const state = structuredClone(input.state);
+  validatePresignedProtocol(state.version, state.protocol);
+  assert(state.protocol === (state.settings.protocol ?? PRESIGNED_PROTOCOL) && action.protocol === state.protocol && action.version === state.version,
+    'ceremony action protocol differs from immutable settings');
   participantId(input.participantId); credentialIdentifier(input.credentialId);
   assert(input.eligibleCredentials[input.participantId].includes(input.credentialId), 'action passkey has no stored PRF envelope');
   assert(input.eligibleCredentials[input.participantId].length >= 2, 'participant needs two stored PRF envelopes');
@@ -217,15 +243,17 @@ export function applyPresignedAction(input: {
     assert(action.identity.id === input.participantId, 'identity registration belongs to another participant');
     assert(!state.roster && !state.identities.some(identity => identity.id === input.participantId), 'participant identity is immutable once registered');
     const publicKeys = [...state.identities, action.identity].flatMap(identity => [identity.personalPublicKeyHex.slice(2),
-      identity.payoutXonlyPublicKeyHex, ...Object.values(identity.soloPublicKeys)]);
+      identity.payoutXonlyPublicKeyHex, ...Object.values(identity.soloPublicKeys),
+      ...Object.values(identity.recoveryAuthorizationPublicKeys ?? {}), ...Object.values(identity.recoveryTriggerPublicKeys ?? {})]);
     assert(new Set(publicKeys).size === publicKeys.length, 'identity keys must be unique across participants, roles and rounds');
-    state.identities.push(validatePublicIdentity(action.identity));
+    state.identities.push(validatePublicIdentity(action.identity, state.protocol));
     state.identities.sort((a, b) => a.id.localeCompare(b.id));
     if (state.identities.length === 3) {
-      state.roster = validatePresignedRoster({ version: 2, protocol: PRESIGNED_PROTOCOL, vaultId: state.vaultId,
+      state.roster = validatePresignedRoster({ version: state.version, protocol: state.protocol, vaultId: state.vaultId,
         network: state.settings.network, genesisHash: state.settings.genesisHash, economics: state.settings.economics,
-        feePolicy: state.settings.feePolicy, participants: state.identities });
-      state.rosterDigest = commitmentDigest('vault/presigned-graph-v2/roster', state.roster);
+        feePolicy: state.settings.feePolicy, participants: state.identities,
+        ...(state.protocol === PRESIGNED_PROTOCOL_V3 ? { recoveryPolicy: FIXED_RECOVERY_POLICY } : {}) });
+      state.rosterDigest = commitmentDigest(presignedDomain(state.protocol, 'roster'), state.roster);
     }
     return state;
   }
@@ -234,7 +262,7 @@ export function applyPresignedAction(input: {
     assert(action.rosterDigest === state.rosterDigest, 'roster approval changed immutable digest');
     assert(!state.rosterApprovals.includes(input.participantId), 'participant already confirmed the roster');
     state.rosterApprovals.push(input.participantId); state.rosterApprovals.sort();
-    if (state.rosterApprovals.length === 3) state.epochs.push(newEpoch(input.nextEpochId));
+    if (state.rosterApprovals.length === 3) state.epochs.push(newEpoch(input.nextEpochId, state.protocol));
     return state;
   }
   assert(state.rosterApprovals.length === 3, 'funding commitments require unanimous roster approval');
@@ -253,7 +281,7 @@ export function applyPresignedAction(input: {
       approval.reason === action.reason).map(approval => approval.participantId));
     if (approved.size === 3) {
       assert(state.epochs.length < 64, 'ceremony epoch limit reached; retained history requires explicit operator review');
-      epoch.status = 'retired'; state.epochs.push(newEpoch(input.nextEpochId));
+      epoch.status = 'retired'; state.epochs.push(newEpoch(input.nextEpochId, state.protocol));
     }
     return state;
   }
@@ -284,13 +312,19 @@ export function applyPresignedAction(input: {
     assert(action.preauthorizations.every(entry => entry.participantId === input.participantId), 'preauthorization belongs to another participant');
     const contribution = verifyPreauthorizations(epoch.graph, action.preauthorizations, false);
     epoch.preauthorizations = verifyPreauthorizations(epoch.graph, [...epoch.preauthorizations, ...contribution], false);
+    if (state.protocol === PRESIGNED_PROTOCOL_V3) {
+      assert(!epoch.recoveryAuthorizations!.some(entry => entry.participantId === input.participantId), 'recovery authorizations are immutable');
+      assert(action.recoveryAuthorizations!.every(entry => entry.participantId === input.participantId), 'recovery authorization belongs to another participant');
+      const refunds = verifyRecoveryAuthorizations(epoch.graph, action.recoveryAuthorizations!, false);
+      epoch.recoveryAuthorizations = verifyRecoveryAuthorizations(epoch.graph, [...epoch.recoveryAuthorizations!, ...refunds], false);
+    }
     return state;
   }
   if (action.kind === 'confirm-backup') {
     verifyPreauthorizations(epoch.graph, epoch.preauthorizations, true);
     if (action.backupKind === 'passkey') assert(action.restoreCredentialId === input.credentialId, 'restore must be approved by that exact restored credential');
     validatePresignedRestorationReceipt({ graph: epoch.graph, preauthorizations: epoch.preauthorizations,
-      participantId: input.participantId, proof: action.proof });
+      recoveryAuthorizations: epoch.recoveryAuthorizations, participantId: input.participantId, proof: action.proof });
     assert(!epoch.backups.some(receipt => receipt.participantId === input.participantId && receipt.backupKind === action.backupKind &&
       receipt.restoreCredentialId === action.restoreCredentialId), 'this backup restoration is already recorded');
     epoch.backups.push({ participantId: input.participantId, backupKind: action.backupKind,
@@ -324,20 +358,43 @@ export function applyPresignedAction(input: {
 }
 
 export function validatePresignedRestorationReceipt(input: {
-  graph: PresignedGraph; preauthorizations: Preauthorization[]; participantId: ParticipantId; proof: PresignedRestorationProof;
+  graph: PresignedGraph; preauthorizations: Preauthorization[]; recoveryAuthorizations?: RecoveryAuthorization[];
+  participantId: ParticipantId; proof: PresignedRestorationProof;
 }): PresignedRestorationProof {
   validateRestoreProofShape(input.proof);
-  const preauthorizations = verifyPreauthorizations(input.graph, input.preauthorizations, true);
-  const kit = { version: 2 as const, protocol: PRESIGNED_PROTOCOL, graph: input.graph, preauthorizations };
+  const kit = createPresignedPublicKit(input);
+  return validateRestorationReceiptWithCheckedKit(kit, input);
+}
+
+/** Verify one untrusted public kit once, then EVERY independent receipt. This
+ * is a single synchronous operation, not a cache or caller-selected bypass. */
+export function validatePresignedRestorationReceipts(input: {
+  graph: PresignedGraph; preauthorizations: Preauthorization[]; recoveryAuthorizations?: RecoveryAuthorization[];
+  receipts: Array<{ participantId: ParticipantId; proof: PresignedRestorationProof }>;
+}): PresignedRestorationProof[] {
+  assert(Array.isArray(input.receipts), 'restoration receipts must be an array');
+  input.receipts.forEach(receipt => validateRestoreProofShape(receipt.proof));
+  const kit = createPresignedPublicKit(input);
+  return input.receipts.map(receipt => validateRestorationReceiptWithCheckedKit(kit, receipt));
+}
+
+/** Private: both callers above validate the kit and every proof shape first. */
+function validateRestorationReceiptWithCheckedKit(kit: PresignedPublicKit, input: {
+  participantId: ParticipantId; proof: PresignedRestorationProof;
+}): PresignedRestorationProof {
+  participantId(input.participantId);
+  assert(input.proof.protocol === kit.protocol && input.proof.version === kit.version, 'restore receipt protocol differs from kit');
+  const domain = presignedBackupDomain(kit.protocol);
   sameCanonical(input.proof.binding, presignedBackupBinding(kit, input.participantId), 'restore receipt binding');
-  const identity = input.graph.roster.participants.find(entry => entry.id === input.participantId)!;
-  assert(input.proof.publicKitDigest === commitmentDigest(`${BACKUP_DOMAIN}/public-kit`, kit) &&
-    input.proof.participantIdentityDigest === commitmentDigest(`${BACKUP_DOMAIN}/participant`, identity), 'restore receipt changed public kit or identity');
-  const exits = input.graph.exits.filter(exit => exit.leaver === input.participantId).sort((a, b) => a.id.localeCompare(b.id));
+  const identity = kit.graph.roster.participants.find(entry => entry.id === input.participantId)!;
+  assert(input.proof.publicKitDigest === commitmentDigest(`${domain}/public-kit`, kit) &&
+    input.proof.participantIdentityDigest === commitmentDigest(`${domain}/participant`, identity), 'restore receipt changed public kit or identity');
+  const exits = kit.graph.exits.filter(exit => exit.leaver === input.participantId).sort((a, b) => a.id.localeCompare(b.id));
   sameCanonical(input.proof.exitProofs.map(proof => ({ exitId: proof.exitId, txid: proof.txid })),
     exits.map(exit => ({ exitId: exit.id, txid: exit.txid })), 'restore receipt owner exits');
   const { proofDigest, ...body } = input.proof;
-  assert(proofDigest === commitmentDigest(`${BACKUP_DOMAIN}/restoration-proof`, body), 'restore receipt digest changed');
+  verifyPresignedRecoveryRestorationProof(kit, input.participantId, input.proof.recoveryProofs);
+  assert(proofDigest === commitmentDigest(`${domain}/restoration-proof`, body), 'restore receipt digest changed');
   // The witness digests attest to a client-side check; they are not a proof of durable file storage.
   return structuredClone(input.proof);
 }
@@ -352,17 +409,23 @@ export function assertPresignedFundingObservation(input: PresignedFundingInput, 
   safeInteger(observed.confirmations, input.confirmations, 2_000_000, 'independent funding confirmations');
 }
 
-function newEpoch(epochId: string): PresignedFundingEpoch {
+function newEpoch(epochId: string, protocol: PresignedProtocol): PresignedFundingEpoch {
   identifier(epochId, 'new funding epoch');
   return { epochId, status: 'collecting', inputs: [], graph: null, preauthorizations: [], backups: [], walletSigningStarted: [],
-    signatures: [], finalization: null, fundingApprovals: [], restartApprovals: [] };
+    signatures: [], finalization: null, fundingApprovals: [], restartApprovals: [],
+    ...(protocol === PRESIGNED_PROTOCOL_V3 ? { recoveryAuthorizations: [] } : {}) };
 }
-function validatePublicIdentity(input: PresignedParticipant): PresignedParticipant {
-  exactKeys(input, ['id', 'personalPublicKeyHex', 'payoutXonlyPublicKeyHex', 'soloPublicKeys'], 'participant identity');
+function validatePublicIdentity(input: PresignedParticipant, protocol: PresignedProtocol): PresignedParticipant {
+  exactKeys(input, ['id', 'personalPublicKeyHex', 'payoutXonlyPublicKeyHex', 'soloPublicKeys',
+    ...(protocol === PRESIGNED_PROTOCOL_V3 ? ['recoveryAuthorizationPublicKeys', 'recoveryTriggerPublicKeys'] : [])], 'participant identity');
   participantId(input.id); publicKey(input.personalPublicKeyHex, true, 'participant personal key');
   publicKey(input.payoutXonlyPublicKeyHex, false, 'participant payout key');
   exactKeys(input.soloPublicKeys, memberRounds(input.id), 'participant round keys');
   Object.values(input.soloPublicKeys).forEach(key => publicKey(key, false, 'participant solo key'));
+  if (protocol === PRESIGNED_PROTOCOL_V3) for (const role of ['recoveryAuthorizationPublicKeys', 'recoveryTriggerPublicKeys'] as const) {
+    exactKeys(input[role], memberRounds(input.id), `participant ${role}`);
+    Object.values(input[role]!).forEach(key => publicKey(key, false, `participant ${role}`));
+  }
   return structuredClone(input);
 }
 function validateFundingInput(input: PresignedFundingInput): PresignedFundingInput {
@@ -376,10 +439,11 @@ function validateFundingInput(input: PresignedFundingInput): PresignedFundingInp
   return { ...input };
 }
 function validateRestoreProofShape(proof: PresignedRestorationProof): void {
-  exactKeys(proof, ['version', 'protocol', 'binding', 'publicKitDigest', 'participantIdentityDigest', 'exitProofs', 'proofDigest'], 'restore receipt');
-  assert(proof.version === 2 && proof.protocol === PRESIGNED_PROTOCOL, 'wrong restore receipt protocol');
+  validatePresignedProtocol(proof.version, proof.protocol);
+  exactKeys(proof, ['version', 'protocol', 'binding', 'publicKitDigest', 'participantIdentityDigest', 'exitProofs', 'proofDigest',
+    ...(proof.protocol === PRESIGNED_PROTOCOL_V3 ? ['recoveryProofs'] : [])], 'restore receipt');
   exactKeys(proof.binding, ['protocol', 'network', 'genesisHash', 'vaultId', 'participantId', 'epochId', 'rosterDigest', 'graphDigest', 'fundingTxid'], 'restore receipt binding');
-  assert(proof.binding.protocol === PRESIGNED_PROTOCOL && proof.binding.genesisHash === genesisHash(proof.binding.network), 'wrong restore receipt network or protocol');
+  assert(proof.binding.protocol === proof.protocol && proof.binding.genesisHash === genesisHash(proof.binding.network), 'wrong restore receipt network or protocol');
   identifier(proof.binding.vaultId, 'restore vault'); identifier(proof.binding.epochId, 'restore epoch'); participantId(proof.binding.participantId);
   for (const value of [proof.publicKitDigest, proof.participantIdentityDigest, proof.proofDigest,
     proof.binding.rosterDigest, proof.binding.graphDigest, proof.binding.fundingTxid]) hexBytes(value, 32, 'restore receipt digest');
@@ -388,6 +452,16 @@ function validateRestoreProofShape(proof: PresignedRestorationProof): void {
     exactKeys(exit, ['exitId', 'txid', 'transactionDigest'], 'restore exit proof');
     exitIdentifier(exit.exitId); hexBytes(exit.txid, 32, 'restore exit txid'); hexBytes(exit.transactionDigest, 32, 'restore exit witness digest');
   }
+  if (proof.protocol === PRESIGNED_PROTOCOL_V3) {
+    assert(Array.isArray(proof.recoveryProofs) && proof.recoveryProofs.length === 3, 'restore receipt must prove three trigger keys');
+    for (const recovery of proof.recoveryProofs) {
+      exactKeys(recovery, ['recoveryId', 'signatureHex'], 'restore trigger proof');
+      recoveryIdentifier(recovery.recoveryId); hexBytes(recovery.signatureHex, 64, 'restore trigger signature');
+    }
+  }
+}
+function recoveryIdentifier(value: string): void {
+  assert(typeof value === 'string' && /^recovery:(alicebobcarol|alicebob|alicecarol|bobcarol)$/u.test(value), 'invalid recovery identifier');
 }
 function exitIdentifier(value: string): void {
   assert(typeof value === 'string' && /^(alice|bob|carol)(\/(alice|bob|carol))?$/u.test(value), 'invalid exit identifier');

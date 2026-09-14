@@ -8,7 +8,8 @@ import {
   type PresignedRestorationProof,
 } from '../../../src/presigned/backup.js';
 import { clearPresignedParticipantKeys, derivePresignedParticipantKeys } from '../../../src/presigned/roster.js';
-import type { ParticipantId, PresignedParticipant, PresignedParticipantKeys, PresignedPublicKit } from '../../../src/presigned/types.js';
+import { PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, type PresignedProtocol,
+  type ParticipantId, type PresignedParticipant, type PresignedParticipantKeys, type PresignedPublicKit } from '../../../src/presigned/types.js';
 import { assert, exactKeys, identifier, sameCanonical } from '../../../src/presigned/validation.js';
 import { fromBase64url, toBase64url } from './base64url';
 import { decryptParticipantSecretEnvelope, type KeyEnvelope } from './key-envelope';
@@ -33,6 +34,7 @@ export interface PresignedUnlockDependencies {
 export async function withUnlockedPresignedParticipant<T>(input: {
   credentialId: string;
   expectedVaultId: string;
+  expectedProtocol?: PresignedProtocol;
   expectedParticipant: PresignedParticipant;
   action: (context: UnlockedPresignedParticipant) => T | Promise<T>;
 }, dependencies: PresignedUnlockDependencies = {
@@ -46,6 +48,7 @@ export async function withUnlockedPresignedParticipant<T>(input: {
 export async function withUnregisteredPresignedParticipant<T>(input: {
   credentialId: string;
   expectedVaultId: string;
+  expectedProtocol?: PresignedProtocol;
   expectedParticipant: Pick<PresignedParticipant, 'id' | 'personalPublicKeyHex' | 'payoutXonlyPublicKeyHex'>;
   action: (context: UnlockedPresignedParticipant) => T | Promise<T>;
 }, dependencies: PresignedUnlockDependencies = { postJson, assertWithPrf: assertPasskeyWithPrf }): Promise<T> {
@@ -54,7 +57,7 @@ export async function withUnregisteredPresignedParticipant<T>(input: {
 }
 
 async function unlockPresignedIdentity<T>(input: {
-  credentialId: string; expectedVaultId: string;
+  credentialId: string; expectedVaultId: string; expectedProtocol?: PresignedProtocol;
   expectedParticipant: Pick<PresignedParticipant, 'id' | 'personalPublicKeyHex' | 'payoutXonlyPublicKeyHex'>;
   action: (context: UnlockedPresignedParticipant) => T | Promise<T>;
 }, dependencies: PresignedUnlockDependencies, requireRoundKeys: boolean): Promise<T> {
@@ -90,7 +93,9 @@ async function unlockPresignedIdentity<T>(input: {
     participantSecret = await decryptParticipantSecretEnvelope(envelope, prf);
     prf.fill(0);
     prf = undefined;
-    derived = derivePresignedParticipantKeys(participantSecret, input.expectedParticipant.id, input.expectedVaultId);
+    const protocol = input.expectedProtocol ?? (Object.hasOwn(input.expectedParticipant, 'recoveryTriggerPublicKeys')
+      ? PRESIGNED_PROTOCOL_V3 : PRESIGNED_PROTOCOL);
+    derived = derivePresignedParticipantKeys(participantSecret, input.expectedParticipant.id, input.expectedVaultId, protocol);
     if (requireRoundKeys) sameCanonical(derived.publicIdentity, input.expectedParticipant, 'passkey-restored v2 identity');
     else sameCanonical({ id: derived.publicIdentity.id,
       personalPublicKeyHex: derived.publicIdentity.personalPublicKeyHex,
@@ -119,7 +124,7 @@ export async function verifyPresignedPasskeyRestoration(input: {
     entry.id === input.expectedBinding.participantId);
   assert(participant, 'restore participant is absent from the kit');
   return withUnlockedPresignedParticipant({ credentialId: input.credentialId,
-    expectedVaultId: input.expectedBinding.vaultId, expectedParticipant: participant,
+    expectedVaultId: input.expectedBinding.vaultId, expectedProtocol: publicKit.protocol, expectedParticipant: participant,
     action: unlocked => ({
       ...verifyPresignedKitRestoration({ publicKit,
         participantId: unlocked.participantId, participantSecret: unlocked.participantSecret,

@@ -7,14 +7,14 @@ import { resolve } from 'node:path';
 import * as bitcoin from 'bitcoinjs-lib';
 import postgres from 'postgres';
 import { databaseEndpointFingerprint } from '../../src/database-restore-receipt.js';
-import { encryptPresignedOfflineBackup, presignedBackupBinding, serializePresignedOfflineBackup,
+import { createPresignedPublicKit, encryptPresignedOfflineBackup, presignedBackupBinding, serializePresignedOfflineBackup,
   verifyPresignedKitRestoration, verifyPresignedOfflineBackupRestoration } from '../../src/presigned/backup.js';
 import { newPresignedCeremony, type PresignedFundingEpoch } from '../../src/presigned/ceremony.js';
-import { createPresignedFixture, preauthorizePresignedFixture, signPresignedFixtureFunding } from '../../src/presigned/fixtures.js';
+import { authorizePresignedFixtureRecoveries, createPresignedFixture, preauthorizePresignedFixture, signPresignedFixtureFunding } from '../../src/presigned/fixtures.js';
 import { assertPresignedFundingRestoreBinding, createPresignedFundingRestoreReceipt,
   validatePresignedFundingRestoreReceipt } from '../../src/presigned/restore.js';
-import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, type ParticipantId, type PresignedPublicKit } from '../../src/presigned/types.js';
-import { commitmentDigest } from '../../src/presigned/validation.js';
+import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, FIXED_RECOVERY_POLICY, isPresignedProtocol, type PresignedProtocol, type ParticipantId } from '../../src/presigned/types.js';
+import { commitmentDigest, presignedDomain } from '../../src/presigned/validation.js';
 import { decryptParticipantSecretEnvelope, encryptParticipantSecretEnvelope, type KeyEnvelope } from '../lib/client/key-envelope.js';
 import { EXPECTED_MIGRATION_FILES } from '../lib/migrations.js';
 import { capturePresignedFundingRestoreBinding, readPresignedFundingRestoreBinding, verifyPresignedFundingDatabaseRestore } from '../lib/presigned-funding-restore.js';
@@ -32,12 +32,17 @@ const restoredUrl = new URL(sourceUrl); restoredUrl.pathname = `/${restoredName}
 let restored: ReturnType<typeof postgres> | null = null;
 const prfs = new Map<string, Uint8Array>(); const owners = new Map<string, ParticipantId>();
 const checks: string[] = []; let restoredKeys = 0; let negatives = 0;
-const fixture = createPresignedFixture(); const graph = fixture.graph; const vaultId = graph.roster.vaultId; const epochId = graph.funding.epochId;
-const kit: PresignedPublicKit = { version: 2, protocol: PRESIGNED_PROTOCOL, graph, preauthorizations: preauthorizePresignedFixture(fixture) };
+const selectedProtocol = process.env.PRESIGNED_DB_PROTOCOL ?? PRESIGNED_PROTOCOL;
+assert(isPresignedProtocol(selectedProtocol), 'restore acceptance requires a known protocol');
+const protocol: PresignedProtocol = selectedProtocol; const v3 = protocol === PRESIGNED_PROTOCOL_V3;
+const fixture = createPresignedFixture({ protocol }); const graph = fixture.graph; const vaultId = graph.roster.vaultId; const epochId = graph.funding.epochId;
+const kit = createPresignedPublicKit({ graph, preauthorizations: preauthorizePresignedFixture(fixture),
+  ...(v3 ? { recoveryAuthorizations: authorizePresignedFixtureRecoveries(fixture) } : {}) });
 const funding = signPresignedFixtureFunding(fixture); const fundingTx = bitcoin.Transaction.fromHex(funding.transactionHex);
 const epoch: PresignedFundingEpoch = { epochId, status: 'approved', inputs: graph.funding.inputs, graph,
   preauthorizations: kit.preauthorizations, backups: [], walletSigningStarted: [...PARTICIPANT_IDS],
-  signatures: PARTICIPANT_IDS.map((id, index) => ({ version: 2, protocol: PRESIGNED_PROTOCOL, graphDigest: graph.digest,
+  ...(kit.recoveryAuthorizations ? { recoveryAuthorizations: kit.recoveryAuthorizations } : {}),
+  signatures: PARTICIPANT_IDS.map((id, index) => ({ version: graph.version, protocol, graphDigest: graph.digest,
     participantId: id, inputIndex: index, witness: fundingTx.ins[index]!.witness.map(item => Buffer.from(item).toString('hex')) })),
   finalization: funding, fundingApprovals: [...PARTICIPANT_IDS], restartApprovals: [] };
 async function native(binary: string, args: string[]) {
@@ -49,8 +54,8 @@ async function native(binary: string, args: string[]) {
 }
 try {
   for (const file of EXPECTED_MIGRATION_FILES) await source.unsafe(readFileSync(resolve('db/migrations', file), 'utf8'));
-  await assert.rejects(() => capturePresignedFundingRestoreBinding(source, vaultId, epochId), /exact V2 ceremony/u); negatives++;
-  await source`INSERT INTO vaults(id,name,protocol) VALUES (${vaultId},'Disposable restored V2 funding',${PRESIGNED_PROTOCOL})`;
+  await assert.rejects(() => capturePresignedFundingRestoreBinding(source, vaultId, epochId), /exact presigned ceremony/u); negatives++;
+  await source`INSERT INTO vaults(id,name,protocol) VALUES (${vaultId},'Disposable restored presigned funding',${protocol})`;
   for (const id of PARTICIPANT_IDS) {
     const userId = randomUUID(); const identity = graph.roster.participants.find(item => item.id === id)!;
     await source`INSERT INTO users(id,display_name) VALUES (${userId},${`Synthetic ${id}`})`;
@@ -83,15 +88,16 @@ try {
     } finally { offlineSecret.fill(0); }
   }
   const state = newPresignedCeremony(vaultId, { network: graph.roster.network, genesisHash: graph.roster.genesisHash,
+    ...(v3 ? { protocol: PRESIGNED_PROTOCOL_V3, recoveryPolicy: FIXED_RECOVERY_POLICY } : {}),
     economics: graph.roster.economics, feePolicy: graph.roster.feePolicy, fundingFeeSats: graph.funding.feeSats });
   Object.assign(state, { identities: graph.roster.participants, roster: graph.roster, rosterDigest: graph.rosterDigest,
     rosterApprovals: [...PARTICIPANT_IDS], epochs: [epoch] });
-  await source`INSERT INTO presigned_ceremonies(vault_id,settings_json,settings_digest,state_json,state_digest)
-    VALUES (${vaultId},${source.json(state.settings as never)},${Buffer.from(state.settingsDigest,'hex')},${source.json(state as never)},
-      ${Buffer.from(commitmentDigest('vault/presigned-graph-v2/ceremony/state',state),'hex')})`;
-  await source`INSERT INTO presigned_funding_epochs(epoch_id,vault_id,ordinal,status,graph_digest,funding_txid,snapshot_json,snapshot_digest)
-    VALUES (${epochId},${vaultId},1,'approved',${Buffer.from(graph.digest,'hex')},${Buffer.from(graph.fundingTxid,'hex')},${source.json(epoch as never)},
-      ${Buffer.from(commitmentDigest('vault/presigned-graph-v2/ceremony/epoch',epoch),'hex')})`;
+  await source`INSERT INTO presigned_ceremonies(vault_id,protocol,settings_json,settings_digest,state_json,state_digest)
+    VALUES (${vaultId},${protocol},${source.json(state.settings as never)},${Buffer.from(state.settingsDigest,'hex')},${source.json(state as never)},
+      ${Buffer.from(commitmentDigest(presignedDomain(protocol,'ceremony/state'),state),'hex')})`;
+  await source`INSERT INTO presigned_funding_epochs(epoch_id,vault_id,protocol,ordinal,status,graph_digest,funding_txid,snapshot_json,snapshot_digest)
+    VALUES (${epochId},${vaultId},${protocol},1,'approved',${Buffer.from(graph.digest,'hex')},${Buffer.from(graph.fundingTxid,'hex')},${source.json(epoch as never)},
+      ${Buffer.from(commitmentDigest(presignedDomain(protocol,'ceremony/epoch'),epoch),'hex')})`;
   const original = await capturePresignedFundingRestoreBinding(source, vaultId, epochId);
   await native('pg_dump', ['--format=custom', '--no-owner', '--no-privileges', `--file=${directory}/database.dump`, `--dbname=${sourceUrl}`]);
   await source.unsafe(`CREATE DATABASE "${restoredName}" TEMPLATE template0`);
@@ -100,7 +106,8 @@ try {
   const receipt = await verifyPresignedFundingDatabaseRestore({ source, restored, vaultId, epochId,
     sourceEndpointFingerprint: databaseEndpointFingerprint(sourceUrl), restoredEndpointFingerprint: databaseEndpointFingerprint(restoredUrl.toString()) });
   assert.deepEqual(receipt.sourceFunding, original); assert.deepEqual(receipt.restoredFunding, original);
-  checks.push('native pg_dump/pg_restore reproduces the exact complete database and approved V2 funding/custody state');
+  assert.equal(receipt.protocol, protocol);
+  checks.push('native pg_dump/pg_restore reproduces the exact complete database and protocol-bound approved funding/custody state');
   const expected = { reviewedReceiptDigest: receipt.receiptDigest, databaseRestoreReceiptDigest: receipt.databaseRestore.receiptDigest,
     sourceEndpointFingerprint: receipt.databaseRestore.sourceEndpointFingerprint,
     sourceDatabaseIdentityFingerprint: receipt.databaseRestore.sourceDatabaseIdentityFingerprint, currentFunding: original, now: Date.parse(receipt.createdAt) };
@@ -144,7 +151,7 @@ try {
   }), error => error === rollback);
   assert.deepEqual(await capturePresignedFundingRestoreBinding(restored, vaultId, epochId), original);
   checks.push('changed custody and missing retained funding state are rejected; negative mutations roll back');
-  writeFileSync(`${directory}/acceptance.json`, JSON.stringify({ passed: true, protocol: PRESIGNED_PROTOCOL,
+  writeFileSync(`${directory}/acceptance.json`, JSON.stringify({ passed: true, protocol,
     nativeDatabaseDumpAndRestore: true, restoredEncryptedKeys: restoredKeys, negativeBoundaries: negatives,
     syntheticFundingCoins: true, realDefaultSignetVerified: false, physicalPasskeysProven: false, fundingAuthorized: false,
     checks }, null, 2), { mode: 0o600, flag: 'wx' });

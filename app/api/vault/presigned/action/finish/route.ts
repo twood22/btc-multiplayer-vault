@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     const input = Input.parse(await readPresignedJson(request));
     const userId = await requireSessionUser();
     const challenge = await getPresignedActionChallenge({ userId, challengeId: input.challengeId });
-    assertPresignedFundingSignatureRelease(challenge.action.kind);
+    assertPresignedFundingSignatureRelease(challenge.action.kind, challenge.action.protocol);
     if (input.actionDigest !== challenge.actionDigest) throw new Error('browser approved another ceremony action');
     const response = input.response as AuthenticationResponseJSON;
     if (!response || response.id !== challenge.credential.id) throw new Error('action assertion used another credential');

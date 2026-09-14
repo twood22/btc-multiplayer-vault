@@ -8,8 +8,9 @@ import { authorizePresignedExitTransaction, verifyPreauthorizations } from '../.
 import { authorizePresignedSpendTransaction } from '../../../src/presigned/spends';
 import { assertPresignedRuntimeObservation, presignedRuntimeBroadcastReady, presignedRuntimeTransactionDigest,
   validatePresignedRuntimeProposal, type PresignedRuntimeState } from '../../../src/presigned/runtime';
-import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL } from '../../../src/presigned/types';
-import { assert, commitmentDigest, identifier, sameCanonical } from '../../../src/presigned/validation';
+import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, type PresignedProtocol } from '../../../src/presigned/types';
+import { verifyRecoveryAuthorizations } from '../../../src/presigned/fixed-recovery';
+import { assert, commitmentDigest, identifier, sameCanonical, presignedDomain } from '../../../src/presigned/validation';
 import { nonWitnessTransactionHex } from '../../../src/presigned/graph';
 import { loadPresignedFundingEpoch } from './presigned-chain-store';
 import { presignedCoreBackend, presignedCoreRpc } from './presigned-core';
@@ -20,7 +21,7 @@ import { assertPresignedFundingDeploymentRelease, recordPresignedFundingReleaseU
 
 /** In-process injection for real-Core crash/reorg drills; never accepted by a route. */
 export interface PresignedBroadcastDependencies {
-  assertEnabled: () => void;
+  assertEnabled: (protocol: PresignedProtocol) => void;
   backend: ReturnType<typeof presignedCoreBackend>;
   rpc: typeof presignedCoreRpc;
   requiredConfirmations: number;
@@ -31,46 +32,50 @@ function broadcastDependencies(): PresignedBroadcastDependencies {
 }
 
 interface Intent {
-  id: string; vault_id: string; epoch_id: string; proposal_id: string | null;
+  id: string; vault_id: string; protocol: PresignedProtocol; epoch_id: string; proposal_id: string | null;
   kind: 'funding' | 'runtime' | 'fee-package'; authorization_digest: Buffer;
   transaction_json: string[]; txids_json: string[]; status: string; attempt_count: number;
 }
 
 /** Deployment opt-in is additional to, never a substitute for, participant authority. */
-export function presignedBroadcastEnabled(): boolean {
-  return process.env.PRESIGNED_V2_BROADCAST_NETWORK === BITCOIN_NETWORK_NAME &&
-    (BITCOIN_NETWORK_NAME !== 'mainnet' || process.env.PRESIGNED_V2_MAINNET_AUTHORIZATION === 'separately-approved-mainnet-spending');
+export function presignedBroadcastEnabled(protocol?: PresignedProtocol): boolean {
+  if (process.env.PRESIGNED_V2_BROADCAST_NETWORK !== BITCOIN_NETWORK_NAME) return false;
+  if (BITCOIN_NETWORK_NAME !== 'mainnet') return true;
+  if (!protocol) return [PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3].some(value => presignedBroadcastEnabled(value));
+  const variable = protocol === PRESIGNED_PROTOCOL_V3 ? 'PRESIGNED_V3_MAINNET_AUTHORIZATION' : 'PRESIGNED_V2_MAINNET_AUTHORIZATION';
+  return process.env[variable] === 'separately-approved-mainnet-spending';
 }
-function assertBroadcastEnabled(): void {
-  assert(presignedBroadcastEnabled(), BITCOIN_NETWORK_NAME === 'mainnet'
-    ? 'V2 mainnet broadcasting requires separate explicit operator authorization; this implementation goal did not grant it'
-    : 'V2 Signet broadcasting has not been explicitly enabled for this deployment');
+function assertBroadcastEnabled(protocol: PresignedProtocol): void {
+  assert(presignedBroadcastEnabled(protocol), BITCOIN_NETWORK_NAME === 'mainnet'
+    ? 'This vault protocol requires separate explicit mainnet authorization; the implementation goal did not grant it'
+    : 'Signet broadcasting has not been explicitly enabled for this deployment');
 }
 
 export async function preparePresignedBroadcast(input: {
   userId: string; epochId: string; proposalId: string | null;
 }): Promise<{ intentId: string; txids: string[] }> {
-  assertBroadcastEnabled(); identifier(input.userId, 'broadcast user'); identifier(input.epochId, 'broadcast epoch');
+  identifier(input.userId, 'broadcast user'); identifier(input.epochId, 'broadcast epoch');
   await consumeRateLimit({ action: 'presigned_broadcast', subject: input.userId, limit: 40, windowSeconds: 900 });
   if (input.proposalId) identifier(input.proposalId, 'broadcast proposal');
-  const members = await db()<Array<{ vault_id: string }>>`
-    SELECT m.vault_id FROM vault_members m JOIN vaults v ON v.id = m.vault_id
-    WHERE m.user_id = ${input.userId}::uuid AND v.protocol = ${PRESIGNED_PROTOCOL}
+  const members = await db()<Array<{ vault_id: string; protocol: PresignedProtocol }>>`
+    SELECT m.vault_id, v.protocol FROM vault_members m JOIN vaults v ON v.id = m.vault_id
+    WHERE m.user_id = ${input.userId}::uuid AND v.protocol IN ('presigned-graph-v2','presigned-graph-v3')
   `;
-  assert(members.length === 1, 'one V2 vault membership is required');
+  assert(members.length === 1, 'one known presigned vault membership is required');
+  assertBroadcastEnabled(members[0]!.protocol);
   const vaultId = members[0]!.vault_id;
   const authority = await exactAuthority(vaultId, input.epochId, input.proposalId);
   if (!input.proposalId) await assertPresignedFundingDeploymentRelease(vaultId, input.epochId);
   return transaction(async sql => {
-    await sql`SELECT id FROM vaults WHERE id = ${vaultId}::uuid AND protocol = ${PRESIGNED_PROTOCOL} FOR UPDATE`;
+    await sql`SELECT id FROM vaults WHERE id = ${vaultId}::uuid AND protocol = ${members[0]!.protocol} FOR UPDATE`;
     // All authority here is append-only; nevertheless re-read it after acquiring
     // the shared vault lock so a changed proposal cannot slip between approval and intent.
     const now = await exactAuthority(vaultId, input.epochId, input.proposalId, sql);
     sameCanonical(authority, now, 'broadcast authority during preparation');
     const rows = await sql<Array<{ id: string; transaction_json: string[]; txids_json: string[] }>>`
-      INSERT INTO presigned_broadcast_intents (vault_id, epoch_id, proposal_id, kind,
+      INSERT INTO presigned_broadcast_intents (vault_id, protocol, epoch_id, proposal_id, kind,
         authorization_digest, transaction_json, txids_json)
-      VALUES (${vaultId}::uuid, ${input.epochId}::uuid, ${input.proposalId}::uuid,
+      VALUES (${vaultId}::uuid, ${members[0]!.protocol}, ${input.epochId}::uuid, ${input.proposalId}::uuid,
         ${input.proposalId ? 'runtime' : 'funding'}, ${bytes(authority.digest)},
         ${sql.json([authority.transactionHex])}, ${sql.json([authority.txid])})
       ON CONFLICT (vault_id, authorization_digest) DO UPDATE SET updated_at = presigned_broadcast_intents.updated_at
@@ -85,10 +90,11 @@ export async function preparePresignedBroadcast(input: {
 
 /** Only exact persisted intents are retryable; no HTTP caller can supply replacement bytes. */
 export async function submitPresignedBroadcast(intentId: string, dependencies: PresignedBroadcastDependencies = broadcastDependencies()) {
-  dependencies.assertEnabled(); identifier(intentId, 'broadcast intent');
+  identifier(intentId, 'broadcast intent');
   const claimed = await transaction(async sql => {
     const rows = await sql<Intent[]>`SELECT * FROM presigned_broadcast_intents WHERE id = ${intentId}::uuid FOR UPDATE`;
     const row = rows[0]; assert(row, 'broadcast intent not found');
+    dependencies.assertEnabled(row.protocol);
     const update = await sql<Array<{ id: string; attempt_count: number }>>`
       UPDATE presigned_broadcast_intents SET status = 'submitting', attempt_count = attempt_count + 1,
         last_error_code = NULL, updated_at = now()
@@ -158,14 +164,15 @@ export async function submitPresignedBroadcast(intentId: string, dependencies: P
 }
 
 export async function retryPresignedBroadcasts(dependencies?: PresignedBroadcastDependencies) {
-  if (!presignedBroadcastEnabled()) return { enabled: false, results: [] };
-  const rows = await db()<Array<{ id: string }>>`
-    SELECT id FROM presigned_broadcast_intents WHERE kind IN ('funding', 'runtime')
+  const protocols = [PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3].filter(protocol => presignedBroadcastEnabled(protocol));
+  if (!protocols.length) return { enabled: false, results: [] };
+  const rows = await db()<Array<{ id: string; protocol: PresignedProtocol }>>`
+    SELECT id, protocol FROM presigned_broadcast_intents WHERE protocol IN ${db()(protocols)} AND kind IN ('funding', 'runtime')
       AND (status IN ('prepared', 'deferred', 'accepted') OR (status = 'submitting' AND updated_at < now() - interval '45 seconds'))
     ORDER BY updated_at, id LIMIT 100
   `;
   const results = [];
-  for (const row of rows) results.push(await submitPresignedBroadcast(row.id, dependencies));
+  for (const row of rows) if (presignedBroadcastEnabled(row.protocol)) results.push(await submitPresignedBroadcast(row.id, dependencies));
   return { enabled: true, results };
 }
 
@@ -174,6 +181,7 @@ export async function exactAuthority(vaultId: string, epochId: string, proposalI
   const epoch = await loadPresignedFundingEpoch(vaultId, epochId, connection);
   assert(epoch.graph, 'broadcast requires a complete retained graph');
   verifyPreauthorizations(epoch.graph, epoch.preauthorizations, true);
+  if (epoch.graph.protocol === PRESIGNED_PROTOCOL_V3) verifyRecoveryAuthorizations(epoch.graph, epoch.recoveryAuthorizations ?? [], true);
   if (!proposalId) {
     assert(epoch.status === 'approved' && epoch.finalization && epoch.fundingApprovals.length === 3 &&
       new Set(epoch.fundingApprovals).size === 3 && PARTICIPANT_IDS.every(id => epoch.fundingApprovals.includes(id)),
@@ -183,7 +191,7 @@ export async function exactAuthority(vaultId: string, epochId: string, proposalI
     return { transactionHex: completed.transactionHex, txid: completed.txid, digest: completed.finalizationDigest };
   }
   const state = await runtimeState(vaultId, proposalId, connection);
-  assert(state.proposal.epochId === epochId && state.proposal.graphDigest === epoch.graph.digest,
+  assert(state.protocol === epoch.graph.protocol && state.proposal.epochId === epochId && state.proposal.graphDigest === epoch.graph.digest,
     'runtime broadcast changed its retained funding epoch');
   validatePresignedRuntimeProposal(epoch.graph, state.proposal);
   assert(presignedRuntimeBroadcastReady(state) && state.finalized, 'runtime broadcast requires its exact transaction signer quorum');
@@ -195,12 +203,12 @@ export async function exactAuthority(vaultId: string, epochId: string, proposalI
   return { transactionHex: completed.transactionHex, txid: completed.txid, digest };
 }
 async function runtimeState(vaultId: string, proposalId: string, connection: Sql | TransactionSql = db()): Promise<PresignedRuntimeState> {
-  const rows = await connection<Array<{ state_json: PresignedRuntimeState; state_digest: Buffer }>>`
-    SELECT state_json, state_digest FROM presigned_runtime_proposals
-    WHERE id = ${proposalId}::uuid AND vault_id = ${vaultId}::uuid AND protocol = ${PRESIGNED_PROTOCOL}
+  const rows = await connection<Array<{ protocol: PresignedProtocol; state_json: PresignedRuntimeState; state_digest: Buffer }>>`
+    SELECT protocol, state_json, state_digest FROM presigned_runtime_proposals
+    WHERE id = ${proposalId}::uuid AND vault_id = ${vaultId}::uuid AND protocol IN ('presigned-graph-v2','presigned-graph-v3')
   `;
   const row = rows[0];
-  assert(row && commitmentDigest('vault/presigned-graph-v2/runtime/state', row.state_json) === row.state_digest.toString('hex'),
+  assert(row && row.state_json.protocol === row.protocol && commitmentDigest(presignedDomain(row.protocol, 'runtime/state'), row.state_json) === row.state_digest.toString('hex'),
     'runtime broadcast state is missing or changed');
   return row.state_json;
 }

@@ -7,13 +7,13 @@ import { buildPresignedSpend, authorizePresignedSpendTransaction, finalizePresig
   verifyPresignedRecoveryContribution, type PresignedCooperativePublicNonce, type PresignedCooperativePartial,
   type PresignedRecoveryContribution, type PresignedSpendProposal, type PresignedSpendSource } from './spends.js';
 import type { PresignedConfirmedCoin } from './core.js';
-import { PRESIGNED_PROTOCOL, type ParticipantId, type PresignedGraph } from './types.js';
+import { PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, type ParticipantId, type PresignedGraph, type RecoveryAuthorization } from './types.js';
 import { assert, canonicalJson, commitmentDigest, exactKeys, hexBytes, identifier, participantId,
   safeInteger, sameCanonical } from './validation.js';
 
-const DOMAIN = 'vault/presigned-graph-v2/runtime';
+const domain = (value: { protocol: PresignedGraph['protocol'] }) => `vault/${value.protocol}/runtime`;
 export type PresignedRuntimeKind = 'solo' | 'cooperative' | 'recovery' | 'final-sweep';
-type ActionBase = { version: 2; protocol: typeof PRESIGNED_PROTOCOL };
+type ActionBase = { version: PresignedGraph['version']; protocol: PresignedGraph['protocol'] };
 export type PresignedRuntimeAction = ActionBase & (
   { kind: 'create-proposal'; epochId: string; graphDigest: string; proposalId: string; spendKind: PresignedRuntimeKind;
     sourceExitId: string | null; exitId: string | null; confirmationBlockHash: string } |
@@ -27,8 +27,8 @@ export type PresignedRuntimeAction = ActionBase & (
   { kind: 'abandon-proposal'; proposalId: string; proposalDigest: string; reason: string }
 );
 export interface PresignedRuntimeProposal {
-  version: 2;
-  protocol: typeof PRESIGNED_PROTOCOL;
+  version: PresignedGraph['version'];
+  protocol: PresignedGraph['protocol'];
   proposalId: string;
   epochId: string;
   graphDigest: string;
@@ -57,8 +57,8 @@ export interface PresignedRuntimeFinalization extends AuthorizedPresignedTransac
   approverParticipantIds: ParticipantId[];
 }
 export interface PresignedRuntimeState {
-  version: 2;
-  protocol: typeof PRESIGNED_PROTOCOL;
+  version: PresignedGraph['version'];
+  protocol: PresignedGraph['protocol'];
   proposal: PresignedRuntimeProposal;
   status: 'collecting' | 'finalized' | 'abandoned';
   publicNonces: PresignedCooperativePublicNonce[];
@@ -82,7 +82,7 @@ export function validatePresignedRuntimeAction(candidate: unknown): PresignedRun
   boundedPublicJson(candidate);
   assert(candidate !== null && typeof candidate === 'object' && !Array.isArray(candidate), 'runtime action must be an object');
   const action = candidate as PresignedRuntimeAction;
-  assert(action.version === 2 && action.protocol === PRESIGNED_PROTOCOL, 'wrong runtime action protocol');
+  assertProtocol(action, 'runtime action');
   const fields: Record<PresignedRuntimeAction['kind'], string[]> = {
     'create-proposal': ['epochId', 'graphDigest', 'proposalId', 'spendKind', 'sourceExitId', 'exitId', 'confirmationBlockHash'],
     'reanchor-transaction': ['proposalId', 'predecessorProposalId', 'predecessorProposalDigest', 'transactionDigest', 'confirmationBlockHash'],
@@ -109,9 +109,9 @@ export function validatePresignedRuntimeAction(candidate: unknown): PresignedRun
     hexBytes(action.confirmationBlockHash, 32, 'new source confirmation anchor');
     assert(action.proposalId !== action.predecessorProposalId, 'reanchor requires a fresh proposal ID');
   } else hexBytes(action.proposalDigest, 32, 'runtime proposal digest');
-  if (action.kind === 'contribute-nonce') validateContributionShape(action.publicNonce, 'nonce');
-  if (action.kind === 'contribute-partial') validateContributionShape(action.partial, 'partial');
-  if (action.kind === 'contribute-recovery') validateContributionShape(action.contribution, 'recovery');
+  if (action.kind === 'contribute-nonce') validateContributionShape(action.publicNonce, 'nonce', action);
+  if (action.kind === 'contribute-partial') validateContributionShape(action.partial, 'partial', action);
+  if (action.kind === 'contribute-recovery') validateContributionShape(action.contribution, 'recovery', action);
   if (action.kind === 'finalize-transaction') {
     assert(typeof action.transactionHex === 'string' && /^(?:[0-9a-f]{2}){1,10000}$/u.test(action.transactionHex), 'invalid completed runtime transaction bytes');
   }
@@ -123,7 +123,8 @@ export function validatePresignedRuntimeAction(candidate: unknown): PresignedRun
   return JSON.parse(canonicalJson(action)) as PresignedRuntimeAction;
 }
 export function presignedRuntimeActionDigest(action: PresignedRuntimeAction): string {
-  return commitmentDigest(`${DOMAIN}/action`, validatePresignedRuntimeAction(action));
+  const validated = validatePresignedRuntimeAction(action);
+  return commitmentDigest(`${domain(validated)}/action`, validated);
 }
 
 export function buildPresignedRuntimeProposal(input: {
@@ -134,6 +135,8 @@ export function buildPresignedRuntimeProposal(input: {
 }): PresignedRuntimeProposal {
   const action = validatePresignedRuntimeAction(input.action);
   assert(action.kind === 'create-proposal', 'runtime proposal requires a creation action');
+  assert(action.version === input.graph.version && action.protocol === input.graph.protocol,
+    'runtime action belongs to another graph protocol');
   participantId(input.participantId);
   const reanchoredFrom = input.reanchoredFrom ?? null;
   if (reanchoredFrom) {
@@ -158,7 +161,7 @@ export function buildPresignedRuntimeProposal(input: {
   } else assert(action.exitId === null, 'non-solo proposal must not name a solo exit');
   const actorParticipantId = action.spendKind === 'solo' ? input.participantId
     : action.spendKind === 'final-sweep' ? built.source.owner : null;
-  const body = { version: 2 as const, protocol: PRESIGNED_PROTOCOL, proposalId: action.proposalId,
+  const body = { version: input.graph.version, protocol: input.graph.protocol, proposalId: action.proposalId,
     epochId: action.epochId, graphDigest: action.graphDigest, kind: action.spendKind,
     sourceExitId: action.sourceExitId, exitId: action.exitId, source: built.source,
     confirmationBlockHash: action.confirmationBlockHash, createdByParticipantId: input.participantId, reanchoredFrom,
@@ -166,14 +169,14 @@ export function buildPresignedRuntimeProposal(input: {
     slot: actorParticipantId ? `${action.spendKind}:${actorParticipantId}` : action.spendKind,
     spend: exit ? null : built, unsignedTxHex: exit?.unsignedTxHex ?? built.unsignedTxHex,
     txid: exit?.txid ?? built.txid, psbtBase64: exit?.psbtBase64 ?? built.psbtBase64, feeSats: exit?.feeSats ?? built.feeSats };
-  return { ...body, digest: commitmentDigest(`${DOMAIN}/proposal`, body) };
+  return { ...body, digest: commitmentDigest(`${domain(input.graph)}/proposal`, body) };
 }
 export function validatePresignedRuntimeProposal(graph: PresignedGraph, proposal: PresignedRuntimeProposal): PresignedRuntimeProposal {
   exactKeys(proposal, ['version', 'protocol', 'proposalId', 'epochId', 'graphDigest', 'kind', 'sourceExitId', 'exitId',
     'source', 'confirmationBlockHash', 'createdByParticipantId', 'reanchoredFrom', 'actorParticipantId', 'participantIds', 'threshold',
     'slot', 'spend', 'unsignedTxHex', 'txid', 'psbtBase64', 'feeSats', 'digest'], 'runtime proposal');
   const rebuilt = buildPresignedRuntimeProposal({ graph, participantId: proposal.createdByParticipantId, reanchoredFrom: proposal.reanchoredFrom,
-    action: { version: 2, protocol: PRESIGNED_PROTOCOL, kind: 'create-proposal', proposalId: proposal.proposalId,
+    action: { version: graph.version, protocol: graph.protocol, kind: 'create-proposal', proposalId: proposal.proposalId,
       epochId: proposal.epochId, graphDigest: proposal.graphDigest, spendKind: proposal.kind,
       sourceExitId: proposal.sourceExitId, exitId: proposal.exitId, confirmationBlockHash: proposal.confirmationBlockHash } });
   sameCanonical(proposal, rebuilt, 'runtime proposal');
@@ -187,6 +190,10 @@ export function buildPresignedRuntimeReanchor(input: {
 }): PresignedRuntimeProposal {
   const action = validatePresignedRuntimeAction(input.action);
   assert(action.kind === 'reanchor-transaction', 'reanchor action required');
+  assert(action.version === input.graph.version && action.protocol === input.graph.protocol,
+    'reanchor action belongs to another graph protocol');
+  assert(input.predecessor.version === input.graph.version && input.predecessor.protocol === input.graph.protocol,
+    'reanchor predecessor belongs to another graph protocol');
   const previous = validatePresignedRuntimeProposal(input.graph,input.predecessor.proposal);
   assert(input.predecessor.status === 'finalized' && input.predecessor.finalized, 'only an exact retained finalized transaction can be reanchored');
   const completed = authorizedFinalization(input.graph,previous,input.predecessor.finalized,input.predecessor.finalized.approverParticipantIds);
@@ -196,7 +203,7 @@ export function buildPresignedRuntimeReanchor(input: {
   assert(action.confirmationBlockHash !== previous.confirmationBlockHash, 'reanchor must identify a new active source block');
   const proposal = buildPresignedRuntimeProposal({ graph: input.graph, participantId: input.participantId,
     reanchoredFrom: { proposalId: previous.proposalId,proposalDigest: previous.digest,transactionDigest: completed.transactionDigest },
-    action: { version: 2,protocol: PRESIGNED_PROTOCOL,kind: 'create-proposal',epochId: previous.epochId,
+    action: { version: input.graph.version,protocol: input.graph.protocol,kind: 'create-proposal',epochId: previous.epochId,
       graphDigest: previous.graphDigest,proposalId: action.proposalId,spendKind: previous.kind,
       sourceExitId: previous.sourceExitId,exitId: previous.exitId,confirmationBlockHash: action.confirmationBlockHash } });
   assert(proposal.txid === completed.txid && proposal.unsignedTxHex === previous.unsignedTxHex,
@@ -225,15 +232,18 @@ export function assertPresignedRuntimeObservation(input: {
 export function applyPresignedRuntimeAction(input: {
   graph: PresignedGraph; state: PresignedRuntimeState | null; action: PresignedRuntimeAction; participantId: ParticipantId;
   observation: PresignedRuntimeCoinObservation | null; requiredConfirmations: number;
+  recoveryAuthorizations?: RecoveryAuthorization[];
 }): PresignedRuntimeState {
   const action = validatePresignedRuntimeAction(input.action);
+  assert(action.version === input.graph.version && action.protocol === input.graph.protocol,
+    'runtime action belongs to another graph protocol');
   participantId(input.participantId);
   if (action.kind === 'create-proposal') {
     assert(input.state === null, 'runtime proposal IDs cannot be reused');
     const proposal = buildPresignedRuntimeProposal({ graph: input.graph, action, participantId: input.participantId });
     assert(input.observation, 'private-Core runtime source observation is required');
     assertPresignedRuntimeObservation({ graph: input.graph, proposal, observed: input.observation, requiredConfirmations: input.requiredConfirmations });
-    return { version: 2, protocol: PRESIGNED_PROTOCOL, proposal, status: 'collecting', publicNonces: [], nonceSetDigest: null,
+    return { version: input.graph.version, protocol: input.graph.protocol, proposal, status: 'collecting', publicNonces: [], nonceSetDigest: null,
       partials: [], recoveryContributions: [], finalized: null, broadcastApprovals: [], abandonedByParticipantId: null, abandonReason: null };
   }
   if (action.kind === 'reanchor-transaction') {
@@ -242,10 +252,12 @@ export function applyPresignedRuntimeAction(input: {
     assert(input.observation, 'private-Core reanchor source observation is required');
     assertPresignedRuntimeObservation({ graph: input.graph,proposal,observed: input.observation,requiredConfirmations: input.requiredConfirmations });
     const finalized = authorizedFinalization(input.graph,proposal,input.state.finalized!,input.state.finalized!.approverParticipantIds);
-    return { version: 2,protocol: PRESIGNED_PROTOCOL,proposal,status: 'finalized',publicNonces: [],nonceSetDigest: null,
+    return { version: input.graph.version,protocol: input.graph.protocol,proposal,status: 'finalized',publicNonces: [],nonceSetDigest: null,
       partials: [],recoveryContributions: [],finalized,broadcastApprovals: [],abandonedByParticipantId: null,abandonReason: null };
   }
   assert(input.state, 'runtime proposal is missing');
+  assert(input.state.version === input.graph.version && input.state.protocol === input.graph.protocol,
+    'runtime state belongs to another graph protocol');
   const state = structuredClone(input.state);
   const proposal = validatePresignedRuntimeProposal(input.graph, state.proposal);
   assert(action.proposalId === proposal.proposalId && action.proposalDigest === proposal.digest, 'runtime action changed its exact proposal');
@@ -297,7 +309,8 @@ export function applyPresignedRuntimeAction(input: {
     state.recoveryContributions.push(verifyPresignedRecoveryContribution({ graph: input.graph, proposal: proposal.spend, contribution: action.contribution }));
     state.recoveryContributions.sort(byParticipant);
     if (state.recoveryContributions.length === proposal.threshold) {
-      const completed = finalizePresignedRecovery({ graph: input.graph, proposal: proposal.spend, contributions: state.recoveryContributions });
+      const completed = finalizePresignedRecovery({ graph: input.graph, proposal: proposal.spend, contributions: state.recoveryContributions,
+        ...(input.graph.version === 3 ? { recoveryAuthorizations: input.recoveryAuthorizations } : {}) });
       state.finalized = authorizedFinalization(input.graph, proposal, completed, state.recoveryContributions.map(item => item.participantId));
       state.status = 'finalized';
     }
@@ -316,7 +329,7 @@ export function presignedRuntimeBroadcastReady(state: PresignedRuntimeState): bo
 }
 export function presignedRuntimeTransactionDigest(proposal: PresignedRuntimeProposal, completed: AuthorizedPresignedTransaction,
   approverParticipantIds: ParticipantId[]): string {
-  return commitmentDigest(`${DOMAIN}/completed-transaction`, { proposalDigest: proposal.digest,
+  return commitmentDigest(`${domain(proposal)}/completed-transaction`, { proposalDigest: proposal.digest,
     transactionHex: completed.transactionHex, txid: completed.txid, feeSats: completed.feeSats, vsize: completed.vsize,
     approverParticipantIds: [...approverParticipantIds].sort() });
 }
@@ -339,22 +352,27 @@ function authorizedFinalization(graph: PresignedGraph, proposal: PresignedRuntim
   return { ...completed, approverParticipantIds, transactionDigest: presignedRuntimeTransactionDigest(proposal, completed, approverParticipantIds) };
 }
 function validatePublicNonce(proposal: PresignedSpendProposal, nonce: PresignedCooperativePublicNonce, id: ParticipantId): void {
-  validateContributionShape(nonce, 'nonce');
+  validateContributionShape(nonce, 'nonce', proposal);
   assert(nonce.graphDigest === proposal.graphDigest && nonce.proposalId === proposal.proposalId &&
     nonce.proposalDigest === proposal.digest && nonce.participantId === id && proposal.participantIds.includes(id), 'nonce changed its participant or inner spend commitment');
   const bytes = Buffer.from(nonce.pubnonce, 'hex');
   assert(ecc.isPoint(bytes.subarray(0, 33)) && ecc.isPoint(bytes.subarray(33)), 'public nonce contains an invalid curve point');
 }
 function validateContributionShape(value: PresignedCooperativePublicNonce | PresignedCooperativePartial | PresignedRecoveryContribution,
-  kind: 'nonce' | 'partial' | 'recovery'): void {
+  kind: 'nonce' | 'partial' | 'recovery', binding: ActionBase): void {
   exactKeys(value, ['version', 'protocol', 'graphDigest', 'proposalId', 'proposalDigest', 'participantId',
     ...(kind === 'nonce' ? ['pubnonce'] : kind === 'partial' ? ['nonceSetDigest', 'partialSignatureHex'] : ['signatureHex'])], 'runtime public contribution');
-  assert(value.version === 2 && value.protocol === PRESIGNED_PROTOCOL, 'wrong public contribution protocol');
+  assertProtocol(value, 'public contribution');
+  assert(value.version === binding.version && value.protocol === binding.protocol, 'mixed public contribution protocol');
   participantId(value.participantId); identifier(value.proposalId, 'public contribution proposal');
   hexBytes(value.graphDigest, 32, 'public contribution graph'); hexBytes(value.proposalDigest, 32, 'inner spend digest');
   if ('pubnonce' in value) hexBytes(value.pubnonce, 66, 'public nonce');
   if ('partialSignatureHex' in value) { hexBytes(value.partialSignatureHex, 32, 'partial signature'); hexBytes(value.nonceSetDigest, 32, 'frozen nonce set'); }
   if ('signatureHex' in value) hexBytes(value.signatureHex, 64, 'recovery signature');
+}
+function assertProtocol(value: ActionBase, label: string): void {
+  assert(value.version === 2 && value.protocol === PRESIGNED_PROTOCOL ||
+    value.version === 3 && value.protocol === PRESIGNED_PROTOCOL_V3, `wrong ${label} protocol`);
 }
 function byParticipant(a: { participantId: ParticipantId }, b: { participantId: ParticipantId }): number { return a.participantId.localeCompare(b.participantId); }
 function exitIdentifier(value: string): void { assert(typeof value === 'string' && /^(alice|bob|carol)(\/(alice|bob|carol))?$/u.test(value), 'invalid runtime exit identifier'); }

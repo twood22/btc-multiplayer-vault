@@ -7,11 +7,17 @@ import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import postgres from 'postgres';
 import { taggedHash } from '../../src/crypto.js';
-import { BITCOIN_NETWORK_NAME } from '../../src/network.js';
+import { BITCOIN_GENESIS_HASH, BITCOIN_NETWORK_CONFIG, BITCOIN_NETWORK_NAME } from '../../src/network.js';
 import { createPresignedFixture } from '../../src/presigned/fixtures.js';
+import { LAST_SURVIVOR_PAYOUT_SCHEDULE } from '../../src/presigned/economics.js';
 import { presignedActionDigest } from '../../src/presigned/ceremony.js';
 import { validatePresignedFeePackage, type PresignedFeePackage } from '../../src/presigned/fee-package.js';
-import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, type ParticipantId, type PresignedGraph } from '../../src/presigned/types.js';
+import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, FIXED_RECOVERY_POLICY, isPresignedProtocol, type ParticipantId, type PresignedGraph } from '../../src/presigned/types.js';
+import { presignedVersion } from '../../src/presigned/validation.js';
+import { verifyRecoveryAuthorizations } from '../../src/presigned/fixed-recovery.js';
+import { buildPresignedCashout, authorizePresignedCashoutTransaction } from '../../src/presigned/cashout.js';
+import { payoutScript } from '../../src/presigned/roster.js';
+import type { PresignedSignedCashout } from '../lib/server/presigned-cashout-store';
 import { withPresignedRegtest, type PresignedRegtest } from '../../scripts/lib/presigned-regtest.js';
 import { createV2Browser, installV2EsploraBridge, localV2Gate, seedV2Invitations, startV2CoreBridge,
   reloadV2Vault, useV2Authenticator, v2Status, type V2Browser, type V2BrowserAudit } from './presigned-v2-fixture';
@@ -27,7 +33,7 @@ disablePresignedFailurePageSnapshots();
 const expect = baseExpect.configure({ timeout: 60_000 });
 let runtimeStage = 'not-started';
 
-test('real V2 browser ceremony and runtime with virtual PRF passkeys and isolated Core facts', async ({ browser, baseURL }) => {
+test('real version-bound browser ceremony and runtime with virtual PRF passkeys and isolated Core facts', async ({ browser, baseURL }) => {
   test.setTimeout(2_700_000);
   assert(baseURL && new URL(baseURL).hostname === 'localhost', 'only the disposable localhost test host is allowed');
   const evidence = process.env.BROWSER_TEST_EVIDENCE_DIR;
@@ -36,11 +42,14 @@ test('real V2 browser ceremony and runtime with virtual PRF passkeys and isolate
   // The wrapper takes this from the exact built artifact (or immutable OCI
   // runtime). It is not the hash of whichever source happens to be open later.
   const buildIdentity = JSON.parse(readFileSync(process.env.BROWSER_TEST_BUILD_IDENTITY ?? 'vault-presigned-build.json', 'utf8'));
-  assert(buildIdentity.version === 2 && buildIdentity.protocol === PRESIGNED_PROTOCOL &&
+  const protocol = process.env.PRESIGNED_BROWSER_PROTOCOL ?? PRESIGNED_PROTOCOL_V3;
+  assert(isPresignedProtocol(protocol));
+  const version = presignedVersion(protocol); const v3 = protocol === PRESIGNED_PROTOCOL_V3;
+  assert(buildIdentity.version === version && buildIdentity.protocol === protocol &&
     buildIdentity.network === BITCOIN_NETWORK_NAME && /^[0-9a-f]{64}$/u.test(buildIdentity.sourceDigest));
   const databaseUrl = process.env.DATABASE_URL;
   assert(databaseUrl && new URL(databaseUrl).hostname === '127.0.0.1', 'only the disposable loopback database is allowed');
-  const fixture = createPresignedFixture({ network: BITCOIN_NETWORK_NAME });
+  const fixture = createPresignedFixture({ network: BITCOIN_NETWORK_NAME, protocol, payoutSchedule: LAST_SURVIVOR_PAYOUT_SCHEDULE });
   const sql = postgres(databaseUrl, { max: 4, onnotice: () => undefined });
   const actors: V2Browser[] = [];
   const audit: V2BrowserAudit = { forbidden: [], unexpected: [], chainRequests: 0, rpcMethods: [],
@@ -50,6 +59,7 @@ test('real V2 browser ceremony and runtime with virtual PRF passkeys and isolate
   const checks: string[] = [];
   try {
     const provisioned = await seedV2Invitations(sql, { network: fixture.roster.network, genesisHash: fixture.roster.genesisHash,
+      ...(v3 ? { protocol: PRESIGNED_PROTOCOL_V3, recoveryPolicy: FIXED_RECOVERY_POLICY } : {}),
       economics: fixture.roster.economics, feePolicy: fixture.roster.feePolicy, fundingFeeSats: fixture.graph.funding.feeSats });
     for (const id of PARTICIPANT_IDS) {
       stage = `${id} real virtual-PRF primary and recovery onboarding`;
@@ -58,7 +68,7 @@ test('real V2 browser ceremony and runtime with virtual PRF passkeys and isolate
     checks.push('three independent browser identities and six virtual PRF-backed passkey envelopes');
     for (const actor of actors) {
       stage = `${actor.id} public V2 identity registration`;
-      await actor.page.getByTestId('presigned-ceremony').getByRole('button', { name: 'Register my v2 public keys' }).click();
+      await actor.page.getByTestId('presigned-ceremony').getByRole('button', { name: `Register my v${version} public keys` }).click();
       await expect.poll(async () => (await v2Status(actor.page)).identities.some(identity => identity.id === actor.id)).toBe(true);
     }
     const rosterDigests: string[] = [];
@@ -68,6 +78,11 @@ test('real V2 browser ceremony and runtime with virtual PRF passkeys and isolate
       const status = await v2Status(actor.page); assert(status.rosterDigest);
       rosterDigests.push(status.rosterDigest);
       const panel = actor.page.getByTestId('presigned-ceremony');
+      await expect(panel.getByTestId('presigned-payouts')).toContainText('First payout: 9,120. Second: 9,600. Last: 10,080 sats');
+      if (v3) {
+        await expect(panel.getByTestId('fixed-recovery-policy')).toContainText('exact pre-approved refunds');
+        await expect(panel).not.toContainText('Bitcoin script does not enforce those amounts or destinations');
+      } else await expect(panel).toContainText('Bitcoin script does not enforce those amounts or destinations');
       await panel.getByLabel(/I compared this digest/u).check();
       await panel.getByRole('button', { name: 'Compare and pin exact roster locally' }).click();
       await expect.poll(async () => (await v2Status(actor.page)).rosterApprovals.includes(actor.id)).toBe(true);
@@ -95,13 +110,23 @@ test('real V2 browser ceremony and runtime with virtual PRF passkeys and isolate
           await reloadV2Vault(actor);
           const panel = actor.page.getByTestId('presigned-ceremony');
           await panel.getByLabel(/I reviewed the exact inputs, payouts/u).check();
-          await panel.getByRole('button', { name: 'Pin graph and preauthorize four counterparty exits' }).click();
+          if (v3) {
+            await expect(panel.getByTestId('fixed-refund-previews').locator('tbody tr')).toHaveCount(4);
+          }
+          await panel.getByRole('button', { name: v3 ? 'Pin graph and authorize four exits plus three refunds' : 'Pin graph and preauthorize four counterparty exits' }).click();
           await expect.poll(async () => (await v2Status(actor.page)).epoch!.preauthorizations.filter(entry => entry.participantId === actor.id).length).toBe(4);
+          if (v3) await expect.poll(async () => (await v2Status(actor.page)).epoch!.recoveryAuthorizations!.filter(entry => entry.participantId === actor.id).length).toBe(3);
         }
         const graph = (await v2Status(actors[0]!.page)).epoch!.graph!;
+        assert.equal(graph.protocol, protocol);
         assert.equal(bitcoin.Transaction.fromHex(graph.fundingUnsignedTxHex).version, 3);
         assert.equal(graph.exits.length, 9);
         checks.push('real Core-native inputs, stable v3 funding, nine exits and twelve browser-produced counterparty signatures');
+        if (v3) {
+          assert.equal(graph.recoveries!.length, 4);
+          assert.equal(verifyRecoveryAuthorizations(graph, (await v2Status(actors[0]!.page)).epoch!.recoveryAuthorizations!, true).length, 9);
+          checks.push('four exact fixed refund previews and all nine distinct browser-produced setup refund approvals before backups or funding');
+        }
         for (const actor of actors) {
           stage = `${actor.id} encrypted portable download, file chooser and recovery-key readback`;
           console.log(JSON.stringify({ stage }));
@@ -154,6 +179,8 @@ test('real V2 browser ceremony and runtime with virtual PRF passkeys and isolate
         checks.push('each browser actually reopens its saved encrypted portable file and restores with two separate virtual PRF credentials');
 
         if (BITCOIN_NETWORK_NAME === 'mainnet') {
+          stage = 'mainnet-format owner withdrawal preview without signing or broadcast';
+          const cashoutProof = await browserCashout(actors[0]!, actors[1]!, graph, core, false);
           // A mainnet-format OCI build must preserve the real release gate.
           // No test flag, fabricated acceptance receipt or physical-test claim
           // is supplied to get around it. Full game execution is separately
@@ -163,14 +190,14 @@ test('real V2 browser ceremony and runtime with virtual PRF passkeys and isolate
           const readiness = actors[0]!.page.getByRole('region', { name: 'Presigned release readiness' });
           await readiness.getByRole('button', { name: 'Check read-only funding readiness' }).click();
           await expect(readiness.getByRole('status')).toContainText('Read-only results do not authorize');
-          await expect(readiness).toContainText('Outstanding: Exact source');
+          await expect(readiness).toContainText('Outstanding: Exact protocol, source');
           await expect(readiness).toContainText('Outstanding: Separate explicit mainnet activation');
           const downloads: Download[] = []; const record = (download: Download) => { downloads.push(download); };
           actors[0]!.page.on('download', record);
           try {
             const panel = actors[0]!.page.getByTestId('presigned-ceremony');
             await panel.getByRole('button', { name: 'Reverify and export funding PSBT' }).click();
-            await expect(panel.locator('.form-message')).toContainText('mainnet funding requires separate explicit authorization');
+            await expect(panel.locator('.form-message')).toContainText('This vault protocol requires separate explicit mainnet authorization');
           } finally { actors[0]!.page.off('download', record); }
           assert.equal(downloads.length, 0);
           const stopped = (await v2Status(actors[0]!.page)).epoch!;
@@ -180,7 +207,9 @@ test('real V2 browser ceremony and runtime with virtual PRF passkeys and isolate
           assert.deepEqual(await core.rpc('getrawmempool'), []);
           assert.deepEqual(audit.forbidden, []); assert.deepEqual(audit.unexpected, []); assert.equal(audit.sensitiveRequestDetected, false);
           checks.push('mainnet funding blocked before wallet PSBT export, server signing intent, signature release or send RPC; gate not bypassed');
-          const summary = { passed: true, protocol: PRESIGNED_PROTOCOL, bundle: 'optimized-webpack-standalone',
+          const summary = { passed: true, protocol, bundle: 'optimized-webpack-standalone',
+            ...cashoutProof,
+            setupSignatures: v3 ? 21 : 12, fixedRecoveryTemplates: v3 ? 4 : 0,
             sourceDigest: buildIdentity.sourceDigest, appNetwork: BITCOIN_NETWORK_NAME, actualBitcoinChain: 'isolated-regtest',
             networkIdentityBridge: true, mainnetFundingGateVerified: true, mainnetFundingAuthorized: false,
             completeGameExecution: false, realSignetAcceptance: false, physicalPasskeyEvidence: false, virtualPrfPasskeys: 6,
@@ -220,7 +249,7 @@ test('real V2 browser ceremony and runtime with virtual PRF passkeys and isolate
             await actor.page.unroute('**/api/vault/presigned/status');
             checks.push('wallet intent persists before an aborted request and blocks replayed restart eligibility across reload');
           }
-          const downloadEvent = actor.page.waitForEvent('download');
+          const downloadEvent = actor.page.waitForEvent('download', { timeout: 60_000 });
           await panel.getByRole('button', { name: 'Reverify and export funding PSBT' }).click();
           const saved = join(evidence, `${actor.id}-unsigned-funding.psbt.txt`);
           await (await downloadEvent).saveAs(saved);
@@ -245,7 +274,7 @@ test('real V2 browser ceremony and runtime with virtual PRF passkeys and isolate
         const readiness = actors[0]!.page.getByRole('region', { name: 'Presigned release readiness' });
         await readiness.getByRole('button', { name: 'Check read-only funding readiness' }).click();
         await expect(readiness.getByRole('status')).toContainText('Read-only results do not authorize');
-        await expect(readiness).toContainText('Outstanding: Exact source');
+        await expect(readiness).toContainText('Outstanding: Exact protocol, source');
         const sponsorScripts: string[] = [];
         for (let index = 0; index < 6; index++) {
           const address = await core.walletRpc('getnewaddress', ['browser-fee-acceptance', index % 2 ? 'bech32' : 'bech32m']);
@@ -300,7 +329,13 @@ test('real V2 browser ceremony and runtime with virtual PRF passkeys and isolate
         assert.equal(recovery.recoveryContributions.length, 2);
         const recoveryFee = await browserFee(actors[0]!, recovery.finalized.txid, sponsors[2]!, core);
         assert((await core.rpc('testmempoolaccept', [[recoveryFee.parentTransactionHex, recoveryFee.completed.transactionHex]]))[1].allowed);
-        checks.push('premature recovery blocked; two real personal-key CSV signatures accepted by Core at maturity');
+        if (v3) {
+          assert.equal(recovery.finalized.txid, graph.recoveries!.find(item => item.roundId === 'alicebobcarol')!.txid);
+          const refund = bitcoin.Transaction.fromHex(recovery.finalized.transactionHex);
+          assert.deepEqual(refund.outs.map(output => Number(output.value)), [9_834, 9_833, 9_833]);
+          assert.equal(refund.ins[0]!.witness.length, 8);
+          checks.push('premature recovery blocked; complete three-member setup authorization plus two fresh trigger signatures accepted by Core for the fixed equal refund including the absent member');
+        } else checks.push('premature recovery blocked; two real personal-key CSV signatures accepted by Core at maturity');
         stage = 'first solo exit, second solo exit and final-owner sweep through browser APIs';
         let sponsorIndex = 3;
         for (const [actor, kind] of [[actors[0]!, 'solo'], [actors[1]!, 'solo'], [actors[2]!, 'final-sweep']] as const) {
@@ -321,8 +356,14 @@ test('real V2 browser ceremony and runtime with virtual PRF passkeys and isolate
         assert(actors[2]!.reauthentications >= 1);
         checks.push('missing session after final-sweep signing requires genuine passkey reauthentication; exact signed transaction and local backup approvals survive');
         checks.push('all five fee parent families through real browser review, external Core sponsor PSBT, exact payout/refund signatures and passkey approval; funding/solo/final-sweep children broadcast and mined');
+        stage = 'actual owner-only external wallet withdrawal and exact approval refusals';
+        const cashoutProof = await browserCashout(actors[0]!, actors[1]!, graph, core, true);
+        checks.push('confirmed game payout discovered independently, wrong-owner source refused, changed fee clears approval, exact external withdrawal signed locally, saved without send, restored, explicitly broadcast and Core-confirmed');
         assert.deepEqual(audit.forbidden, []); assert.deepEqual(audit.unexpected, []); assert.equal(audit.sensitiveRequestDetected, false);
-        const summary = { passed: true, protocol: PRESIGNED_PROTOCOL, bundle: 'optimized-webpack-standalone',
+        const summary = { passed: true, protocol, bundle: 'optimized-webpack-standalone',
+          ...cashoutProof,
+          setupSignatures: v3 ? 21 : 12, fixedRecoveryTemplates: v3 ? 4 : 0,
+          fixedMissingParticipantRefundVerified: v3,
           sourceDigest: buildIdentity.sourceDigest,
           completeGameExecution: true, mainnetFundingAuthorized: false,
           appNetwork: BITCOIN_NETWORK_NAME, actualBitcoinChain: 'isolated-regtest', networkIdentityBridge: true,
@@ -335,10 +376,27 @@ test('real V2 browser ceremony and runtime with virtual PRF passkeys and isolate
     }, { maximumMinutes: 45 });
   } catch (error) {
     originalFailure = true;
-    // Report before any await. A stuck renderer must not suppress the original
-    // source location, and neither DOM text nor exception messages are safe.
+    // Report the failure before any optional renderer diagnostic can wait.
     console.log(JSON.stringify({ stage, runtimeStage, assertionLocations: presignedBrowserFailureLocations(error),
+      walletReleaseAttempts: audit.walletReleaseLocalGates.length, httpFailures: audit.httpFailures ?? [],
       browserDiagnostics: actors.map(actor => ({ actor: actor.id, ...actor.diagnostics })) }));
+    const operations = await Promise.all(actors.map(async actor => {
+      try {
+        const panel = actor.page.getByTestId('presigned-ceremony');
+        const value = await panel.getAttribute('data-operation', { timeout: 1000 });
+        const outcome = await panel.getAttribute('data-operation-outcome', { timeout: 1000 });
+        // These are fixed application enum labels, never DOM text, input values,
+        // response bodies, exception messages or a browser/accessibility snapshot.
+        const allowed = ['idle', 'verify-current-state', 'funding-export-readiness', 'funding-export-chain-check',
+          'funding-export-key-restoration', 'funding-export-wallet-intent', 'funding-export-download',
+          'funding-signature-readiness', 'funding-signature-chain-check', 'funding-signature-key-restoration',
+          'funding-signature-wallet-intent', 'funding-signature-psbt-verification',
+          'funding-signature-passkey-approval', 'funding-signature-completed'];
+        return { actor: actor.id, operation: value && allowed.includes(value) ? value : 'unavailable',
+          outcome: outcome && ['idle','running','completed','failed'].includes(outcome) ? outcome : 'unavailable' };
+      } catch { return { actor: actor.id, operation: 'unavailable', outcome: 'unavailable' }; }
+    }));
+    console.log(JSON.stringify({ stage: 'fixed-label-only operation diagnostic', operations }));
     throw new Error(`V2 browser stage failed: ${stage}. See the safe stage and source-location diagnostic.`);
   } finally {
     // Include contexts from interrupted onboarding, before actors.push(). A
@@ -376,6 +434,88 @@ async function downloadedText(download: Download) {
   let raw = '';
   for await (const chunk of stream) { raw += chunk.toString(); assert(raw.length <= 5 * 1024 * 1024); }
   return raw;
+}
+async function browserCashout(actor: V2Browser, other: V2Browser, graph: PresignedGraph, core: PresignedRegtest, send: boolean) {
+  const ownScript = payoutScript(graph.roster, actor.id).toString('hex');
+  const wrongScript = payoutScript(graph.roster, other.id).toString('hex');
+  // The mainnet-format build only previews an isolated, already-owned test coin.
+  // The Signet-format full flow must use an actual prior game/fee-child payout.
+  if (!send) await core.fundScripts([{ scriptPubKeyHex: ownScript, valueSats: 10_000 }]);
+  const [wrong] = await core.fundScripts([{ scriptPubKeyHex: wrongScript, valueSats: 5000 }]);
+  await reloadV2Vault(actor);
+  const panel = actor.page.getByTestId('presigned-cashout');
+  await panel.getByRole('button', { name: 'Find my confirmed payouts', exact: true }).click();
+  await expect(panel.getByRole('status')).toContainText('confirmed payout coin(s) found');
+  const chosen = await panel.getByLabel('Confirmed payout coin', { exact: true }).inputValue();
+  const [txid, voutText] = chosen.split(':'); const vout = Number(voutText); assert(txid);
+  const raw = await core.rpc('getrawtransaction', [txid, true]);
+  const source = raw.vout[vout]; assert.equal(source.scriptPubKey.hex, ownScript);
+  if (send) assert([9120,9600,10080].includes(Math.round(source.value * 1e8)), 'cash-out must use a real game payout');
+  const external = await core.walletRpc('getnewaddress', ['browser-cashout-destination', 'bech32']);
+  const destinationScript = bitcoin.address.toOutputScript(external, bitcoin.networks.regtest);
+  const destination = bitcoin.address.fromOutputScript(destinationScript, BITCOIN_NETWORK_CONFIG.bitcoinjs);
+  await panel.getByLabel('Your receiving Bitcoin address').fill(destination);
+  await panel.getByRole('button', { name: 'Enter a payout coin manually' }).count().then(async count => {
+    // Summary is not consistently exposed as a button across Chromium versions.
+    if (count) await panel.getByRole('button', { name: 'Enter a payout coin manually' }).click();
+    else await panel.locator('summary', { hasText: 'Enter a payout coin manually' }).click();
+  });
+  await panel.getByLabel('Payout transaction ID', { exact: true }).fill(wrong!.txid);
+  await panel.getByLabel('Payout output number', { exact: true }).fill(String(wrong!.vout));
+  await panel.getByRole('button', { name: 'Preview exact withdrawal', exact: true }).click();
+  await expect(panel.getByRole('status')).toContainText('cash-out source must be the exact observed coin owned by this participant payout key');
+  await expect(panel.getByTestId('cashout-preview')).toHaveCount(0);
+  await panel.getByLabel('Payout transaction ID', { exact: true }).fill(txid);
+  await panel.getByLabel('Payout output number', { exact: true }).fill(String(vout));
+  await panel.getByRole('button', { name: 'Preview exact withdrawal', exact: true }).click();
+  await expect(panel.getByTestId('cashout-destination')).toHaveText(destination);
+  const review = panel.getByLabel('I checked this exact receiving address in my wallet, the amount and the additional fee.');
+  await review.check();
+  await panel.getByLabel('Additional withdrawal fee in sats').fill('301');
+  await expect(panel.getByTestId('cashout-preview')).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: 'Sign and download my withdrawal', exact: true })).toHaveCount(0);
+  await panel.getByLabel('Additional withdrawal fee in sats').fill('300');
+  await panel.getByRole('button', { name: 'Preview exact withdrawal', exact: true }).click();
+  await expect(review).not.toBeChecked();
+  const runtime = await runtimeStatus(actor.page);
+  const publicKit = runtime.kits.find((item: any) => item.publicKit.graph.digest === graph.digest).publicKit;
+  const header = await core.rpc('getblockheader', [raw.blockhash, true]);
+  const expected = buildPresignedCashout({ publicKit, participantId: actor.id, parentTransactionHex: raw.hex,
+    sourceObservation: { network: graph.roster.network, genesisHash: BITCOIN_GENESIS_HASH, txid, vout,
+      valueSats: Math.round(source.value * 1e8), scriptPubKeyHex: ownScript,
+      confirmationBlockHash: raw.blockhash, confirmations: header.confirmations, unspentInActiveChain: true, coinbase: false },
+    destinationAddress: destination, feeSats: 300, maxFeeSats: 300 });
+  await expect(panel.getByTestId('cashout-preview')).toContainText(expected.txid);
+  await expect(panel.getByTestId('cashout-preview')).toContainText(`Send exactly ${expected.payoutSats.toLocaleString('en-US')} sats`);
+  await expect(panel.getByTestId('cashout-preview')).toContainText('Additional fee: 300 sats. Fee limit: 300 sats.');
+  await review.check();
+  if (send) {
+    const download = actor.page.waitForEvent('download', { timeout: 60_000 });
+    await panel.getByRole('button', { name: 'Sign and download my withdrawal', exact: true }).click();
+    const artifact = JSON.parse(await downloadedText(await download)) as PresignedSignedCashout;
+    const completed = authorizePresignedCashoutTransaction(artifact);
+    assert.equal(completed.txid, expected.txid); assert.equal(artifact.cashout.destinationAddress, destination);
+    assert(!(await core.rpc('getrawmempool')).includes(completed.txid));
+    await panel.getByRole('button', { name: 'Save signed withdrawal', exact: true }).click();
+    await expect(panel.getByRole('status')).toContainText('Exact signed withdrawal saved. It will not be sent');
+    assert(!(await core.rpc('getrawmempool')).includes(completed.txid));
+    await reloadV2Vault(actor);
+    const intent = panel.getByTestId('cashout-intent').filter({ hasText: completed.txid });
+    await intent.getByRole('button', { name: 'Review saved withdrawal', exact: true }).click();
+    await expect(review).not.toBeChecked(); await review.check();
+    await intent.getByRole('button', { name: 'Broadcast this withdrawal', exact: true }).click();
+    await expect.poll(async () => (await core.rpc('getrawmempool')).includes(completed.txid)).toBe(true);
+    await core.mine();
+    await expect(panel.getByRole('status')).toContainText('Withdrawal pending.');
+    // Repeating the same owner send intent reconciles a lost/pending reply without another spend.
+    await intent.getByRole('button', { name: 'Broadcast this withdrawal', exact: true }).click();
+    await expect(intent).toContainText('Last observed: confirmed');
+    const confirmed = await core.rpc('gettxout', [completed.txid, 0, true]);
+    assert.equal(confirmed.scriptPubKey.hex, Buffer.from(destinationScript).toString('hex'));
+    assert.equal(Math.round(confirmed.value * 1e8), expected.payoutSats); assert(confirmed.confirmations >= 1);
+  }
+  return { cashoutDestinationAndFeeReviewed: true, cashoutUnsignedPreviewVerified: true,
+    ownedPayoutCashoutsConfirmed: send ? 1 : 0, cashoutOwnerAndReviewMutationRefusals: 2 };
 }
 async function verifyBrowserUtility(actor: V2Browser, graph: PresignedGraph) {
   const panel = actor.page.getByTestId('presigned-ceremony'); const files: Download[] = [];

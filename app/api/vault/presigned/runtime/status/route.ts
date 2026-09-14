@@ -8,6 +8,6 @@ export async function GET() {
   try {
     const userId = await requireSessionUser();
     const [status, chain] = await Promise.all([getPresignedRuntimeStatus(userId), getPresignedChainStatus(userId)]);
-    return Response.json({ ...status, chain, broadcastAvailable: presignedBroadcastEnabled() }, { headers: { 'cache-control': 'no-store' } });
+    return Response.json({ ...status, chain, broadcastAvailable: presignedBroadcastEnabled(status.protocol) }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) { return jsonError(error); }
 }

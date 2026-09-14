@@ -21,8 +21,14 @@ case "$selection" in
   chain) specs=(presigned-chain-broadcast-db-acceptance) ;;
   fees) specs=(presigned-fee-db-acceptance) ;;
   restore) specs=(presigned-restore-db-acceptance) ;;
-  all) specs=(presigned-ceremony-db-acceptance presigned-runtime-db-acceptance presigned-chain-broadcast-db-acceptance presigned-fee-db-acceptance presigned-restore-db-acceptance) ;;
-  *) echo 'usage: bash scripts/run-presigned-db-acceptance.sh [all|ceremony|runtime|chain|fees|restore]' >&2; exit 1 ;;
+  cashout) specs=(presigned-cashout-db-acceptance) ;;
+  queue) specs=(presigned-protocol-queue-db-acceptance) ;;
+  all)
+    specs=(presigned-ceremony-db-acceptance presigned-runtime-db-acceptance presigned-chain-broadcast-db-acceptance presigned-fee-db-acceptance presigned-restore-db-acceptance)
+    if [ "${PRESIGNED_DB_PROTOCOL:-presigned-graph-v2}" = presigned-graph-v3 ]; then
+      specs+=(presigned-cashout-db-acceptance presigned-protocol-queue-db-acceptance)
+    fi ;;
+  *) echo 'usage: bash scripts/run-presigned-db-acceptance.sh [all|ceremony|runtime|chain|fees|restore|cashout|queue]' >&2; exit 1 ;;
 esac
 for spec in "${specs[@]}"; do
   if [ ! -f "web/tests/$spec.ts" ]; then echo "Acceptance spec is not implemented: $spec" >&2; exit 1; fi
@@ -49,8 +55,16 @@ postgres_started=true
 export VAULT_NETWORK=signet NEXT_PUBLIC_VAULT_NETWORK=signet NODE_ENV=test
 export PRESIGNED_V2_BROADCAST_NETWORK=signet
 unset BTC_VAULT_ENV_FILE BTC_VAULT_EXTRA_ENV_FILE BITCOIN_RPC_URL BITCOIN_RPC_USER BITCOIN_RPC_USERNAME BITCOIN_RPC_PASSWORD BITCOIN_RPC_COOKIE_FILE
-unset PRESIGNED_V2_MAINNET_AUTHORIZATION PRESIGNED_V2_RELEASE_REPORT PRESIGNED_V2_RELEASE_REPORT_DIGEST
+unset PRESIGNED_V2_MAINNET_AUTHORIZATION PRESIGNED_V3_MAINNET_AUTHORIZATION PRESIGNED_V2_RELEASE_REPORT PRESIGNED_V2_RELEASE_REPORT_DIGEST
 for spec in "${specs[@]}"; do
+  # Only the zero-RPC queue-boundary drill selects mainnet address format.
+  # No mainnet send permission is inherited; that test scopes synthetic flags
+  # within its own process, rejects any Core access, and restores them afterward.
+  export VAULT_NETWORK=signet NEXT_PUBLIC_VAULT_NETWORK=signet PRESIGNED_V2_BROADCAST_NETWORK=signet
+  if [ "$spec" = presigned-protocol-queue-db-acceptance ]; then
+    export VAULT_NETWORK=mainnet NEXT_PUBLIC_VAULT_NETWORK=mainnet
+    unset PRESIGNED_V2_BROADCAST_NETWORK
+  fi
   database_name=${spec//-/_}
   "$postgres_bin/createdb" -h 127.0.0.1 -p "$postgres_port" "$database_name"
   export DATABASE_URL="postgresql://$(id -un)@127.0.0.1:${postgres_port}/${database_name}"

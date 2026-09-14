@@ -10,10 +10,11 @@ import { createPresignedFixture } from '../../src/presigned/fixtures.js';
 import { buildPresignedGraph } from '../../src/presigned/graph.js';
 import { derivePresignedParticipantKeys } from '../../src/presigned/roster.js';
 import { createPreauthorizations, completePresignedExit } from '../../src/presigned/signing.js';
+import { createRecoveryAuthorizations, verifyRecoveryAuthorizations } from '../../src/presigned/fixed-recovery.js';
 import { createPresignedCooperativeNonce, signPresignedCooperativePartial, createPresignedRecoveryContribution, signPresignedFinalSweep } from '../../src/presigned/spends.js';
 import { validatePresignedRuntimeAction, type PresignedRuntimeAction, type PresignedRuntimeKind, type PresignedRuntimeState } from '../../src/presigned/runtime.js';
-import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, type ParticipantId } from '../../src/presigned/types.js';
-import { commitmentDigest } from '../../src/presigned/validation.js';
+import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, FIXED_RECOVERY_POLICY, isPresignedProtocol, type PresignedProtocol, type ParticipantId } from '../../src/presigned/types.js';
+import { commitmentDigest, presignedDomain, presignedVersion } from '../../src/presigned/validation.js';
 import { EXPECTED_MIGRATION_FILES } from '../lib/migrations.js';
 import { closeDatabase } from '../lib/server/db.js';
 import { createPresignedRuntimeActionChallenge, getPresignedRuntimeActionChallenge, completePresignedRuntimeAction,
@@ -25,15 +26,21 @@ if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
 const database = new URL(process.env.DATABASE_URL);
 assert(['127.0.0.1','localhost','[::1]'].includes(database.hostname) && /(?:test|acceptance)/u.test(database.pathname), 'disposable loopback test database required');
 const sql = postgres(process.env.DATABASE_URL,{ max: 1, onnotice: () => {} });
+const selectedProtocol = process.env.PRESIGNED_DB_PROTOCOL ?? PRESIGNED_PROTOCOL;
+assert(isPresignedProtocol(selectedProtocol), 'DB acceptance protocol must be explicitly supported');
+const protocol: PresignedProtocol = selectedProtocol;
+const v3 = protocol === PRESIGNED_PROTOCOL_V3;
 const vaultId = randomUUID(); const epochId = randomUUID();
 const users = Object.fromEntries(PARTICIPANT_IDS.map(id => [id,randomUUID()])) as Record<ParticipantId,string>;
 const credentials = Object.fromEntries(PARTICIPANT_IDS.map(id => [id,`runtime-test-${randomUUID()}`])) as Record<ParticipantId,string>;
 const secrets = Object.fromEntries(PARTICIPANT_IDS.map(id => [id,randomBytes(32).toString('base64url')])) as Record<ParticipantId,string>;
-const keys = Object.fromEntries(PARTICIPANT_IDS.map(id => [id,derivePresignedParticipantKeys(secrets[id],id,vaultId)])) as Record<ParticipantId,ReturnType<typeof derivePresignedParticipantKeys>>;
-const base = createPresignedFixture({ network: BITCOIN_NETWORK_NAME });
+const keys = Object.fromEntries(PARTICIPANT_IDS.map(id => [id,derivePresignedParticipantKeys(secrets[id],id,vaultId,protocol)])) as Record<ParticipantId,ReturnType<typeof derivePresignedParticipantKeys>>;
+const base = createPresignedFixture({ protocol, network: BITCOIN_NETWORK_NAME });
 const graph = buildPresignedGraph({ roster: { ...base.roster,vaultId,participants: PARTICIPANT_IDS.map(id => keys[id].publicIdentity) },
   funding: { ...base.graph.funding,epochId } });
 const entries = PARTICIPANT_IDS.flatMap(id => createPreauthorizations({ graph,participantId: id,privateKeys: keys[id].keys.soloPrivateKeys,approvedGraphDigest: graph.digest }));
+const recoveryAuthorizations = v3 ? PARTICIPANT_IDS.flatMap(participantId => createRecoveryAuthorizations({ graph,participantId,
+  privateKeys: keys[participantId].keys.recoveryAuthorizationPrivateKeys!,approvedGraphDigest: graph.digest })) : undefined;
 const anchor = '55'.repeat(32);
 const b = (hex: string) => Buffer.from(hex,'hex');
 let mode: 'good'|'spent'|'reanchored'|'young'|'wrong-chain'|'unavailable' = 'good';
@@ -49,7 +56,7 @@ const dependencies: PresignedRuntimeActionDependencies = { requiredConfirmations
   },
 };
 function action(body: Record<string,unknown>): PresignedRuntimeAction {
-  return validatePresignedRuntimeAction({ version: 2,protocol: PRESIGNED_PROTOCOL,...body });
+  return validatePresignedRuntimeAction({ version: presignedVersion(protocol),protocol,...body });
 }
 function creation(kind: PresignedRuntimeKind,sourceExitId: string|null=null,exitId: string|null=null) {
   return action({ kind: 'create-proposal',epochId,graphDigest: graph.digest,proposalId: randomUUID(),
@@ -73,11 +80,11 @@ async function unchangedFailure(challenge: PresignedRuntimeActionChallenge,patte
 const results: string[] = [];
 try {
   await sql`CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now())`;
-  for (const file of EXPECTED_MIGRATION_FILES.filter(file => file <= '017_presigned_runtime.sql')) {
+  for (const file of EXPECTED_MIGRATION_FILES) {
     if (!(await sql`SELECT 1 FROM schema_migrations WHERE version=${file.slice(0,-4)}`).length)
       await sql.unsafe(readFileSync(resolve('db/migrations',file),'utf8'));
   }
-  await sql`INSERT INTO vaults(id,name,protocol) VALUES (${vaultId},'Synthetic offline-funded runtime',${PRESIGNED_PROTOCOL})`;
+  await sql`INSERT INTO vaults(id,name,protocol) VALUES (${vaultId},'Synthetic offline-funded runtime',${protocol})`;
   for (const id of PARTICIPANT_IDS) {
     await sql`INSERT INTO users(id,display_name) VALUES (${users[id]},${`Synthetic ${id}`})`;
     await sql`INSERT INTO vault_members(vault_id,user_id,participant_id) VALUES (${vaultId},${users[id]},${id})`;
@@ -89,22 +96,25 @@ try {
       VALUES (${credentials[id]},1,${randomBytes(32)},${randomBytes(12)},${randomBytes(64)},${randomBytes(32)})`;
   }
   const ceremony = newPresignedCeremony(vaultId,{ network: graph.roster.network,genesisHash: graph.roster.genesisHash,
+    ...(v3 ? { protocol: PRESIGNED_PROTOCOL_V3,recoveryPolicy: FIXED_RECOVERY_POLICY } : {}),
     economics: graph.roster.economics,feePolicy: graph.roster.feePolicy,fundingFeeSats: graph.funding.feeSats });
   const epoch: PresignedFundingEpoch = { epochId,status: 'retired',inputs: graph.funding.inputs,graph,preauthorizations: entries,
+    ...(recoveryAuthorizations ? { recoveryAuthorizations } : {}),
     backups: [],walletSigningStarted: [],signatures: [],finalization: null,fundingApprovals: [],restartApprovals: [] };
   ceremony.identities=graph.roster.participants; ceremony.roster=graph.roster; ceremony.rosterDigest=graph.rosterDigest;
   ceremony.rosterApprovals=[...PARTICIPANT_IDS]; ceremony.epochs=[epoch];
-  await sql`INSERT INTO presigned_ceremonies(vault_id,settings_json,settings_digest,state_json,state_digest)
-    VALUES (${vaultId},${sql.json(ceremony.settings as never)},${b(ceremony.settingsDigest)},${sql.json(ceremony as never)},
-      ${b(commitmentDigest('vault/presigned-graph-v2/ceremony/state',ceremony))})`;
-  await sql`INSERT INTO presigned_funding_epochs(epoch_id,vault_id,ordinal,status,graph_digest,funding_txid,snapshot_json,snapshot_digest)
-    VALUES (${epochId},${vaultId},1,'retired',${b(graph.digest)},${b(graph.fundingTxid)},${sql.json(epoch as never)},
-      ${b(commitmentDigest('vault/presigned-graph-v2/ceremony/epoch',epoch))})`;
+  await sql`INSERT INTO presigned_ceremonies(vault_id,protocol,settings_json,settings_digest,state_json,state_digest)
+    VALUES (${vaultId},${protocol},${sql.json(ceremony.settings as never)},${b(ceremony.settingsDigest)},${sql.json(ceremony as never)},
+      ${b(commitmentDigest(presignedDomain(protocol,'ceremony/state'),ceremony))})`;
+  await sql`INSERT INTO presigned_funding_epochs(epoch_id,vault_id,protocol,ordinal,status,graph_digest,funding_txid,snapshot_json,snapshot_digest)
+    VALUES (${epochId},${vaultId},${protocol},1,'retired',${b(graph.digest)},${b(graph.fundingTxid)},${sql.json(epoch as never)},
+      ${b(commitmentDigest(presignedDomain(protocol,'ceremony/epoch'),epoch))})`;
   const initial = await getPresignedRuntimeStatus(users.alice);
   assert.equal(initial.kits[0]!.epochStatus,'retired');
   assert.equal(initial.vaultStatus,'setup');
   assert.equal(initial.chainAuthority,'not-checked-in-status');
   assert.equal(initial.broadcastAvailable,false);
+  if (v3) assert.deepEqual(initial.kits[0]!.publicKit.recoveryAuthorizations,verifyRecoveryAuthorizations(graph,recoveryAuthorizations!,true));
   const request = creation('cooperative');
   assert.throws(() => validatePresignedRuntimeAction({ ...request,observedUnspent: true }),/unexpected or missing/);
   await assert.rejects(() => createPresignedRuntimeActionChallenge({ userId: users.alice,credentialId: credentials.alice,
@@ -189,7 +199,8 @@ try {
   }
   for (const id of ['alice','bob'] as const) recovery=await perform(id,bound(recovery,{ kind: 'contribute-recovery',
     contribution: createPresignedRecoveryContribution({ graph,proposal: recovery.proposal.spend!,participantId: id,
-      personalPrivateKey: keys[id].keys.personalPrivateKey,approvedProposalDigest: recovery.proposal.spend!.digest }) }));
+      ...(v3 ? { recoveryTriggerPrivateKey: keys[id].keys.recoveryTriggerPrivateKeys!.alicebobcarol! }
+        : { personalPrivateKey: keys[id].keys.personalPrivateKey }), approvedProposalDigest: recovery.proposal.spend!.digest }) }));
   assert.deepEqual(recovery.finalized!.approverParticipantIds,['alice','bob']);
   await assert.rejects(() => options('carol',bound(recovery,{ kind: 'approve-broadcast',transactionDigest: recovery.finalized!.transactionDigest })),/exact transaction signer quorum/);
   for (const id of ['alice','bob'] as const) recovery=await perform(id,bound(recovery,{ kind: 'approve-broadcast',transactionDigest: recovery.finalized!.transactionDigest }));
@@ -230,7 +241,7 @@ try {
   assert.equal(finalStatus.proposals.filter(item => item.broadcastReady).length,6);
   assert.equal((await sql`SELECT count(*)::int AS count FROM presigned_runtime_action_events WHERE vault_id=${vaultId}`)[0]!.count,32);
   results.push('reanchor reuses exact completed bytes in an immutable successor despite an occupied shared slot; fresh anchor checked at both stages, full quorum repeated, predecessor retained and no nonce/partial copied');
-  console.log(JSON.stringify({ suite: 'presigned-runtime-db',network: BITCOIN_NETWORK_NAME,passed: results.length,results,
+  console.log(JSON.stringify({ suite: 'presigned-runtime-db',protocol,network: BITCOIN_NETWORK_NAME,passed: results.length,results,
     approvedActions: 32,sourceObservations: observations,
     evidence: 'isolated PostgreSQL; synthetic stored passkeys/PRF envelopes and private-Core callback facts; real Schnorr/MuSig2/witness validation; no real provider/device/chain or broadcasts' },null,2));
 } finally {

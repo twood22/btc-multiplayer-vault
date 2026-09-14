@@ -1,13 +1,13 @@
 /** Resumable acceptance orchestration. Never imports deterministic test keys. */
 import assert from 'node:assert/strict';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync } from 'node:fs';
 import { dirname, basename } from 'node:path';
 import * as bitcoin from 'bitcoinjs-lib';
 import { asSats } from '../../src/types.js';
 import { encryptPresignedOfflineBackup, parsePresignedOfflineBackup, presignedBackupBinding,
   serializePresignedOfflineBackup, validatePresignedPublicKit, verifyPresignedOfflineBackupRestoration,
-  withRestoredPresignedOfflineBackup } from '../../src/presigned/backup.js';
+  withRestoredPresignedOfflineBackup, createPresignedPublicKit } from '../../src/presigned/backup.js';
 import { authorizePresignedFundingSignedPsbt, authorizePresignedFundingTransaction, finalizePresignedFunding } from '../../src/presigned/funding.js';
 import { buildPresignedGraph } from '../../src/presigned/graph.js';
 import { clearPresignedParticipantKeys, derivePresignedParticipantKeys, payoutScript } from '../../src/presigned/roster.js';
@@ -15,9 +15,14 @@ import { authorizePresignedExitTransaction, completePresignedExit, createPreauth
 import { authorizePresignedSpendTransaction, buildPresignedSpend, createPresignedCooperativeNonce, createPresignedRecoveryContribution,
   finalizePresignedCooperative, finalizePresignedRecovery, signPresignedCooperativePartial,
   signPresignedFinalSweep, type PresignedSpendProposal } from '../../src/presigned/spends.js';
-import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, type ParticipantId, type PresignedParticipantKeys,
+import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, FIXED_RECOVERY_POLICY, isPresignedProtocol,
+  type PresignedProtocol, type ParticipantId, type PresignedParticipantKeys,
   type PresignedPublicKit, type PresignedRoster } from '../../src/presigned/types.js';
-import { commitmentDigest, genesisHash } from '../../src/presigned/validation.js';
+import { commitmentDigest, genesisHash, presignedDomain, presignedVersion } from '../../src/presigned/validation.js';
+import { createRecoveryAuthorizations } from '../../src/presigned/fixed-recovery.js';
+import { LAST_SURVIVOR_PAYOUT_SCHEDULE } from '../../src/presigned/economics.js';
+import { authorizePresignedCashoutTransaction, buildPresignedCashout, signPresignedCashout,
+  validatePresignedCashout, type PresignedCashoutRequest, type PresignedCashout } from '../../src/presigned/cashout.js';
 import { nativeWalletWitnessFromPsbt } from '../../src/presigned/wallet.js';
 import { signPresignedFeePayout, type FeeCoinObservation } from '../../src/presigned/fees.js';
 import { buildPresignedFeeDraft, validatePresignedFeePackage, type PresignedFeeDraft, type PresignedFeePackage } from '../../src/presigned/fee-package.js';
@@ -33,6 +38,8 @@ import { DurableLifecycleJournal, privateJournalDirectory, readPrivateJournalByt
 import { createNativeWalletRestoreProof, verifyNativeWalletRestoreProof } from './presigned-wallet-restore-proof.js';
 
 export interface LiveLifecycleCore {
+  /** Absent retains the original V2 journal contract; new V3 runs opt in. */
+  protocol?: PresignedProtocol;
   rpc(method: string, params?: unknown[]): Promise<any>;
   walletRpc(method: string, params?: unknown[]): Promise<any>;
   observeCoin(outpoint: { txid: string; vout: number }): Promise<FeeCoinObservation>;
@@ -49,7 +56,8 @@ interface CasePlan {
   inputs: Array<{ participantId: ParticipantId; address: string; scriptPubKeyHex: string; valueSats: number }>;
 }
 interface Run {
-  version: 4; protocol: typeof PRESIGNED_PROTOCOL; chain: LiveLifecycleCore['chain']; actualGenesisHash: string;
+  version: 4 | 6; protocol: PresignedProtocol; chain: LiveLifecycleCore['chain']; actualGenesisHash: string;
+  ownedCashoutProfile?: typeof LIVE_OWNED_CASHOUT_PROFILE;
   execution: typeof LIVE_CAPITAL_EXECUTION; capitalLimitSats: number; initialCapitalSats: number; initialCoin: RecyclingCoin;
   sourceDigest: string; createdAt: string; freshRandomParticipantKeys: true; externalWalletKeysExported: false;
   requiredTestSatsBeforeFanoutFee: number; cases: CasePlan[];
@@ -61,6 +69,25 @@ interface Signed {
   proposal?: PresignedSpendProposal;
 }
 interface Confirmed { txid: string; blockHash: string; height: number; confirmations: number }
+export const LIVE_OWNED_CASHOUT_PROFILE = 'missing-carol-refund-to-native-wallet-v1' as const;
+const OWNED_CASHOUT_FEE_SATS = 300;
+const cashoutFee = (protocol: PresignedProtocol) => protocol === PRESIGNED_PROTOCOL_V3 ? OWNED_CASHOUT_FEE_SATS : 0;
+export const liveLifecycleMinimumCapital = (protocol: PresignedProtocol) => MINIMUM_SEQUENTIAL_CAPITAL + cashoutFee(protocol);
+const hasOwnedCashout = (run: Run, plan: CasePlan) => run.protocol === PRESIGNED_PROTOCOL_V3 && plan.id === 'case-12';
+
+function lifecycleProtocol(core: LiveLifecycleCore): PresignedProtocol {
+  const protocol = core.protocol ?? PRESIGNED_PROTOCOL;
+  assert(isPresignedProtocol(protocol), 'unsupported lifecycle protocol');
+  return protocol;
+}
+function lifecycleEconomics(protocol: PresignedProtocol) {
+  const v3 = protocol === PRESIGNED_PROTOCOL_V3;
+  return { ...(v3 ? { payoutSchedule: LAST_SURVIVOR_PAYOUT_SCHEDULE } : {}),
+    depositSatsPerParticipant: asSats(10_000), firstWithdrawalSats: asSats(v3 ? 9_120 : 9_500),
+    secondWithdrawalSats: asSats(v3 ? 9_600 : 10_250), soloWithdrawalFeeSats: asSats(300),
+    soloFeeBudgetSats: asSats(2000), cooperativeFeeSats: asSats(300), recoveryFeeSats: asSats(500),
+    finalSweepFeeSats: asSats(300), recoveryDelayBlocks: 12 };
+}
 
 function lifecycleCaseDefinitions(): Array<Omit<CasePlan, 'inputs'>> {
   const cases: Array<Omit<CasePlan, 'inputs'>> = [];
@@ -98,15 +125,18 @@ function assertJournalBinding(core: LiveLifecycleCore, directory: string) {
 function runFor(core: LiveLifecycleCore, directory: string): Run {
   assertJournalBinding(core, directory);
   const run = readLifecycleFile<Run>(directory, 'run.json');
-  assert(run.version === 4 && run.execution === LIVE_CAPITAL_EXECUTION && run.protocol === PRESIGNED_PROTOCOL && run.chain === core.chain &&
+  const protocol = lifecycleProtocol(core);
+  assert(run.version === (protocol === PRESIGNED_PROTOCOL_V3 ? 6 : 4) &&
+    run.ownedCashoutProfile === (protocol === PRESIGNED_PROTOCOL_V3 ? LIVE_OWNED_CASHOUT_PROFILE : undefined) &&
+    run.execution === LIVE_CAPITAL_EXECUTION && run.protocol === protocol && run.chain === core.chain &&
     run.actualGenesisHash === core.actualGenesisHash && run.sourceDigest === core.sourceDigest &&
     run.cases.length === 19 && run.freshRandomParticipantKeys === true && run.externalWalletKeysExported === false,
   'lifecycle run identity changed; retain its state and do not reinterpret it');
   assert.deepEqual(run.cases.map(({ inputs: _inputs, ...definition }) => definition), lifecycleCaseDefinitions(),
     'lifecycle cases omit, duplicate or substitute a required ordering or signer subset');
   assert.deepEqual(run.sponsors.map(item => item.family), ['funding', 'solo', 'cooperative', 'recovery', 'final-sweep']);
-  assert(Number.isSafeInteger(run.capitalLimitSats) && run.capitalLimitSats >= MINIMUM_SEQUENTIAL_CAPITAL && run.capitalLimitSats <= 1_000_000 &&
-    run.initialCapitalSats === run.initialCoin.valueSats && run.initialCapitalSats >= MINIMUM_SEQUENTIAL_CAPITAL &&
+  assert(Number.isSafeInteger(run.capitalLimitSats) && run.capitalLimitSats >= liveLifecycleMinimumCapital(protocol) && run.capitalLimitSats <= 1_000_000 &&
+    run.initialCapitalSats === run.initialCoin.valueSats && run.initialCapitalSats >= liveLifecycleMinimumCapital(protocol) &&
     run.initialCapitalSats <= run.capitalLimitSats && run.initialCoin.participantId === null);
   assert.deepEqual(run.reserves.map(item => item.id), [...run.cases.map(item => item.id), 'return']);
   for (const plan of run.cases) {
@@ -128,7 +158,7 @@ function walletRecoveryBinding(core: LiveLifecycleCore, run: Run) {
     .map(({ address, scriptPubKeyHex }) => ({ address, scriptPubKeyHex }));
   assert.equal(targets.length, 83);
   return { chain, binarySha256: core.nativeWalletBackup.binarySha256, targets,
-    bindingDigest: commitmentDigest('vault/presigned-graph-v2/native-wallet-complete-run-recovery', run) };
+    bindingDigest: commitmentDigest(presignedDomain(run.protocol, 'native-wallet-complete-run-recovery'), run) };
 }
 function verifyWalletRecovery(core: LiveLifecycleCore, directory: string, run: Run) {
   const receipt = readLifecycleFile<Awaited<ReturnType<typeof createNativeWalletRestoreProof>>>(directory, 'wallet-recovery.json');
@@ -171,11 +201,12 @@ async function completeNativeInitialization(core: LiveLifecycleCore, directory: 
   core.durableJournal.checkpoint('all-83-native-wallet-targets-restored-before-funding');
   return { initialized: true, chain: core.chain, cases: run.cases.length, requiredTestSatsBeforeFanoutFee: run.requiredTestSatsBeforeFanoutFee,
     initialCapitalSats: run.initialCapitalSats, capitalLimitSats: run.capitalLimitSats,
-    maximumUniqueConfirmedFeesSats: LIVE_MAXIMUM_CONFIRMED_FEES_SATS };
+    maximumUniqueConfirmedFeesSats: LIVE_MAXIMUM_CONFIRMED_FEES_SATS + cashoutFee(run.protocol) };
 }
 export async function initializeLiveLifecycle(core: LiveLifecycleCore, directory: string,
   options: { capitalLimitSats: number; initialOutpoint: { txid: string; vout: number } }) {
-  assert(Number.isSafeInteger(options.capitalLimitSats) && options.capitalLimitSats >= MINIMUM_SEQUENTIAL_CAPITAL &&
+  const protocol = lifecycleProtocol(core);
+  assert(Number.isSafeInteger(options.capitalLimitSats) && options.capitalLimitSats >= liveLifecycleMinimumCapital(protocol) &&
     options.capitalLimitSats <= 1_000_000, 'sequential acceptance needs its bounded initial capital budget');
   if (has(directory, 'run.json')) {
     const run = runFor(core, directory);
@@ -184,7 +215,7 @@ export async function initializeLiveLifecycle(core: LiveLifecycleCore, directory
     return completeNativeInitialization(core, directory, run);
   }
   const observed = await core.observeCoin(options.initialOutpoint);
-  assert(observed.valueSats >= MINIMUM_SEQUENTIAL_CAPITAL && observed.valueSats <= options.capitalLimitSats &&
+  assert(observed.valueSats >= liveLifecycleMinimumCapital(protocol) && observed.valueSats <= options.capitalLimitSats &&
     /^(?:0014[0-9a-f]{40}|5120[0-9a-f]{64})$/u.test(observed.scriptPubKeyHex), 'selected initial native coin is outside the test capital budget');
   assert(await core.rpc('gettxout', [observed.txid, observed.vout, true]), 'selected initial coin has a pending conflict');
   const parent = await core.rpc('getrawtransaction', [observed.txid, true]);
@@ -202,7 +233,8 @@ export async function initializeLiveLifecycle(core: LiveLifecycleCore, directory
     privateJournalDirectory(`${directory}/${name}`, core.chain === 'default-Signet');
   }
   syncPrivateJournalDirectory(directory);
-  const initialIntent = { version: 1, sourceDigest: core.sourceDigest, chain: core.chain, actualGenesisHash: core.actualGenesisHash,
+  const initialIntent = { version: 1, ...(protocol === PRESIGNED_PROTOCOL_V3 ? { protocol } : {}),
+    sourceDigest: core.sourceDigest, chain: core.chain, actualGenesisHash: core.actualGenesisHash,
     initialCoin, capitalLimitSats: options.capitalLimitSats };
   if (!has(directory, 'initialization/intent.json')) saveLifecycleFile(directory, 'initialization/intent.json',
     { ...initialIntent, createdAt: new Date().toISOString() });
@@ -222,7 +254,8 @@ export async function initializeLiveLifecycle(core: LiveLifecycleCore, directory
     const target = await walletTarget(core, directory, index++, 0);
     reserves.push({ id, address: target.address, scriptPubKeyHex: target.scriptPubKeyHex });
   }
-  const run: Run = { version: 4, protocol: PRESIGNED_PROTOCOL, execution: LIVE_CAPITAL_EXECUTION,
+  const run: Run = { version: protocol === PRESIGNED_PROTOCOL_V3 ? 6 : 4, protocol, execution: LIVE_CAPITAL_EXECUTION,
+    ...(protocol === PRESIGNED_PROTOCOL_V3 ? { ownedCashoutProfile: LIVE_OWNED_CASHOUT_PROFILE } : {}),
     chain: core.chain, actualGenesisHash: core.actualGenesisHash,
     capitalLimitSats: options.capitalLimitSats, initialCapitalSats: initialCoin.valueSats, initialCoin, reserves,
     sourceDigest: core.sourceDigest, createdAt, freshRandomParticipantKeys: true,
@@ -288,8 +321,12 @@ async function withKeys<T>(directory: string, caseId: string, id: ParticipantId,
   const offlineSecret = Uint8Array.from(Buffer.from(wrapping.secret, 'base64url')); wrapping.secret = '';
   try {
     return await withRestoredPresignedOfflineBackup({ envelope, offlineSecret, expectedBinding: presignedBackupBinding(kit, id), action: async restored => {
-      const derived = derivePresignedParticipantKeys(restored.participantSecret, id, kit.graph.roster.vaultId);
-      try { return await action(derived.keys); } finally { clearPresignedParticipantKeys(derived.keys); }
+      const derived = derivePresignedParticipantKeys(restored.participantSecret, id, kit.graph.roster.vaultId, kit.protocol);
+      try {
+        assert.deepEqual(derived.publicIdentity, kit.graph.roster.participants.find(item => item.id === id),
+          'restored participant key roles differ from the exact protocol-bound roster');
+        return await action(derived.keys);
+      } finally { clearPresignedParticipantKeys(derived.keys); }
     } });
   } finally { offlineSecret.fill(0); }
 }
@@ -322,6 +359,7 @@ async function restoreIndependentCaseBeforeFunding(core: LiveLifecycleCore, dire
   checkpointBefore(core, directory, `before-funding-signature:${caseId}`, [...required, restored, receiptName]);
 }
 async function prepareCase(core: LiveLifecycleCore, directory: string, plan: CasePlan, fanout: Signed) {
+  const protocol = lifecycleProtocol(core);
   assert(/^case-[0-9]{2}$/u.test(plan.id));
   const casePath = `cases/${plan.id}`;
   if (!has(directory, `${casePath}/kit.json`)) {
@@ -337,12 +375,10 @@ async function prepareCase(core: LiveLifecycleCore, directory: string, plan: Cas
     }
     mkdirSync(`${directory}/${casePath}`, { mode: 0o700 });
     const vaultId = randomUUID(); const secrets = Object.fromEntries(PARTICIPANT_IDS.map(id => [id, randomBytes(32).toString('base64url')])) as Record<ParticipantId, string>;
-    const derived = PARTICIPANT_IDS.map(id => derivePresignedParticipantKeys(secrets[id], id, vaultId));
+    const derived = PARTICIPANT_IDS.map(id => derivePresignedParticipantKeys(secrets[id], id, vaultId, protocol));
     try {
-      const roster: PresignedRoster = { version: 2, protocol: PRESIGNED_PROTOCOL, vaultId, network: 'signet', genesisHash: genesisHash('signet'),
-        economics: { depositSatsPerParticipant: asSats(10_000), firstWithdrawalSats: asSats(9500), secondWithdrawalSats: asSats(10_250),
-          soloWithdrawalFeeSats: asSats(300), soloFeeBudgetSats: asSats(2000), cooperativeFeeSats: asSats(300), recoveryFeeSats: asSats(500),
-          finalSweepFeeSats: asSats(300), recoveryDelayBlocks: 12 },
+      const roster: PresignedRoster = { version: presignedVersion(protocol), protocol, vaultId, network: 'signet', genesisHash: genesisHash('signet'),
+        ...(protocol === PRESIGNED_PROTOCOL_V3 ? { recoveryPolicy: FIXED_RECOVERY_POLICY } : {}), economics: lifecycleEconomics(protocol),
         feePolicy: { kind: 'confirmed-truc-payout-cpfp-v1', maxChildFeeSats: 10_000 }, participants: derived.map(item => item.publicIdentity) };
       const transaction = bitcoin.Transaction.fromHex(fanout.transactionHex);
       const inputs = [];
@@ -356,9 +392,11 @@ async function prepareCase(core: LiveLifecycleCore, directory: string, plan: Cas
           confirmationBlockHash: observation.confirmationBlockHash, confirmations: observation.confirmations });
       }
       const graph = buildPresignedGraph({ roster, funding: { epochId: randomUUID(), feeSats: 600, inputs } });
-      const kit: PresignedPublicKit = { version: 2, protocol: PRESIGNED_PROTOCOL, graph,
+      const kit = createPresignedPublicKit({ graph,
         preauthorizations: derived.flatMap(item => createPreauthorizations({ graph, participantId: item.publicIdentity.id,
-          privateKeys: item.keys.soloPrivateKeys, approvedGraphDigest: graph.digest })) };
+          privateKeys: item.keys.soloPrivateKeys, approvedGraphDigest: graph.digest })),
+        ...(protocol === PRESIGNED_PROTOCOL_V3 ? { recoveryAuthorizations: derived.flatMap(item => createRecoveryAuthorizations({
+          graph, participantId: item.publicIdentity.id, privateKeys: item.keys.recoveryAuthorizationPrivateKeys!, approvedGraphDigest: graph.digest })) } : {}) });
       // Store all complete encrypted kits and separate wrapping material before
       // the commit marker and before calling any external wallet signing RPC.
       for (const id of PARTICIPANT_IDS) {
@@ -376,6 +414,7 @@ async function prepareCase(core: LiveLifecycleCore, directory: string, plan: Cas
     }
   }
   const kit = validatePresignedPublicKit(readLifecycleFile<PresignedPublicKit>(directory, `${casePath}/kit.json`));
+  assert.equal(kit.protocol, protocol, 'retained case protocol differs from its immutable run');
   if (!has(directory, `${casePath}/backup-receipts.json`)) {
     const proofs = [];
     for (const id of PARTICIPANT_IDS) {
@@ -467,8 +506,10 @@ async function signedStep(core: LiveLifecycleCore, directory: string, plan: Case
     else if (proposal.kind === 'recovery') {
       const contributions = [];
       for (const id of proposal.participantIds.filter(id => id !== plan.omitted)) contributions.push(await withKeys(directory, plan.id, id, keys =>
-        createPresignedRecoveryContribution({ graph, proposal, participantId: id, personalPrivateKey: keys.personalPrivateKey, approvedProposalDigest: proposal.digest })));
-      signed = finalizePresignedRecovery({ graph, proposal, contributions });
+        createPresignedRecoveryContribution({ graph, proposal, participantId: id,
+          ...(graph.protocol === PRESIGNED_PROTOCOL_V3 ? { recoveryTriggerPrivateKey: keys.recoveryTriggerPrivateKeys![proposal.source.roundId!]! }
+            : { personalPrivateKey: keys.personalPrivateKey }), approvedProposalDigest: proposal.digest })));
+      signed = finalizePresignedRecovery({ graph, proposal, contributions, recoveryAuthorizations: kit.recoveryAuthorizations });
     } else {
       // Secret nonces live only in this process, never in resumable state. If
       // interrupted before the final file, restart every participant with fresh
@@ -550,9 +591,9 @@ async function saveFeePair(core: LiveLifecycleCore, directory: string, run: Run,
     const savedDraft = has(directory, initialDraftName) ? readLifecycleFile<PresignedFeeDraft>(directory, initialDraftName) : null;
     // This local acceptance ceremony binds its own exact reviewed parent. It
     // does not impersonate a coordinator's passkey/runtime approval receipt.
-    const base = { version: 2 as const, protocol: PRESIGNED_PROTOCOL, epochId: graph.funding.epochId,
+    const base = { version: graph.version, protocol: graph.protocol, epochId: graph.funding.epochId,
       proposalId: family === 'funding' ? null : parent.proposal?.proposalId ?? savedDraft?.proposalId ?? randomUUID(), ownerParticipantId: owner,
-      parentAuthorityDigest: commitmentDigest('vault/presigned-graph-v2/isolated-live-acceptance-parent', {
+      parentAuthorityDigest: commitmentDigest(presignedDomain(graph.protocol, 'isolated-live-acceptance-parent'), {
         graphDigest: graph.digest, txid: parent.txid, transactionHex: parent.transactionHex }) };
     const approval = { childFeeSats: 3000, maxChildFeeSats: 4000, targetPackageRateMillisatsPerVbyte: 5000,
       minRelayRateMillisatsPerVbyte: 1000, sponsorChangeScriptPubKeyHex: sponsorInput.scriptPubKeyHex,
@@ -617,7 +658,85 @@ const caseSteps = (plan: CasePlan) => plan.kind === 'solo-order'
   ? [plan.first!, plan.source!, 'terminal'] : [...(plan.source ? [plan.source] : []), 'terminal'];
 const caseFeeFamilies = (plan: CasePlan) => ['funding', ...caseSteps(plan)].map(step => feeFamily(plan, step))
   .filter((family): family is NonNullable<ReturnType<typeof feeFamily>> => family !== null);
-const runDigest = (run: Run) => commitmentDigest('vault/presigned-graph-v2/isolated-capital-run', run);
+interface OwnedCashoutIntent {
+  version: 1; profile: typeof LIVE_OWNED_CASHOUT_PROFILE; caseId: string;
+  request: PresignedCashoutRequest; cashout: PresignedCashout;
+}
+interface OwnedCashoutSigned extends Signed { ownerRestorationCheckpointDigest: string }
+function cashoutSource(run: Run, plan: CasePlan, kit: PresignedPublicKit, parent: Signed) {
+  assert(hasOwnedCashout(run, plan) && plan.kind === 'recovery' && plan.source === null && plan.omitted === 'carol');
+  const script = payoutScript(kit.graph.roster, 'carol').toString('hex');
+  const tx = bitcoin.Transaction.fromHex(parent.transactionHex);
+  const vouts = tx.outs.flatMap((out, index) => Buffer.from(out.script).toString('hex') === script ? [index] : []);
+  assert.equal(vouts.length, 1);
+  const destination = plan.inputs.find(item => item.participantId === 'carol')!;
+  // The regtest executable alone maps the Signet-format graph to regtest.
+  // Native backup ownership is bound to the exact script, not this encoding.
+  return { source: { txid: parent.txid, vout: vouts[0]!, valueSats: Number(tx.outs[vouts[0]!]!.value), scriptPubKeyHex: script },
+    destinationScriptPubKeyHex: destination.scriptPubKeyHex,
+    destinationAddress: bitcoin.address.fromOutputScript(Buffer.from(destination.scriptPubKeyHex, 'hex'), bitcoin.networks.testnet) };
+}
+function readCashoutIntent(directory: string, run: Run, plan: CasePlan, kit: PresignedPublicKit, parent: Signed) {
+  const intent = readLifecycleFile<OwnedCashoutIntent>(directory, `cases/${plan.id}/cashout.intent.json`);
+  const expected = cashoutSource(run, plan, kit, parent);
+  assert(intent.version === 1 && intent.profile === LIVE_OWNED_CASHOUT_PROFILE && intent.caseId === plan.id);
+  assert.deepEqual(intent.request.publicKit, kit);
+  assert(intent.request.participantId === 'carol' && intent.request.parentTransactionHex === parent.transactionHex &&
+    intent.request.destinationAddress === expected.destinationAddress && intent.request.feeSats === OWNED_CASHOUT_FEE_SATS &&
+    intent.request.maxFeeSats === OWNED_CASHOUT_FEE_SATS, 'cash-out changed the exact omitted owner, parent, destination or fee');
+  validatePresignedCashout(intent);
+  assert.deepEqual(intent.cashout.source, expected.source);
+  assert.equal(intent.cashout.destinationScriptPubKeyHex, expected.destinationScriptPubKeyHex);
+  return intent;
+}
+function readOwnedCashout(directory: string, run: Run, plan: CasePlan, kit: PresignedPublicKit, parent: Signed) {
+  const intent = readCashoutIntent(directory, run, plan, kit, parent);
+  const signed = readLifecycleFile<OwnedCashoutSigned>(directory, `cases/${plan.id}/cashout.signed.json`);
+  assert(/^[0-9a-f]{64}$/u.test(signed.ownerRestorationCheckpointDigest));
+  assert.equal(authorizePresignedCashoutTransaction({ ...intent, transactionHex: signed.transactionHex }).txid, signed.txid);
+  return { intent, signed };
+}
+async function freshCashoutSource(core: LiveLifecycleCore, parent: Signed, source: PresignedCashout['source']) {
+  const before = await core.rpc('getblockchaininfo');
+  const anchor = await confirmed(core, parent); assert(anchor, 'cash-out refund parent lost its active confirmation');
+  const observed = await core.observeCoin(source);
+  assert(observed.txid === source.txid && observed.vout === source.vout && observed.valueSats === source.valueSats &&
+    observed.scriptPubKeyHex === source.scriptPubKeyHex && observed.confirmationBlockHash === anchor.blockHash);
+  const live = await core.rpc('gettxout', [source.txid, source.vout, true]);
+  assert(live && live.confirmations > 0 && !live.coinbase && Math.round(live.value * 1e8) === source.valueSats &&
+    live.scriptPubKey.hex === source.scriptPubKeyHex, 'cash-out owner coin has a confirmed or pending competing spend');
+  const after = await core.rpc('getblockchaininfo');
+  assert(before.bestblockhash === after.bestblockhash && before.blocks === after.blocks, 'cash-out source observation changed tip');
+  return observed;
+}
+async function ensureOwnedCashout(core: LiveLifecycleCore, directory: string, run: Run, plan: CasePlan, kit: PresignedPublicKit, parent: Signed) {
+  const name = `cases/${plan.id}/cashout`;
+  const expected = cashoutSource(run, plan, kit, parent);
+  if (!has(directory, `${name}.intent.json`)) {
+    assert(!has(directory, `${name}.signed.json`), 'cash-out signature lost its immutable owner intent');
+    const request: PresignedCashoutRequest = { publicKit: kit, participantId: 'carol', parentTransactionHex: parent.transactionHex,
+      sourceObservation: await freshCashoutSource(core, parent, expected.source), destinationAddress: expected.destinationAddress,
+      feeSats: OWNED_CASHOUT_FEE_SATS, maxFeeSats: OWNED_CASHOUT_FEE_SATS };
+    saveLifecycleFile(directory, `${name}.intent.json`, { version: 1, profile: LIVE_OWNED_CASHOUT_PROFILE, caseId: plan.id,
+      request, cashout: buildPresignedCashout(request) } satisfies OwnedCashoutIntent);
+  }
+  const intent = readCashoutIntent(directory, run, plan, kit, parent);
+  const custody = [`cases/${plan.id}/kit.json`, `cases/${plan.id}/carol.encrypted.json`, `keys/${plan.id}-carol.json`, `${name}.intent.json`];
+  if (!has(directory, `${name}.signed.json`)) {
+    await freshCashoutSource(core, parent, expected.source);
+    const checkpoint = checkpointBefore(core, directory, `before-owned-cashout-signature:${plan.id}`, custody);
+    const signed = await withKeys(directory, plan.id, 'carol', keys => signPresignedCashout({ ...intent, keys,
+      approvedCashoutDigest: intent.cashout.digest }));
+    saveLifecycleFile(directory, `${name}.signed.json`, { ...signed,
+      ownerRestorationCheckpointDigest: checkpoint.checkpointDigest } satisfies OwnedCashoutSigned);
+  }
+  const saved = readOwnedCashout(directory, run, plan, kit, parent);
+  assert(await confirmed(core, parent), 'cash-out refund parent is no longer confirmed');
+  if (!await confirmed(core, saved.signed) && !await mempoolContains(core, saved.signed.txid))
+    await freshCashoutSource(core, parent, expected.source);
+  return submitExact(core, directory, `${plan.id}/owned-cashout`, saved.signed, [...custody, `${name}.signed.json`]);
+}
+const runDigest = (run: Run) => commitmentDigest(presignedDomain(run.protocol, 'isolated-capital-run'), run);
 const inputId = (input: bitcoin.Transaction['ins'][number]) => `${Buffer.from(input.hash).reverse().toString('hex')}:${input.index}`;
 function allocationShape(run: Run, id: string) {
   const plan = run.cases.find(item => item.id === id);
@@ -635,19 +754,53 @@ function readAllocation(directory: string, run: Run, id: string) {
   assert.deepEqual(intent.targets, shape.targets);
   return { intent, signed };
 }
+/** Only public, fully verified immutable DAGs enter this bounded cache. Every
+ * hit still opens and hashes every required protected file. Chain observations,
+ * current checkpoints, unfinished cases and all key/custody bytes stay outside.
+ * Keep this manifest in sync with all reads in validateCompletedCaseJournal. */
+const completedCaseCache = new Map<string, ReturnType<typeof validateCompletedCaseJournal>>();
+function completedCasePublicFiles(run: Run, plan: CasePlan) {
+  const prefix = `cases/${plan.id}`;
+  return [`allocations/${plan.id}.intent.json`, `allocations/${plan.id}.signed.json`,
+    `${prefix}/kit.json`, `${prefix}/funding.json`, `${prefix}/wallet-signing-intent.json`, `${prefix}/backup-receipts.json`,
+    ...caseSteps(plan).flatMap(step => { const name = step.replace('/', '-');
+      return [`${prefix}/step-${name}.json`, `${prefix}/step-${name}.intent.json`, `${prefix}/negative-${name}.json`]; }),
+    ...caseFeeFamilies(plan).flatMap(family => [`${prefix}/fee-${family}.json`,
+      `${prefix}/fee-${family}-initial-accepted.json`, `${prefix}/fee-${family}-replacement-accepted.json`,
+      ...['initial', 'replacement'].flatMap(stage => [`${prefix}/fee-${family}.${stage}-draft.json`, `${prefix}/fee-${family}.${stage}-signed.json`])]),
+    ...(hasOwnedCashout(run, plan) ? [`${prefix}/cashout.intent.json`, `${prefix}/cashout.signed.json`] : [])].sort();
+}
+function completedCaseJournal(directory: string, run: Run, plan: CasePlan): ReturnType<typeof validateCompletedCaseJournal> {
+  const files = completedCasePublicFiles(run, plan);
+  const manifest = () => files.map(path => ({ path, sha256: createHash('sha256').update(readPrivateJournalBytes(`${directory}/${path}`)).digest('hex') }));
+  const before = manifest();
+  const key = commitmentDigest(presignedDomain(run.protocol, 'verified-public-case-cache'), { directory, run, plan, files: before });
+  const cached = completedCaseCache.get(key);
+  if (cached) return structuredClone(cached);
+  const verified = validateCompletedCaseJournal(directory, run, plan);
+  assert.deepEqual(manifest(), before, 'completed public case changed during validation');
+  if (completedCaseCache.size >= 32) completedCaseCache.delete(completedCaseCache.keys().next().value!);
+  completedCaseCache.set(key, structuredClone(verified));
+  return structuredClone(verified);
+}
+/** Read-only diagnostic boundary; never bypasses the current run or journal. */
+export function inspectCompletedLiveLifecycleCase(core: LiveLifecycleCore, directory: string, caseId: string) {
+  const run = runFor(core, directory); const plan = run.cases.find(item => item.id === caseId);
+  assert(plan, 'unknown completed lifecycle case');
+  return completedCaseJournal(directory, run, plan);
+}
 /** Exact completed transaction DAG, including wallet refunds, fee-child payout
  * preservation, sponsor change and the untouched allocation reserve. No live
  * spendability assumption is made here: those leaves may already be recycled. */
-function completedCaseJournal(directory: string, run: Run, plan: CasePlan) {
+function validateCompletedCaseJournal(directory: string, run: Run, plan: CasePlan) {
   const allocation = readAllocation(directory, run, plan.id);
   const kit = validatePresignedPublicKit(readLifecycleFile<PresignedPublicKit>(directory, `cases/${plan.id}/kit.json`));
   const fundingIntent = readLifecycleFile<{ graphDigest: string; fundingTxid: string; backupsVerified: boolean }>(
     directory, `cases/${plan.id}/wallet-signing-intent.json`);
   assert(fundingIntent.graphDigest === kit.graph.digest && fundingIntent.fundingTxid === kit.graph.fundingTxid &&
     fundingIntent.backupsVerified === true, 'completed predecessor lost its exact pre-funding backup intent');
-  assert.deepEqual(kit.graph.roster.economics, { depositSatsPerParticipant: 10_000, firstWithdrawalSats: 9500,
-    secondWithdrawalSats: 10_250, soloWithdrawalFeeSats: 300, soloFeeBudgetSats: 2000,
-    cooperativeFeeSats: 300, recoveryFeeSats: 500, finalSweepFeeSats: 300, recoveryDelayBlocks: 12 });
+  assert.equal(kit.protocol, run.protocol, 'completed predecessor protocol differs from its immutable run');
+  assert.deepEqual(kit.graph.roster.economics, lifecycleEconomics(run.protocol));
   const allocationTx = bitcoin.Transaction.fromHex(allocation.signed.transactionHex);
   for (const target of plan.inputs) {
     const input = kit.graph.funding.inputs.find(item => item.participantId === target.participantId); assert(input);
@@ -661,7 +814,7 @@ function completedCaseJournal(directory: string, run: Run, plan: CasePlan) {
     directory, `cases/${plan.id}/backup-receipts.json`);
   assert(backups.restoredBeforeWalletSigning && backups.proofs.length === 3);
   for (const [index, participantId] of PARTICIPANT_IDS.entries()) validatePresignedRestorationReceipt({
-    graph: kit.graph, preauthorizations: kit.preauthorizations, participantId, proof: backups.proofs[index]! });
+    graph: kit.graph, preauthorizations: kit.preauthorizations, recoveryAuthorizations: kit.recoveryAuthorizations, participantId, proof: backups.proofs[index]! });
   const funding = readLifecycleFile<Signed>(directory, `cases/${plan.id}/funding.json`);
   assert.equal(authorizePresignedFundingTransaction({ graph: kit.graph, transactionHex: funding.transactionHex }).txid, funding.txid);
   const steps = caseSteps(plan).map(step => {
@@ -704,7 +857,8 @@ function completedCaseJournal(directory: string, run: Run, plan: CasePlan) {
       replacement.previousNoLongerPending && replacement.independentlyObserved, 'fee replacement evidence is incomplete');
     return { family, ...pair };
   });
-  const nodes = [...graphNodes, ...fees.map(item => item.replacement.completed)];
+  const ownedCashout = hasOwnedCashout(run, plan) ? readOwnedCashout(directory, run, plan, kit, steps.at(-1)!.signed) : null;
+  const nodes = [...graphNodes, ...fees.map(item => item.replacement.completed), ...(ownedCashout ? [ownedCashout.signed] : [])];
   assert(new Set(nodes.map(item => item.txid)).size === nodes.length);
   const inventory = new Map<string, { txid: string; vout: number; valueSats: number; scriptPubKeyHex: string; parentTransactionHex: string }>();
   for (const node of [allocation.signed, ...nodes]) {
@@ -724,7 +878,7 @@ function completedCaseJournal(directory: string, run: Run, plan: CasePlan) {
     assert(fee > 0); fixedFeesSats += fee;
   }
   const expectedGraphFees = plan.kind === 'solo-order' ? 1800 : 600 + (plan.source ? 300 : 0) + (plan.kind === 'recovery' ? 500 : 300);
-  assert.equal(fixedFeesSats, expectedGraphFees + fees.length * 4000, 'case changed the fixed acceptance economics');
+  assert.equal(fixedFeesSats, expectedGraphFees + fees.length * 4000 + (ownedCashout ? OWNED_CASHOUT_FEE_SATS : 0), 'case changed the fixed acceptance economics');
   const walletScripts = new Set([...plan.inputs.map(item => item.scriptPubKeyHex),
     ...caseFeeFamilies(plan).map(family => run.sponsors.find(item => item.family === family)!.scriptPubKeyHex),
     allocation.intent.reserveScriptPubKeyHex]);
@@ -733,15 +887,18 @@ function completedCaseJournal(directory: string, run: Run, plan: CasePlan) {
     assert(participantId !== null || walletScripts.has(coin.scriptPubKeyHex), 'unfinished vault or unknown output cannot become recycled capital');
     return { ...coin, participantId };
   });
-  assert(leaves.length <= 10 && leaves.filter(coin => coin.participantId !== null).length === 3,
+  assert(leaves.length <= 10 && leaves.filter(coin => coin.participantId !== null).length === (ownedCashout ? 2 : 3),
     'completed case does not contain all three participant payouts');
+  if (ownedCashout) assert(leaves.some(coin => coin.txid === ownedCashout.signed.txid && coin.vout === 0 &&
+    coin.participantId === null && coin.valueSats === ownedCashout.intent.cashout.payoutSats &&
+    coin.scriptPubKeyHex === ownedCashout.intent.cashout.destinationScriptPubKeyHex), 'owner cash-out is missing its exact native destination leaf');
   assert.equal(leaves.reduce((sum, coin) => sum + coin.valueSats, 0),
     allocation.intent.inputSats - allocation.intent.feeSats - fixedFeesSats, 'case capital conservation failed');
-  const digest = commitmentDigest('vault/presigned-graph-v2/completed-isolated-capital-case', {
+  const digest = commitmentDigest(presignedDomain(run.protocol, 'completed-isolated-capital-case'), {
     case: plan.id, allocationIntentDigest: allocation.intent.intentDigest, graphDigest: kit.graph.digest,
     funding, steps, backups, feeChildren: fees.map(item => ({ family: item.family,
-      initial: item.initial.completed, replacement: item.replacement.completed })), leaves });
-  return { kit, allocation, funding, steps, nodes, fees, leaves, fixedFeesSats, digest };
+      initial: item.initial.completed, replacement: item.replacement.completed })), ...(ownedCashout ? { ownedCashout } : {}), leaves });
+  return { kit, allocation, funding, steps, nodes, fees, leaves, fixedFeesSats, digest, ownedCashout };
 }
 function expectedAllocation(directory: string, run: Run, id: string) {
   const position = id === 'return' ? run.cases.length : run.cases.findIndex(plan => plan.id === id);
@@ -895,13 +1052,16 @@ async function verifyCapitalReturn(core: LiveLifecycleCore, directory: string, r
   assert(live && live.confirmations > 0 && Math.round(live.value * 1e8) === returned.intent.reserveSats &&
     live.scriptPubKey.hex === returned.intent.reserveScriptPubKeyHex, 'final capital return is not currently available');
   const uniqueConfirmedFeesSats = allocationFeesSats + fixedConfirmedFeesSats;
-  assert(fixedConfirmedFeesSats === 47_000 && ids.size === 84 && allocationFeesSats <= 20 * RECYCLING_FEE_CAP);
+  assert(fixedConfirmedFeesSats === 47_000 + cashoutFee(run.protocol) &&
+    ids.size === (run.protocol === PRESIGNED_PROTOCOL_V3 ? 85 : 84) && allocationFeesSats <= 20 * RECYCLING_FEE_CAP);
   assert.equal(run.initialCapitalSats, returned.intent.reserveSats + uniqueConfirmedFeesSats,
     'closed capital DAG imported funds or lost unaccounted value');
-  return { version: 2, execution: run.execution, initialOutpoint: { txid: run.initialCoin.txid, vout: run.initialCoin.vout },
+  return { version: run.protocol === PRESIGNED_PROTOCOL_V3 ? 3 : 2, execution: run.execution,
+    ...(run.protocol === PRESIGNED_PROTOCOL_V3 ? { ownedCashoutProfile: LIVE_OWNED_CASHOUT_PROFILE, minimumInitialCapitalSats: liveLifecycleMinimumCapital(run.protocol) } : {}),
+    initialOutpoint: { txid: run.initialCoin.txid, vout: run.initialCoin.vout },
     initialCapitalSats: run.initialCapitalSats, capitalLimitSats: run.capitalLimitSats, unrelatedWalletInputsUsed: 0,
     confirmedAllocations: 20, uniqueConfirmedTransactions: ids.size, fixedConfirmedFeesSats, allocationFeesSats,
-    uniqueConfirmedFeesSats, maximumUniqueConfirmedFeesSats: 47_000 + 20 * RECYCLING_FEE_CAP,
+    uniqueConfirmedFeesSats, maximumUniqueConfirmedFeesSats: 47_000 + cashoutFee(run.protocol) + 20 * RECYCLING_FEE_CAP,
     returnedSats: returned.intent.reserveSats, returnTxid: returned.signed.txid,
     allTerminalOutputsAndReservesConsumedExactlyOnce: true, finalWalletReturnConfirmedAndUnspent: true };
 }
@@ -970,6 +1130,10 @@ export async function advanceLiveLifecycle(core: LiveLifecycleCore, directory: s
     }
     if (!waiting) {
       for (const step of steps) assert(has(directory, `cases/${plan.id}/negative-${step.replace('/', '-')}.json`), 'hostile transaction evidence is missing');
+      if (hasOwnedCashout(run, plan)) {
+        const status = await ensureOwnedCashout(core, directory, run, plan, kit, signedSteps.at(-1)!);
+        if (status !== 'confirmed') { statuses.push({ case: plan.id, stage: 'owned-cashout', status }); break; }
+      }
       await auditCasePayouts(core, directory, run, plan);
       statuses.push({ case: plan.id, stage: 'complete', status: 'confirmed', anchors });
     } else break;
@@ -996,7 +1160,9 @@ export async function advanceLiveLifecycle(core: LiveLifecycleCore, directory: s
     if (capitalReturnStatus === 'confirmed') capitalRecyclingEvidence = await verifyCapitalReturn(core, directory, run);
   }
   const complete = completeLifecycleEvidence && feeLifecycleEvidence && capitalRecyclingEvidence !== null;
-  const snapshot = { version: 2, protocol: PRESIGNED_PROTOCOL, chain: core.chain, actualGenesisHash: core.actualGenesisHash,
+  const snapshot = { version: presignedVersion(run.protocol), protocol: run.protocol, chain: core.chain, actualGenesisHash: core.actualGenesisHash,
+    ...(run.protocol === PRESIGNED_PROTOCOL_V3 ? { ownedCashoutProfile: LIVE_OWNED_CASHOUT_PROFILE,
+      ownedPayoutCashoutsConfirmed: statuses.some(item => item.case === 'case-12' && item.stage === 'complete') ? 1 : 0 } : {}),
     sourceDigest: core.sourceDigest, complete, completeLifecycleEvidence,
     realDefaultSignetVerified: complete && core.chain === 'default-Signet', physicalPasskeysVerified: false,
     liveBrowserPasskeysVerified: false, feeLifecycleEvidence, feeEvidence, capitalRecyclingEvidence, capitalReturnStatus,
@@ -1036,7 +1202,8 @@ export async function verifyRestoredLiveLifecycleCustody(core: LiveLifecycleCore
   const ids = readdirSync(`${directory}/cases`);
   assert(ids.every(id => run.cases.some(plan => plan.id === id)), 'restored custody contains an unplanned case');
   for (const id of ids) {
-    validatePresignedPublicKit(readLifecycleFile<PresignedPublicKit>(directory, `cases/${id}/kit.json`));
+    const kit = validatePresignedPublicKit(readLifecycleFile<PresignedPublicKit>(directory, `cases/${id}/kit.json`));
+    assert.equal(kit.protocol, run.protocol, 'restored participant kit differs from the original run protocol');
     for (const participant of PARTICIPANT_IDS) { await withKeys(directory, id, participant, () => undefined); restoredKits++; }
   }
   return { initialized: true, nativeWalletProof: { directory: receipt.directory, ...verified, binding: walletRecoveryBinding(core, run) },
@@ -1056,14 +1223,14 @@ export async function verifyCompletedLiveLifecycle(core: LiveLifecycleCore, dire
   const completeCheckpoint = core.durableJournal.assertCurrent().snapshot; assert(completeCheckpoint);
   const independentCaseCheckpoints: string[] = [];
   const tipBefore = await readonlyCore.rpc('getblockchaininfo');
-  const cases = []; let restoredKits = 0; let hostileRejections = 0;
+  const cases = []; const ownedCashouts = []; let restoredKits = 0; let hostileRejections = 0;
   for (const plan of run.cases) {
     const allocation = readAllocation(directory, run, plan.id);
     assert.deepEqual(allocation.intent, expectedAllocation(directory, run, plan.id).intent);
     const fanout = allocation.signed;
     assert(await confirmed(readonlyCore, fanout), 'case capital allocation is not currently confirmed');
     const kit = validatePresignedPublicKit(readLifecycleFile<PresignedPublicKit>(directory, `cases/${plan.id}/kit.json`));
-    assert(kit.graph.roster.network === 'signet' && kit.graph.roster.genesisHash === genesisHash('signet'));
+    assert(kit.protocol === run.protocol && kit.graph.roster.network === 'signet' && kit.graph.roster.genesisHash === genesisHash('signet'));
     assert.equal(kit.graph.funding.inputs.length, 3);
     const fanoutTransaction = bitcoin.Transaction.fromHex(fanout.transactionHex);
     for (const target of plan.inputs) {
@@ -1077,7 +1244,8 @@ export async function verifyCompletedLiveLifecycle(core: LiveLifecycleCore, dire
       directory, `cases/${plan.id}/backup-receipts.json`);
     assert(backups.restoredBeforeWalletSigning === true && backups.proofs.length === 3);
     for (const [index, participantId] of PARTICIPANT_IDS.entries()) {
-      validatePresignedRestorationReceipt({ graph: kit.graph, preauthorizations: kit.preauthorizations, participantId, proof: backups.proofs[index]! });
+      validatePresignedRestorationReceipt({ graph: kit.graph, preauthorizations: kit.preauthorizations,
+        recoveryAuthorizations: kit.recoveryAuthorizations, participantId, proof: backups.proofs[index]! });
       await withKeys(directory, plan.id, participantId, () => undefined); restoredKits++;
     }
     const independent = readLifecycleFile<{ version: number; caseId: string; graphDigest: string; checkpointDigest: string;
@@ -1085,7 +1253,7 @@ export async function verifyCompletedLiveLifecycle(core: LiveLifecycleCore, dire
     assert(independent.version === 1 && independent.caseId === plan.id && independent.graphDigest === kit.graph.digest &&
       independent.completeIndependentRestoration === true && independent.proofs.length === 3);
     PARTICIPANT_IDS.forEach((participantId, index) => validatePresignedRestorationReceipt({ graph: kit.graph,
-      preauthorizations: kit.preauthorizations, participantId, proof: independent.proofs[index]! }));
+      preauthorizations: kit.preauthorizations, recoveryAuthorizations: kit.recoveryAuthorizations, participantId, proof: independent.proofs[index]! }));
     core.durableJournal.verifyCheckpoint(independent.checkpointDigest,
       ['run.json', 'wallet-recovery.json', ...caseCustodyFiles(plan.id), `cases/${plan.id}/wallet-signing-intent.json`],
       `before-independent-case-restore:${plan.id}`);
@@ -1124,7 +1292,19 @@ export async function verifyCompletedLiveLifecycle(core: LiveLifecycleCore, dire
       assert.deepEqual(negative.negatives.map(item => item.mutation), ['missing-signature', 'changed-payout']);
       hostileRejections += 2; anchors.push(anchor); signedSteps.push(signed);
     }
-    await auditCasePayouts(readonlyCore, directory, run, plan);
+    const journal = await auditCasePayouts(readonlyCore, directory, run, plan);
+    if (journal.ownedCashout) {
+      const { intent, signed } = journal.ownedCashout;
+      const cashoutAnchor = await confirmed(readonlyCore, signed); assert(cashoutAnchor);
+      core.durableJournal.verifyCheckpoint(signed.ownerRestorationCheckpointDigest,
+        ['run.json', 'wallet-recovery.json', `cases/${plan.id}/kit.json`, `cases/${plan.id}/carol.encrypted.json`,
+          `keys/${plan.id}-carol.json`, `cases/${plan.id}/cashout.intent.json`], `before-owned-cashout-signature:${plan.id}`);
+      ownedCashouts.push({ version: 1, profile: LIVE_OWNED_CASHOUT_PROFILE, caseId: plan.id, participantId: 'carol',
+        source: intent.cashout.source, txid: signed.txid, destinationScriptPubKeyHex: intent.cashout.destinationScriptPubKeyHex,
+        payoutSats: intent.cashout.payoutSats, feeSats: intent.cashout.feeSats, sourceAnchor: anchors.at(-1)!, cashoutAnchor,
+        ownerRestorationCheckpointDigest: signed.ownerRestorationCheckpointDigest,
+        omittedParticipantRefund: true, restoredOwnerKit: true, externalNativeDestinationBackedUp: true, exactOwnerSignatureVerified: true });
+    }
     cases.push({ id: plan.id, kind: plan.kind, source: plan.source, omitted: plan.omitted, graphDigest: kit.graph.digest, anchors });
   }
   const fees = [];
@@ -1154,7 +1334,13 @@ export async function verifyCompletedLiveLifecycle(core: LiveLifecycleCore, dire
     nativeWalletBackupSha256: nativeWalletRestoration.backupSha256, nativeWalletProofSha256: nativeWalletRestoration.proofSha256,
     allNativeSignaturesBindExactRunAndBackup: true, persistentStorageRequired: core.chain === 'default-Signet',
     wholeDiskLossProtectionClaimed: false };
-  const body = { version: 3, protocol: PRESIGNED_PROTOCOL, kind: 'presigned-v2-verified-live-lifecycle', createdAt: new Date().toISOString(),
+  const v3 = run.protocol === PRESIGNED_PROTOCOL_V3;
+  assert.equal(ownedCashouts.length, v3 ? 1 : 0);
+  const body = { version: v3 ? 5 : 3, protocol: run.protocol, kind: `presigned-v${presignedVersion(run.protocol)}-verified-live-lifecycle`, createdAt: new Date().toISOString(),
+    ...(v3 ? { recoveryPolicy: FIXED_RECOVERY_POLICY, payoutSchedule: LAST_SURVIVOR_PAYOUT_SCHEDULE,
+      setupSignaturesPerCase: 21, fixedRecoveryTemplatesPerCase: 4, fixedRecoveryQuorumsConfirmed: 9,
+      normalPayoutSats: [9_120, 9_600, 10_080], ownedCashoutProfile: LIVE_OWNED_CASHOUT_PROFILE,
+      ownedPayoutCashoutsConfirmed: 1, ownedPayoutCashoutEvidence: ownedCashouts[0]! } : {}),
     sourceDigest: core.sourceDigest, chain: core.chain, actualGenesisHash: core.actualGenesisHash,
     actualTip: { hash: tipAfter.bestblockhash as string, height: tipAfter.blocks as number },
     complete: true, realDefaultSignetVerified: core.chain === 'default-Signet',
@@ -1162,5 +1348,5 @@ export async function verifyCompletedLiveLifecycle(core: LiveLifecycleCore, dire
     restoredKits, hostileRejections, everyPayoutRefundAndSponsorChangeVerified: true, capitalRecyclingEvidence, durableCustodyEvidence,
     freshRandomParticipantKeys: run.freshRandomParticipantKeys, externalWalletKeysExported: run.externalWalletKeysExported,
     physicalPasskeysVerified: false, liveBrowserPasskeysVerified: false, fundingAuthorized: false, cases, fees };
-  return { ...body, receiptDigest: commitmentDigest('vault/presigned-graph-v2/verified-live-lifecycle', body) };
+  return { ...body, receiptDigest: commitmentDigest(presignedDomain(run.protocol, 'verified-live-lifecycle'), body) };
 }

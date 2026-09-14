@@ -6,15 +6,16 @@ import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import postgres from 'postgres';
 import { BITCOIN_NETWORK_NAME } from '../../src/network.js';
-import { presignedBackupBinding, verifyPresignedKitRestoration, type PresignedRestorationProof } from '../../src/presigned/backup.js';
+import { createPresignedPublicKit, presignedBackupBinding, verifyPresignedKitRestoration, type PresignedRestorationProof } from '../../src/presigned/backup.js';
 import { newPresignedCeremony, validatePresignedAction, type PresignedAction, type PresignedCeremonySettings,
   type PresignedFundingInputVerifier } from '../../src/presigned/ceremony.js';
 import { createPresignedFixture } from '../../src/presigned/fixtures.js';
 import { authorizePresignedFundingSignedPsbt, type PresignedFundingSignature } from '../../src/presigned/funding.js';
 import { derivePresignedParticipantKeys } from '../../src/presigned/roster.js';
 import { createPreauthorizations } from '../../src/presigned/signing.js';
-import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, type ParticipantId, type PresignedGraph, type PresignedPublicKit } from '../../src/presigned/types.js';
-import { commitmentDigest } from '../../src/presigned/validation.js';
+import { createRecoveryAuthorizations } from '../../src/presigned/fixed-recovery.js';
+import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, FIXED_RECOVERY_POLICY, isPresignedProtocol, type PresignedProtocol, type ParticipantId, type PresignedGraph, type PresignedPublicKit } from '../../src/presigned/types.js';
+import { commitmentDigest, presignedDomain, presignedVersion } from '../../src/presigned/validation.js';
 import { EXPECTED_MIGRATION_FILES } from '../lib/migrations.js';
 import { closeDatabase } from '../lib/server/db.js';
 import { completePresignedAction, createPresignedActionChallenge, getPresignedActionChallenge,
@@ -30,17 +31,22 @@ assert(['127.0.0.1', 'localhost', '[::1]'].includes(database.hostname) && /(?:te
   'run only against an explicitly named disposable loopback test/acceptance database');
 // Migrations carry explicit BEGIN/COMMIT; keep their connection pinned. Store operations use a separate pool.
 const sql = postgres(process.env.DATABASE_URL, { max: 1, onnotice: () => {} });
+const selectedProtocol = process.env.PRESIGNED_DB_PROTOCOL ?? PRESIGNED_PROTOCOL;
+assert(isPresignedProtocol(selectedProtocol), 'DB acceptance protocol must be explicitly supported');
+const protocol: PresignedProtocol = selectedProtocol;
+const v3 = protocol === PRESIGNED_PROTOCOL_V3;
 const vaultId = randomUUID();
 const legacyVaultId = randomUUID();
 const users = Object.fromEntries(PARTICIPANT_IDS.map(id => [id, randomUUID()])) as Record<ParticipantId, string>;
 const credentials = Object.fromEntries(PARTICIPANT_IDS.map(id => [id, [0, 1].map(() => `presigned-acceptance-${randomUUID()}`)])) as Record<ParticipantId, string[]>;
-const fixture = createPresignedFixture({ network: BITCOIN_NETWORK_NAME, walletKinds: ['p2wpkh', 'p2wpkh', 'p2wpkh'] });
+const fixture = createPresignedFixture({ protocol, network: BITCOIN_NETWORK_NAME, walletKinds: ['p2wpkh', 'p2wpkh', 'p2wpkh'] });
 const secrets = Object.fromEntries(PARTICIPANT_IDS.map(id => [id, randomBytes(32).toString('base64url')])) as Record<ParticipantId, string>;
-const derived = Object.fromEntries(PARTICIPANT_IDS.map(id => [id, derivePresignedParticipantKeys(secrets[id], id, vaultId)])) as Record<ParticipantId, ReturnType<typeof derivePresignedParticipantKeys>>;
+const derived = Object.fromEntries(PARTICIPANT_IDS.map(id => [id, derivePresignedParticipantKeys(secrets[id], id, vaultId, protocol)])) as Record<ParticipantId, ReturnType<typeof derivePresignedParticipantKeys>>;
 const settings: PresignedCeremonySettings = { network: fixture.roster.network, genesisHash: fixture.roster.genesisHash,
+  ...(v3 ? { protocol: PRESIGNED_PROTOCOL_V3, recoveryPolicy: FIXED_RECOVERY_POLICY } : {}),
   economics: fixture.roster.economics, feePolicy: fixture.roster.feePolicy, fundingFeeSats: fixture.graph.funding.feeSats };
 const b = (value: string) => Buffer.from(value, 'hex');
-const stateDomain = 'vault/presigned-graph-v2/ceremony/state';
+const stateDomain = presignedDomain(protocol, 'ceremony/state');
 const results: string[] = [];
 const delayTrigger = `presigned_begin_delay_${vaultId.replace(/-/gu, '')}`;
 let observationCalls = 0;
@@ -51,7 +57,7 @@ const observe: PresignedFundingInputVerifier = async ({ network, genesisHash, in
     confirmations: input.confirmations + 1, unspent: true };
 };
 function action(body: Record<string, unknown>): PresignedAction {
-  return validatePresignedAction({ version: 2, protocol: PRESIGNED_PROTOCOL, ...body });
+  return validatePresignedAction({ version: presignedVersion(protocol), protocol, ...body });
 }
 function options(id: ParticipantId, candidate: PresignedAction, credentialIndex = 0,
   dependencies: PresignedActionDependencies = { verifyFundingInput: observe }) {
@@ -92,9 +98,14 @@ function beginAction(graph: PresignedGraph): PresignedAction {
   return action({ kind: 'begin-wallet-signing', epochId: graph.funding.epochId, graphDigest: graph.digest });
 }
 function restoreProof(graph: PresignedGraph, preauthorizations: PresignedPublicKit['preauthorizations'], id: ParticipantId) {
-  const publicKit: PresignedPublicKit = { version: 2, protocol: PRESIGNED_PROTOCOL, graph, preauthorizations };
+  const publicKit = createPresignedPublicKit({ graph, preauthorizations,
+    ...(v3 ? { recoveryAuthorizations: PARTICIPANT_IDS.flatMap(participantId => recoveryEntries(graph, participantId)) } : {}) });
   return verifyPresignedKitRestoration({ publicKit, participantId: id, participantSecret: secrets[id],
     expectedBinding: presignedBackupBinding(publicKit, id) });
+}
+function recoveryEntries(graph: PresignedGraph, participantId: ParticipantId) {
+  return createRecoveryAuthorizations({ graph, participantId,
+    privateKeys: derived[participantId].keys.recoveryAuthorizationPrivateKeys!, approvedGraphDigest: graph.digest });
 }
 function backupAction(graph: PresignedGraph, id: ParticipantId, proof: PresignedRestorationProof, kind: 'offline' | 'passkey', credentialIndex = 0) {
   return action({ kind: 'confirm-backup', epochId: graph.funding.epochId, graphDigest: graph.digest, backupKind: kind,
@@ -116,10 +127,12 @@ async function allPreauthorizations(graph: PresignedGraph) {
   const contributions = PARTICIPANT_IDS.map(id => ({ id, entries: createPreauthorizations({ graph, participantId: id,
     privateKeys: derived[id].keys.soloPrivateKeys, approvedGraphDigest: graph.digest }) }));
   const challenges = await Promise.all(contributions.map(({ id, entries }) => options(id,
-    action({ kind: 'contribute-preauthorizations', epochId: graph.funding.epochId, graphDigest: graph.digest, preauthorizations: entries }))));
+    action({ kind: 'contribute-preauthorizations', epochId: graph.funding.epochId, graphDigest: graph.digest, preauthorizations: entries,
+      ...(v3 ? { recoveryAuthorizations: recoveryEntries(graph, id) } : {}) }))));
   await Promise.all(challenges.map(challenge => finish(challenge)));
   const current = await status();
   assert.equal(current.epoch!.preauthorizations.length, 12);
+  if (v3) assert.equal(current.epoch!.recoveryAuthorizations?.length, 9);
   assert.equal(current.walletSigningReady, false);
   return current.epoch!.preauthorizations;
 }
@@ -158,15 +171,15 @@ try {
   assert.equal((await sql`SELECT protocol FROM vaults WHERE id=${legacyVaultId}`)[0]!.protocol, 'sigbash-v1');
   assert.deepEqual(await sql`SELECT artifact_json,digest,funding_address,status FROM vault_rosters WHERE vault_id=${legacyVaultId}`, legacyBefore);
   await assert.rejects(() => sql`UPDATE vaults SET protocol=${PRESIGNED_PROTOCOL} WHERE id=${legacyVaultId}`, /immutable/);
-  await assert.rejects(() => initializePresignedCeremony({ vaultId: legacyVaultId, settings }), /explicitly created V2/);
+  await assert.rejects(() => initializePresignedCeremony({ vaultId: legacyVaultId, settings }), /explicitly created matching-protocol/);
   const illegalLegacyState = newPresignedCeremony(legacyVaultId, settings);
-  await assert.rejects(() => sql`INSERT INTO presigned_ceremonies(vault_id,settings_json,settings_digest,state_json,state_digest)
-    VALUES (${legacyVaultId},${sql.json(settings as never)},${b(illegalLegacyState.settingsDigest)},
+  await assert.rejects(() => sql`INSERT INTO presigned_ceremonies(vault_id,protocol,settings_json,settings_digest,state_json,state_digest)
+    VALUES (${legacyVaultId},${protocol},${sql.json(settings as never)},${b(illegalLegacyState.settingsDigest)},
       ${sql.json(illegalLegacyState as never)},${b(commitmentDigest(stateDomain, illegalLegacyState))})`, /foreign key/);
   results.push(pendingMigration ? 'migration backfills V1 without rewriting retained artifacts; protocol and composite parent FK enforced' :
     'already-migrated default preserves V1 artifacts; protocol and composite parent FK enforced');
 
-  await sql`INSERT INTO vaults(id,name,protocol) VALUES (${vaultId},'Synthetic V2 ceremony',${PRESIGNED_PROTOCOL})`;
+  await sql`INSERT INTO vaults(id,name,protocol) VALUES (${vaultId},'Synthetic presigned ceremony',${protocol})`;
   for (const id of PARTICIPANT_IDS) {
     await sql`INSERT INTO users(id,display_name) VALUES (${users[id]},${`Synthetic ${id}`})`;
     await sql`INSERT INTO vault_members(vault_id,user_id,participant_id) VALUES (${vaultId},${users[id]},${id})`;
@@ -235,10 +248,22 @@ try {
   const firstGraph = current.epoch!.graph!;
   assert.equal(current.phase, 'preauthorizations');
   assert.equal(current.fundingPsbtBase64, null);
-  assert.equal(bitcoin.Transaction.fromHex(firstGraph.exits.find(exit => exit.id === 'alice/bob')!.unsignedTxHex).outs[1]!.value, 9350n);
+  assert.equal(bitcoin.Transaction.fromHex(firstGraph.exits.find(exit => exit.id === 'alice/bob')!.unsignedTxHex).outs[1]!.value, v3 ? 10380n : 9350n);
   await assert.rejects(() => options('alice', fundingAction(firstGraph, 'alice')), /wallet signing requires/);
   await assert.rejects(() => options('alice', beginAction(firstGraph)), /wallet signing requires/);
   const entries = await allPreauthorizations(firstGraph);
+  if (v3) {
+    await assert.rejects(() => sql`UPDATE presigned_funding_epochs SET snapshot_json=jsonb_set(snapshot_json,'{recoveryAuthorizations}','[]')
+      WHERE epoch_id=${firstGraph.funding.epochId}`, /recovery authorizations cannot be removed/);
+    assert.throws(() => action({ kind: 'contribute-preauthorizations', epochId: firstGraph.funding.epochId,
+      graphDigest: firstGraph.digest, preauthorizations: entries.filter(entry => entry.participantId === 'alice') }), /unexpected or missing/);
+    await assert.rejects(() => options('alice', { version: 2, protocol: PRESIGNED_PROTOCOL, kind: 'begin-wallet-signing',
+      epochId: firstGraph.funding.epochId, graphDigest: firstGraph.digest }), /protocol/);
+    const mixed = structuredClone(current.epoch!); mixed.graph = { ...firstGraph, protocol: PRESIGNED_PROTOCOL, version: 2 };
+    await assert.rejects(() => sql`UPDATE presigned_funding_epochs SET snapshot_json=${sql.json(mixed as never)}
+      WHERE epoch_id=${firstGraph.funding.epochId}`, /immutable|constraint/);
+    results.push('V3 requires separate nine fixed-refund approvals, retains them immutably and rejects V2 actions or mixed graph versions');
+  }
   await assert.rejects(() => options('alice', fundingAction(firstGraph, 'alice')), /wallet signing requires/);
   const proof = restoreProof(firstGraph, entries, 'alice');
   const wrongProof = structuredClone(proof); wrongProof.binding.epochId = randomUUID();
@@ -288,7 +313,8 @@ try {
   // Reusing the same unsigned inputs deliberately preserves txid while epoch binds all approvals and kits anew.
   assert.equal(graph.fundingTxid, firstGraph.fundingTxid);
   await assert.rejects(() => options('alice', action({ kind: 'contribute-preauthorizations', epochId: graph.funding.epochId,
-    graphDigest: graph.digest, preauthorizations: entries.filter(entry => entry.participantId === 'alice') })), /graph/);
+    graphDigest: graph.digest, preauthorizations: entries.filter(entry => entry.participantId === 'alice'),
+    ...(v3 ? { recoveryAuthorizations: recoveryEntries(firstGraph, 'alice') } : {}) })), /graph/);
   const freshEntries = await allPreauthorizations(graph);
   await allBackups(graph, freshEntries);
   results.push('unanimous exact-state/reason restart preserves old graph, 12 preauthorizations and 9 receipts; old-epoch actions rejected');
@@ -389,7 +415,7 @@ try {
   results.push('finish-time backup revocation closes begin/signature gates; three exact wallet signatures plus unanimous final approval; no automatic activation/broadcast or Sigbash state');
   const eventCount = (await sql`SELECT count(*)::int AS count FROM presigned_action_events WHERE vault_id=${vaultId}`)[0]!.count;
   assert.equal(eventCount, 51);
-  console.log(JSON.stringify({ suite: 'presigned-ceremony-db', network: BITCOIN_NETWORK_NAME,
+  console.log(JSON.stringify({ suite: 'presigned-ceremony-db', protocol, network: BITCOIN_NETWORK_NAME,
     passed: results.length, results, approvedEvents: eventCount, inputObservationCalls: observationCalls,
     evidence: 'isolated PostgreSQL, synthetic stored passkeys/PRF envelopes and independent-observation callback; real preauthorization/restoration/funding cryptography; no live provider, hardware, broadcasts or funds' }, null, 2));
 } finally {

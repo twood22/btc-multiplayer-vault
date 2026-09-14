@@ -3,7 +3,7 @@ import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { nonWitnessTransactionHex, validatePresignedGraph } from './graph.js';
 import {
-  PRESIGNED_PROTOCOL, type ParticipantId, type Preauthorization, type PresignedExit,
+  type ParticipantId, type Preauthorization, type PresignedExit,
   type PresignedGraph, type RoundId,
 } from './types.js';
 import { assert, exactKeys, hexBytes, participantId, sameCanonical } from './validation.js';
@@ -22,7 +22,7 @@ export function createPreauthorizations(input: {
     const key = input.privateKeys[exit.roundId];
     assert(key, 'missing client-held round key');
     assertRoundPrivateKey(graph, exit, input.participantId, key);
-    return { version: 2 as const, protocol: PRESIGNED_PROTOCOL, graphDigest: graph.digest,
+    return { version: graph.version, protocol: graph.protocol, graphDigest: graph.digest,
       participantId: input.participantId, exitId: exit.id,
       signatureHex: Buffer.from(ecc.signSchnorr(Buffer.from(exit.signatureHash, 'hex'), key)).toString('hex') };
   });
@@ -36,7 +36,7 @@ export function verifyPreauthorizations(input: PresignedGraph, entries: Preautho
   const seen = new Set<string>();
   const canonical = entries.map(entry => {
     exactKeys(entry, ['version', 'protocol', 'graphDigest', 'participantId', 'exitId', 'signatureHex'], 'preauthorization');
-    assert(entry.version === 2 && entry.protocol === PRESIGNED_PROTOCOL && entry.graphDigest === graph.digest, 'preauthorization belongs to another graph or protocol');
+    assert(entry.version === graph.version && entry.protocol === graph.protocol && entry.graphDigest === graph.digest, 'preauthorization belongs to another graph or protocol');
     participantId(entry.participantId);
     const exit = graph.exits.find(candidate => candidate.id === entry.exitId);
     assert(exit, 'preauthorization names unknown exit');

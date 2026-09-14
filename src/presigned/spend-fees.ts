@@ -4,7 +4,7 @@ import * as ecc from 'tiny-secp256k1';
 import { validatePresignedGraph } from './graph.js';
 import { payoutScript } from './roster.js';
 import { authorizePresignedSpendTransaction, validatePresignedSpend, type PresignedSpendProposal } from './spends.js';
-import { PRESIGNED_PROTOCOL, type ParticipantId, type PresignedGraph, type PresignedParticipantKeys } from './types.js';
+import { type ParticipantId, type PresignedGraph, type PresignedParticipantKeys } from './types.js';
 import { assert, commitmentDigest, exactKeys, hexBytes, networkParameters, participantId, safeInteger, supportedWalletScript } from './validation.js';
 import { nativeWalletWitnessFromPsbt, verifyNativeWalletWitness } from './wallet.js';
 import {
@@ -64,6 +64,7 @@ export function buildPresignedSpendFeeChild(request: PresignedSpendFeeRequest): 
   assert(!graph.rounds.some(round => round.outputScriptHex === sponsor.scriptPubKeyHex), 'a vault cannot sponsor spend fees');
   assert(sponsor.txid !== graph.fundingTxid && !graph.exits.some(exit => exit.txid === sponsor.txid) && sponsor.txid !== parent.txid,
     'sponsor must be outside the funding, exit graph and every payout of the parent spend');
+  assert(!graph.recoveries?.some(item => item.txid === sponsor.txid), 'fixed recovery refunds cannot sponsor another parent');
   safeInteger(payoutSats + sponsor.valueSats, 1, FEE_MONEY_MAX, 'spend fee child input total');
   const approval = request.approval;
   exactKeys(approval, ['childFeeSats', 'maxChildFeeSats', 'targetPackageRateMillisatsPerVbyte', 'minRelayRateMillisatsPerVbyte', 'sponsorChangeScriptPubKeyHex', 'approveExactNoChangeFee', 'replacement'], 'spend fee approval');
@@ -103,12 +104,12 @@ export function buildPresignedSpendFeeChild(request: PresignedSpendFeeRequest): 
   preview.setWitness(1, sponsor.scriptPubKeyHex.startsWith('0014') ? [Buffer.alloc(73), Buffer.alloc(33)] : [Buffer.alloc(65)]);
   assert(preview.virtualSize() <= FEE_TRUC_MAX_CHILD_VSIZE, 'spend fee child exceeds the TRUC descendant size limit');
   const approvalDigest = commitmentDigest('btc-multiplayer-vault/presigned-spend-fee-approval/v1', {
-    protocol: PRESIGNED_PROTOCOL, kind: SPONSORED_PAYOUT_FEE_KIND, graphDigest: graph.digest,
+    protocol: graph.protocol, kind: SPONSORED_PAYOUT_FEE_KIND, graphDigest: graph.digest,
     parentSpendProposal: proposal, parentTransactionHex: request.parentTransactionHex,
     payoutParticipantId: request.payoutParticipantId, payoutVout, unsignedTxHex: tx.toHex(),
     sourceObservation: request.sourceObservation, sponsorInput: sponsor, approval,
   });
-  return { version: 2, protocol: PRESIGNED_PROTOCOL, kind: SPONSORED_PAYOUT_FEE_KIND, graphDigest: graph.digest,
+  return { version: graph.version, protocol: graph.protocol, kind: SPONSORED_PAYOUT_FEE_KIND, graphDigest: graph.digest,
     parentSpendProposalId: proposal.proposalId, parentSpendProposalDigest: proposal.digest, parentSpendKind: proposal.kind,
     payoutParticipantId: request.payoutParticipantId, payoutVout, approvalDigest, psbtBase64: psbt.toBase64(), unsignedTxid: tx.getId(),
     parentTxid: parent.txid, parentFeeSats: parent.feeSats, parentVsize: parent.vsize,

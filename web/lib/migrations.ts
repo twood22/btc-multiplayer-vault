@@ -20,6 +20,8 @@ export const EXPECTED_MIGRATION_VERSIONS = [
   '019_presigned_fee_packages',
   '020_presigned_release_audit',
   '021_presigned_watch_revision',
+  '022_presigned_v3_fixed_recovery',
+  '023_presigned_owned_cashout',
 ] as const;
 
 export const EXPECTED_MIGRATION_FILES = EXPECTED_MIGRATION_VERSIONS

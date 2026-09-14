@@ -2,12 +2,12 @@ import { Buffer } from 'buffer';
 import * as bitcoin from 'bitcoinjs-lib';
 import { buildPresignedRounds, payoutScript, validatePresignedRoster } from './roster.js';
 import {
-  PARTICIPANT_IDS, PRESIGNED_PROTOCOL, type ParticipantId, type PresignedExit,
-  type PresignedFundingTemplate, type PresignedGraph, type PresignedRoster, type PresignedRound,
+  PARTICIPANT_IDS, PRESIGNED_PROTOCOL_V3, type ParticipantId, type PresignedExit,
+  type PresignedFundingTemplate, type PresignedGraph, type PresignedRecovery, type PresignedRoster, type PresignedRound,
 } from './types.js';
 import {
   assert, commitmentDigest, exactKeys, hexBytes, identifier, networkParameters,
-  participantId, roundId, safeInteger, sameCanonical, supportedWalletScript,
+  participantId, presignedDomain, roundId, safeInteger, sameCanonical, supportedWalletScript, validatePresignedProtocol,
 } from './validation.js';
 
 const MAX_MONEY = 2_100_000_000_000_000;
@@ -17,7 +17,7 @@ export function buildPresignedGraph(input: {
   funding: PresignedFundingTemplate;
 }): PresignedGraph {
   const roster = validatePresignedRoster(input.roster);
-  const rosterDigest = commitmentDigest('vault/presigned-graph-v2/roster', roster);
+  const rosterDigest = commitmentDigest(presignedDomain(roster.protocol, 'roster'), roster);
   const rounds = buildPresignedRounds(roster);
   const full = rounds.find(round => round.id === roundId(PARTICIPANT_IDS))!;
   const funding = validateFunding(roster, rounds, input.funding);
@@ -59,19 +59,64 @@ export function buildPresignedGraph(input: {
   }
   exits.sort((a, b) => a.id.localeCompare(b.id));
   assert(exits.length === 9 && new Set(exits.map(exit => exit.txid)).size === 9, 'exit graph is not nine distinct transactions');
-  const body = { version: 2 as const, protocol: PRESIGNED_PROTOCOL, roster, rosterDigest, funding,
-    fundingUnsignedTxHex: fundingTx.toHex(), fundingPsbtBase64: fundingPsbt.toBase64(), fundingTxid: fundingTx.getId(), rounds, exits };
-  return { ...body, digest: commitmentDigest('vault/presigned-graph-v2/graph', body) };
+  const recoveries = roster.protocol === PRESIGNED_PROTOCOL_V3 ? rounds.map(round => {
+    const parent = round.participantIds.length === 3 ? null : exits.find(exit => exit.parentExitId === null && !round.participantIds.includes(exit.leaver))!;
+    return buildRecovery({ roster, round, parent, fundingTxid: fundingTx.getId() });
+  }).sort((a, b) => a.id.localeCompare(b.id)) : undefined;
+  const body = { version: roster.version, protocol: roster.protocol, roster, rosterDigest, funding,
+    fundingUnsignedTxHex: fundingTx.toHex(), fundingPsbtBase64: fundingPsbt.toBase64(), fundingTxid: fundingTx.getId(), rounds, exits,
+    ...(recoveries ? { recoveries } : {}) };
+  return { ...body, digest: commitmentDigest(presignedDomain(roster.protocol, 'graph'), body) };
 }
 
 /** Never trust serialized scripts, PSBTs, txids, sighashes, fees or digests. */
 export function validatePresignedGraph(input: PresignedGraph): PresignedGraph {
-  exactKeys(input, ['version', 'protocol', 'roster', 'rosterDigest', 'funding', 'fundingUnsignedTxHex', 'fundingPsbtBase64', 'fundingTxid', 'rounds', 'exits', 'digest'], 'graph');
-  assert(input.version === 2 && input.protocol === PRESIGNED_PROTOCOL, 'wrong graph protocol');
+  validatePresignedProtocol(input?.version, input?.protocol);
+  exactKeys(input, ['version', 'protocol', 'roster', 'rosterDigest', 'funding', 'fundingUnsignedTxHex', 'fundingPsbtBase64', 'fundingTxid', 'rounds', 'exits', 'digest',
+    ...(input.protocol === PRESIGNED_PROTOCOL_V3 ? ['recoveries'] : [])], 'graph');
+  assert(input.roster?.protocol === input.protocol && input.roster?.version === input.version, 'graph/roster protocol mismatch');
   assert(Array.isArray(input.rounds) && input.rounds.length === 4 && Array.isArray(input.exits) && input.exits.length === 9, 'graph has wrong topology');
+  if (input.protocol === PRESIGNED_PROTOCOL_V3) assert(Array.isArray(input.recoveries) && input.recoveries.length === 4, 'graph needs four fixed recoveries');
   const rebuilt = buildPresignedGraph({ roster: input.roster, funding: input.funding });
   sameCanonical(input, rebuilt, 'graph');
   return rebuilt;
+}
+
+function buildRecovery(input: { roster: PresignedRoster; round: PresignedRound; parent: PresignedExit | null; fundingTxid: string }): PresignedRecovery {
+  const { roster, round, parent } = input;
+  const inputTxid = parent?.txid ?? input.fundingTxid;
+  const inputVout = parent ? 1 : 0;
+  const inputValueSats = parent
+    ? Number(bitcoin.Transaction.fromHex(parent.unsignedTxHex).outs[1]!.value)
+    : roster.economics.depositSatsPerParticipant * 3;
+  const recipientIds = [...round.participantIds].sort();
+  const distributable = BigInt(inputValueSats) - BigInt(roster.economics.recoveryFeeSats);
+  assert(distributable > 0n, 'fixed recovery fee exhausts the round');
+  const count = BigInt(recipientIds.length);
+  const base = distributable / count;
+  const remainder = distributable % count;
+  assert(base >= 330n, 'fixed recovery would create dust');
+  const psbt = new bitcoin.Psbt({ network: networkParameters(roster.network) });
+  psbt.setVersion(3);
+  psbt.setLocktime(0);
+  psbt.addInput({ hash: inputTxid, index: inputVout, sequence: roster.economics.recoveryDelayBlocks,
+    witnessUtxo: { value: BigInt(inputValueSats), script: Buffer.from(round.outputScriptHex, 'hex') },
+    tapInternalKey: Buffer.from(round.internalKeyHex, 'hex'), tapMerkleRoot: Buffer.from(round.tapMerkleRoot, 'hex'),
+    tapLeafScript: [{ leafVersion: 0xc0, script: Buffer.from(round.recovery.scriptHex, 'hex'), controlBlock: Buffer.from(round.recovery.controlBlockHex, 'hex') }] });
+  recipientIds.forEach((id, index) => psbt.addOutput({ script: payoutScript(roster, id), value: base + (BigInt(index) < remainder ? 1n : 0n) }));
+  const tx = psbtUnsignedTransaction(psbt);
+  // This immutable parent must be independently assemblable under the app's
+  // one-sat/vbyte baseline; a future absent member cannot approve a fee fix.
+  // Include the actual two-leaf control block and exactly N-1 trigger slots.
+  const sized = tx.clone();
+  sized.setWitness(0, [Buffer.alloc(0), ...recipientIds.slice(1).map(() => Buffer.alloc(64)),
+    ...recipientIds.map(() => Buffer.alloc(64)), Buffer.from(round.recovery.scriptHex, 'hex'), Buffer.from(round.recovery.controlBlockHex, 'hex')]);
+  assert(roster.economics.recoveryFeeSats >= sized.virtualSize(), 'fixed recovery fee is below its complete witness relay floor');
+  const signatureHash = tx.hashForWitnessV1(0, [Buffer.from(round.outputScriptHex, 'hex')], [BigInt(inputValueSats)],
+    bitcoin.Transaction.SIGHASH_DEFAULT, Buffer.from(round.recovery.leafHash, 'hex'));
+  return { id: `recovery:${round.id}`, roundId: round.id, parentExitId: parent?.id ?? null, recipientIds,
+    inputTxid, inputVout, inputValueSats, inputScriptPubKeyHex: round.outputScriptHex, unsignedTxHex: tx.toHex(), txid: tx.getId(),
+    psbtBase64: psbt.toBase64(), feeSats: roster.economics.recoveryFeeSats, signatureHash: Buffer.from(signatureHash).toString('hex') };
 }
 
 export function psbtUnsignedTransaction(psbt: bitcoin.Psbt): bitcoin.Transaction {

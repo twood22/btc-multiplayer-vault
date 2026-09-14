@@ -1,11 +1,11 @@
 import type { PresignedChainTip } from './chain.js';
 import { validateFeeCoinObservation, type FeeCoinObservation } from './fees.js';
-import { PRESIGNED_PROTOCOL, type PresignedGraph } from './types.js';
-import { assert, exactKeys, hexBytes, safeInteger } from './validation.js';
+import { type PresignedGraph, type PresignedProtocol, type PresignedVersion } from './types.js';
+import { assert, exactKeys, hexBytes, safeInteger, validatePresignedProtocol } from './validation.js';
 
 /** Public read-only Core receipt. Its contents are not an SPV or freshness proof. */
 export interface PresignedCoinObservations {
-  version: 2; protocol: typeof PRESIGNED_PROTOCOL; format: 'presigned-private-core-observations-v1';
+  version: PresignedVersion; protocol: PresignedProtocol; format: 'presigned-private-core-observations-v1';
   network: PresignedGraph['roster']['network']; genesisHash: string;
   tip: PresignedChainTip; observedAt: string; coins: FeeCoinObservation[];
   availability: Array<{ txid: string; vout: number; kind: 'available' | 'mempool-spent'; spendingTxid: string | null }>;
@@ -14,7 +14,8 @@ export interface PresignedCoinObservations {
 export function validatePresignedCoinObservations(graph: PresignedGraph, input: unknown): PresignedCoinObservations {
   exactKeys(input, ['version','protocol','format','network','genesisHash','tip','observedAt','coins','availability'], 'private-Core observation file');
   const report = input as PresignedCoinObservations;
-  assert(report.version === 2 && report.protocol === PRESIGNED_PROTOCOL && report.format === 'presigned-private-core-observations-v1' &&
+  validatePresignedProtocol(report.version, report.protocol);
+  assert(report.version === graph.version && report.protocol === graph.protocol && report.format === 'presigned-private-core-observations-v1' &&
     report.network === graph.roster.network && report.genesisHash === graph.roster.genesisHash, 'private-Core observation file changed network or format');
   exactKeys(report.tip, ['network','genesisHash','hash','height'], 'private-Core observation tip');
   assert(report.tip.network === report.network && report.tip.genesisHash === report.genesisHash, 'private-Core tip changed network');

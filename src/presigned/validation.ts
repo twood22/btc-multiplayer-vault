@@ -4,12 +4,29 @@ import * as ecc from 'tiny-secp256k1';
 import { sha256Hex } from '../crypto.js';
 import { MAINNET_GENESIS_HASH, SIGNET_GENESIS_HASH } from '../network.js';
 import type { BitcoinNetworkName } from '../types.js';
-import { PARTICIPANT_IDS, type ParticipantId, type RoundId } from './types.js';
+import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, isPresignedProtocol,
+  type ParticipantId, type PresignedProtocol, type PresignedVersion, type RoundId } from './types.js';
 
 bitcoin.initEccLib(ecc);
 
 export function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`presigned-v2: ${message}`);
+}
+
+export function presignedVersion(protocol: PresignedProtocol): PresignedVersion {
+  assert(isPresignedProtocol(protocol), 'unknown presigned protocol');
+  return protocol === PRESIGNED_PROTOCOL_V3 ? 3 : 2;
+}
+
+export function validatePresignedProtocol(version: unknown, protocol: unknown): asserts protocol is PresignedProtocol {
+  assert(isPresignedProtocol(protocol) && version === presignedVersion(protocol), 'wrong presigned protocol/version pair');
+}
+
+/** Keep V2 domains byte-for-byte stable; never downgrade an unknown protocol. */
+export function presignedDomain(protocol: PresignedProtocol, purpose: string): string {
+  assert(isPresignedProtocol(protocol), 'unknown presigned commitment protocol');
+  assert(typeof purpose === 'string' && /^[a-z][a-z0-9/-]*$/u.test(purpose), 'invalid commitment purpose');
+  return `vault/${protocol}/${purpose}`;
 }
 
 export function exactKeys(value: unknown, expected: string[], label: string): void {

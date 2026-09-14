@@ -13,7 +13,7 @@ if [ "${PRESIGNED_BROWSER_SCRIPT_FROZEN:-false}" != true ]; then
   exec env PRESIGNED_BROWSER_SCRIPT_FROZEN=true PRESIGNED_BROWSER_REPOSITORY="$presigned_browser_repository" bash "$presigned_browser_script"
 fi
 
-# Disposable optimized-bundle V2 acceptance. Never reads operational .env files.
+# Disposable optimized-bundle protocol-bound acceptance. Never reads operational .env files.
 # Coordinate the shared webpack build with the root agent before setting approval.
 # PRESIGNED_BROWSER_REUSE_BUILD=true reruns only test sources against the last explicitly approved build.
 repository_root=${PRESIGNED_BROWSER_REPOSITORY:?missing frozen wrapper repository}
@@ -28,6 +28,9 @@ container_image=${PRESIGNED_BROWSER_CONTAINER_IMAGE_ID:-}
 container_started=false
 network=${PRESIGNED_BROWSER_NETWORK:-signet}
 case "$network" in signet|mainnet) ;; *) echo 'Only explicit Signet/mainnet FORMAT acceptance is supported.' >&2; exit 1 ;; esac
+export PRESIGNED_BROWSER_PROTOCOL=${PRESIGNED_BROWSER_PROTOCOL:-presigned-graph-v3}
+case "$PRESIGNED_BROWSER_PROTOCOL" in presigned-graph-v2|presigned-graph-v3) ;; *) echo 'Unsupported browser protocol.' >&2; exit 1 ;; esac
+export PRESIGNED_BUILD_PROTOCOL="$PRESIGNED_BROWSER_PROTOCOL"
 if [ -n "$container_image" ]; then
   if [[ ! "$container_image" =~ ^sha256:[0-9a-f]{64}$ ]] || ! command -v podman >/dev/null 2>&1; then
     echo 'Exact container acceptance needs local rootless Podman and an immutable config ID.' >&2; exit 1
@@ -93,6 +96,7 @@ unset BITCOIN_RPC_USER BITCOIN_RPC_USERNAME BITCOIN_RPC_PASSWORD BITCOIN_ESPLORA
 unset BITCOIN_RPC_COOKIE_FILE
 unset BTC_VAULT_ENV_FILE BTC_VAULT_EXTRA_ENV_FILE
 unset PRESIGNED_V2_MAINNET_AUTHORIZATION
+unset PRESIGNED_V3_MAINNET_AUTHORIZATION
 unset PRESIGNED_V2_ACCEPTANCE_RECEIPT PRESIGNED_V2_ACCEPTANCE_RECEIPT_DIGEST
 unset PRESIGNED_V2_RELEASE_REPORT PRESIGNED_V2_RELEASE_REPORT_DIGEST DEPLOYED_IMAGE_MANIFEST_DIGEST
 unset DATABASE_RESTORE_RECEIPT DATABASE_RESTORE_RECEIPT_DIGEST
@@ -155,4 +159,4 @@ fi
 # An independent runner deadline prevents stalled fixture cleanup extending it
 # indefinitely; deadline expiry is a failure, never an accepted retry.
 npx playwright test web/browser-tests/presigned-v2.spec.ts --workers=1 --global-timeout=2820000 --output "$work_dir/browser-output" >"$work_dir/browser.log" 2>&1
-printf 'Optimized V2 browser acceptance passed. No public-network broadcasts; regtest identity bridge is test-only.\n'
+printf 'Optimized version-bound browser acceptance passed. No public-network broadcasts; regtest identity bridge is test-only.\n'

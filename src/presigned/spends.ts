@@ -6,8 +6,9 @@ import { applyTweak, keyAggContext, nonceAgg, nonceGen, partialSigAgg, partialSi
   sign as musigSign, type SessionContext } from '../musig2.js';
 import { nonWitnessTransactionHex, psbtUnsignedTransaction, validatePresignedGraph } from './graph.js';
 import { payoutScript } from './roster.js';
+import { verifyRecoveryAuthorizations } from './fixed-recovery.js';
 import type { AuthorizedPresignedTransaction } from './signing.js';
-import { PRESIGNED_PROTOCOL, type ParticipantId, type PresignedGraph, type PresignedRound, type RoundId } from './types.js';
+import { type ParticipantId, type PresignedGraph, type PresignedRound, type RecoveryAuthorization, type RoundId } from './types.js';
 import { assert, commitmentDigest, exactKeys, hexBytes, identifier, networkParameters, participantId, sameCanonical } from './validation.js';
 
 export type PresignedSpendKind = 'cooperative' | 'recovery' | 'final-sweep';
@@ -20,8 +21,8 @@ export interface PresignedSpendSource {
   owner: ParticipantId | null;
 }
 export interface PresignedSpendProposal {
-  version: 2;
-  protocol: typeof PRESIGNED_PROTOCOL;
+  version: PresignedGraph['version'];
+  protocol: PresignedGraph['protocol'];
   graphDigest: string;
   proposalId: string;
   kind: PresignedSpendKind;
@@ -38,8 +39,8 @@ export interface PresignedSpendProposal {
 }
 
 interface SpendContributionBinding {
-  version: 2;
-  protocol: typeof PRESIGNED_PROTOCOL;
+  version: PresignedGraph['version'];
+  protocol: PresignedGraph['protocol'];
   graphDigest: string;
   proposalId: string;
   proposalDigest: string;
@@ -86,6 +87,20 @@ export function buildPresignedSpend(input: {
   const feeSats = input.kind === 'cooperative' ? economics.cooperativeFeeSats
     : input.kind === 'recovery' ? economics.recoveryFeeSats : economics.finalSweepFeeSats;
   const threshold = input.kind === 'recovery' ? round!.recovery.threshold : participants.length;
+  // V3 recovery is selected from the pre-funding graph, never newly proposed.
+  // Even innocuous-looking parent fee/metadata changes need all setup approvals.
+  if (input.kind === 'recovery' && graph.version === 3) {
+    const refund = graph.recoveries!.find(item => item.parentExitId === input.sourceExitId);
+    assert(refund && refund.roundId === source.roundId && refund.inputTxid === source.txid &&
+      refund.inputVout === source.vout && refund.inputValueSats === source.valueSats &&
+      refund.inputScriptPubKeyHex === source.scriptPubKeyHex, 'fixed recovery source differs from the graph');
+    sameCanonical(refund.recipientIds, participants, 'fixed recovery recipients');
+    const body = { version: graph.version, protocol: graph.protocol, graphDigest: graph.digest,
+      proposalId: input.proposalId, kind: input.kind, sourceExitId: input.sourceExitId, source,
+      participantIds: participants, threshold, feeSats: refund.feeSats, unsignedTxHex: refund.unsignedTxHex,
+      txid: refund.txid, psbtBase64: refund.psbtBase64, signatureHash: refund.signatureHash };
+    return { ...body, digest: commitmentDigest(`vault/${graph.protocol}/spend-proposal`, body) };
+  }
   const psbt = new bitcoin.Psbt({ network: networkParameters(graph.roster.network) });
   // All newly proposed payouts support the same restricted-topology CPFP
   // policy. The caller confirms the source before relay; CSV permits V3.
@@ -113,11 +128,11 @@ export function buildPresignedSpend(input: {
   const tx = psbtUnsignedTransaction(psbt);
   const signatureHash = tx.hashForWitnessV1(0, [Buffer.from(source.scriptPubKeyHex, 'hex')], [BigInt(source.valueSats)],
     bitcoin.Transaction.SIGHASH_DEFAULT, input.kind === 'recovery' ? Buffer.from(round!.recovery.leafHash, 'hex') : undefined);
-  const body = { version: 2 as const, protocol: PRESIGNED_PROTOCOL, graphDigest: graph.digest,
+  const body = { version: graph.version, protocol: graph.protocol, graphDigest: graph.digest,
     proposalId: input.proposalId, kind: input.kind, sourceExitId: input.sourceExitId, source,
     participantIds: participants, threshold, feeSats, unsignedTxHex: tx.toHex(), txid: tx.getId(),
     psbtBase64: psbt.toBase64(), signatureHash: Buffer.from(signatureHash).toString('hex') };
-  return { ...body, digest: commitmentDigest('vault/presigned-graph-v2/spend-proposal', body) };
+  return { ...body, digest: commitmentDigest(`vault/${graph.protocol}/spend-proposal`, body) };
 }
 
 export function validatePresignedSpend(graph: PresignedGraph, proposal: PresignedSpendProposal): PresignedSpendProposal {
@@ -246,10 +261,17 @@ export function finalizePresignedCooperative(input: {
 
 export function createPresignedRecoveryContribution(input: {
   graph: PresignedGraph; proposal: PresignedSpendProposal; participantId: ParticipantId;
-  personalPrivateKey: Uint8Array; approvedProposalDigest: string;
+  /** V2 only. V3 must use its separately derived round trigger key. */
+  personalPrivateKey?: Uint8Array;
+  recoveryTriggerPrivateKey?: Uint8Array;
+  approvedProposalDigest: string;
 }): PresignedRecoveryContribution {
   const proposal = approvedProposal(input.graph, input.proposal, input.approvedProposalDigest, 'recovery');
-  const secret = personalKey(input.graph, proposal, input.participantId, input.personalPrivateKey);
+  assert(input.graph.version === 3 ? input.personalPrivateKey === undefined : input.recoveryTriggerPrivateKey === undefined,
+    'recovery must use only the key role belonging to its protocol');
+  const secret = input.graph.version === 3
+    ? recoveryTriggerKey(input.graph, proposal, input.participantId, input.recoveryTriggerPrivateKey!)
+    : personalKey(input.graph, proposal, input.participantId, input.personalPrivateKey!);
   try {
     return { ...contributionBinding(proposal, input.participantId), signatureHex:
       Buffer.from(ecc.signSchnorr(Buffer.from(proposal.signatureHash, 'hex'), secret)).toString('hex') };
@@ -265,6 +287,8 @@ export function verifyPresignedRecoveryContribution(input: {
 
 export function finalizePresignedRecovery(input: {
   graph: PresignedGraph; proposal: PresignedSpendProposal; contributions: PresignedRecoveryContribution[];
+  /** Complete nine-entry setup set from the independently verified public kit. */
+  recoveryAuthorizations?: RecoveryAuthorization[];
 }): AuthorizedPresignedTransaction {
   const proposal = validatePresignedSpend(input.graph, input.proposal);
   assert(proposal.kind === 'recovery', 'not a recovery proposal');
@@ -273,12 +297,20 @@ export function finalizePresignedRecovery(input: {
     'recovery requires exactly the committed N-1 threshold');
   const verified = input.contributions.map(item => verifyRecovery(input.graph, proposal, item));
   assert(new Set(verified.map(item => item.participantId)).size === verified.length, 'duplicate recovery signer');
-  const signatures = round.recovery.participantIds.map(id => {
+  const signatures: Buffer[] = round.recovery.participantIds.map(id => {
     const contribution = verified.find(item => item.participantId === id);
     return contribution ? Buffer.from(contribution.signatureHex, 'hex') : Buffer.alloc(0);
   });
   const tx = bitcoin.Transaction.fromHex(proposal.unsignedTxHex);
-  tx.setWitness(0, signatures.reverse().concat([
+  let authorizationSignatures: Buffer[] = [];
+  if (input.graph.version === 3) {
+    assert(input.recoveryAuthorizations, 'V3 recovery requires every pre-funding recovery authorization');
+    const authorizations = verifyRecoveryAuthorizations(input.graph, input.recoveryAuthorizations, true);
+    const refund = input.graph.recoveries!.find(item => item.roundId === round.id)!;
+    authorizationSignatures = round.recovery.authorizationParticipantIds!.map(id =>
+      Buffer.from(authorizations.find(item => item.recoveryId === refund.id && item.participantId === id)!.signatureHex, 'hex')).reverse();
+  } else assert(input.recoveryAuthorizations === undefined, 'legacy recovery rejects V3 setup authorizations');
+  tx.setWitness(0, signatures.reverse().concat(authorizationSignatures, [
     Buffer.from(round.recovery.scriptHex, 'hex'), Buffer.from(round.recovery.controlBlockHex, 'hex'),
   ]));
   return authorizePresignedSpendTransaction({ graph: input.graph, proposal, transactionHex: tx.toHex() });
@@ -323,10 +355,16 @@ export function authorizePresignedSpendTransaction(input: {
     const round = roundFor(input.graph, proposal);
     assert(tx.version === 3 && tx.ins[0]!.sequence === input.graph.roster.economics.recoveryDelayBlocks,
       'recovery must enforce the committed block-based relative lock');
-    assert(witness.length === round.recovery.publicKeys.length + 2 &&
+    const authorizationKeys = input.graph.version === 3 ? round.recovery.authorizationPublicKeys! : [];
+    assert(witness.length === round.recovery.publicKeys.length + authorizationKeys.length + 2 &&
       Buffer.from(witness.at(-2)!).toString('hex') === round.recovery.scriptHex &&
       Buffer.from(witness.at(-1)!).toString('hex') === round.recovery.controlBlockHex,
     'recovery selected the wrong CSV/VERIFY leaf or control block');
+    authorizationKeys.forEach((key, index) => {
+      const signature = witness[round.recovery.publicKeys.length + authorizationKeys.length - 1 - index]!;
+      assert(signature.length === 64 && ecc.verifySchnorr(message, Buffer.from(key, 'hex'), signature),
+        'invalid or missing fixed recovery authorization witness');
+    });
     let valid = 0;
     round.recovery.publicKeys.forEach((key, index) => {
       const signature = witness[round.recovery.publicKeys.length - 1 - index]!;
@@ -397,7 +435,7 @@ function personalKey(graph: PresignedGraph, proposal: PresignedSpendProposal, id
 }
 
 function contributionBinding(proposal: PresignedSpendProposal, id: ParticipantId): SpendContributionBinding {
-  return { version: 2, protocol: PRESIGNED_PROTOCOL, graphDigest: proposal.graphDigest,
+  return { version: proposal.version, protocol: proposal.protocol, graphDigest: proposal.graphDigest,
     proposalId: proposal.proposalId, proposalDigest: proposal.digest, participantId: id };
 }
 
@@ -453,7 +491,7 @@ function nonceSession(graph: PresignedGraph, proposal: PresignedSpendProposal, n
   const session: SessionContext = { aggnonce: nonceAgg(pubnonceBytes), pubkeys: round.personalPublicKeys,
     tweaks: [cooperativeContext(round).tweak], isXonly: [true], message: Buffer.from(proposal.signatureHash, 'hex') };
   return { session, publicNonces: ordered, pubnonceBytes,
-    nonceSetDigest: commitmentDigest('vault/presigned-graph-v2/cooperative-nonce-set', ordered) };
+    nonceSetDigest: commitmentDigest(`vault/${graph.protocol}/cooperative-nonce-set`, ordered) };
 }
 
 function verifyPartial(graph: PresignedGraph, proposal: PresignedSpendProposal,
@@ -470,8 +508,25 @@ function verifyRecovery(graph: PresignedGraph, proposal: PresignedSpendProposal,
   contribution: PresignedRecoveryContribution): PresignedRecoveryContribution {
   assert(proposal.kind === 'recovery', 'not a recovery proposal');
   checkContribution(proposal, contribution, ['signatureHex']);
-  const key = Buffer.from(personalPublicKey(graph, contribution.participantId), 'hex').subarray(1);
+  const round = roundFor(graph, proposal);
+  const key = graph.version === 3
+    ? Buffer.from(round.recovery.publicKeys[round.recovery.participantIds.indexOf(contribution.participantId)]!, 'hex')
+    : Buffer.from(personalPublicKey(graph, contribution.participantId), 'hex').subarray(1);
   assert(ecc.verifySchnorr(Buffer.from(proposal.signatureHash, 'hex'), key,
     hexBytes(contribution.signatureHex, 64, 'recovery signature')), 'invalid recovery signature');
   return { ...contribution };
+}
+
+function recoveryTriggerKey(graph: PresignedGraph, proposal: PresignedSpendProposal, id: ParticipantId, value: Uint8Array): Buffer {
+  participantId(id);
+  const round = roundFor(graph, proposal);
+  const index = round.recovery.participantIds.indexOf(id);
+  assert(index >= 0, 'recovery trigger is not a current round participant');
+  const secret = privateKeyCopy(value);
+  const actual = Buffer.from(ecc.pointFromScalar(secret, true)!).subarray(1).toString('hex');
+  if (actual !== round.recovery.publicKeys[index]) {
+    secret.fill(0);
+    throw new Error('recovery trigger key differs from the committed round and role');
+  }
+  return secret;
 }

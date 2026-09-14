@@ -12,6 +12,7 @@ import { IMAGE_EXECUTION_STAGES, imageExecutionCommand } from './lib/presigned-i
 import { presignedSourceDigest } from './presigned-build-identity.mjs';
 import { commitmentDigest } from '../src/presigned/validation.js';
 import { PRESIGNED_RELEASE_CHECKS } from '../src/presigned/release.js';
+import { PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3 } from '../src/presigned/types.js';
 import { runEvidenceArchiveBoundaryTests } from './presigned-archive-acceptance.mjs';
 
 process.umask(0o077);
@@ -23,8 +24,27 @@ assert.equal(new Set(plan.map(item => item.id)).size, plan.length);
 assert.deepEqual(plan.filter(item => item.args.at(-1) === 'src/presigned/acceptance.ts').map(item => item.network), ['signet', 'mainnet']);
 assert(acceptancePlan('local').some(item => item.id === 'offline-full'));
 assert(acceptancePlan('local').some(item => item.id === 'optimized-browser'));
+for (const id of ['presigned-core-v3-recovery', 'presigned-core-cashout', 'presigned-live-lifecycle-v3-regtest', 'database-v3-all']) {
+  assert(acceptancePlan('local').some(item => item.id === id));
+  assert(!acceptancePlan('local', PRESIGNED_PROTOCOL).some(item => item.id === id));
+}
 denied(() => acceptancePlan('optional' as 'pure'));
 checks.push('fixed unique mandatory plan and both explicit graph-format runs');
+const deployment = plan.find(item => item.id === 'deployment-policy-boundaries')!;
+assert(deployment && !acceptancePlan('pure',PRESIGNED_PROTOCOL).some(item=>item.id===deployment.id));
+const deploymentPolicy = {passed:true,syntheticParserFixture:true,suite:'private-deployment-policy',protocol:PRESIGNED_PROTOCOL_V3,
+  negativeControls:112,hardenedCommandRoles:3,realPrivateJournalChecks:true,exactImageEvidenceRefusals:40,runtimeHardeningRefusals:40,operationalDatabaseAccess:false,containerExecution:false,
+  actualDeploymentRollbackVerified:false,publicNetworkBroadcasts:0,publicListener:false,fundingAuthorized:false};
+validateCommandResults(deployment,JSON.stringify(deploymentPolicy));
+for (const mutation of [{negativeControls:111},{hardenedCommandRoles:2},{realPrivateJournalChecks:false},{operationalDatabaseAccess:true},
+  {containerExecution:true},{actualDeploymentRollbackVerified:true},{publicNetworkBroadcasts:1},{publicListener:true},{fundingAuthorized:true},{exactImageEvidenceRefusals:39},{runtimeHardeningRefusals:39}])
+  denied(()=>validateCommandResults(deployment,JSON.stringify({...deploymentPolicy,...mutation})));
+const restorationBatch=plan.find(item=>item.args.at(-1)==='src/presigned/restoration-batch-acceptance.ts')!;
+const restorationBatchSummary={passed:true,syntheticParserFixture:true,suite:'restoration-batch-boundaries',protocols:2,networkFormats:2,
+  verifiedReceipts:36,independentSingleChecks:12,refusals:84,globalCache:false,networkOrDatabaseContacted:false};
+validateCommandResults(restorationBatch,JSON.stringify(restorationBatchSummary));
+for(const mutation of [{protocols:1},{networkFormats:1},{verifiedReceipts:35},{independentSingleChecks:11},{refusals:83},{globalCache:true},{networkOrDatabaseContacted:true}])
+  denied(()=>validateCommandResults(restorationBatch,JSON.stringify({...restorationBatchSummary,...mutation})));
 
 const previous = process.env.BITCOIN_RPC_PASSWORD;
 try {
@@ -33,8 +53,12 @@ try {
   assert.equal(environment.BITCOIN_RPC_PASSWORD, undefined);
   assert.equal(environment.NODE_OPTIONS, undefined); assert.equal(environment.BTC_VAULT_ENV_FILE, undefined);
   assert.equal(environment.PRESIGNED_V2_MAINNET_AUTHORIZATION, undefined);
+  assert.equal(environment.PRESIGNED_V3_MAINNET_AUTHORIZATION, undefined);
   assert.equal(environment.PRESIGNED_OFFLINE_FEES_ONLY, undefined);
   assert.equal(environment.VAULT_NETWORK, 'mainnet');
+  assert.equal(environment.PRESIGNED_DB_PROTOCOL, PRESIGNED_PROTOCOL_V3);
+  assert.equal(environment.PRESIGNED_OFFLINE_TEST_PROTOCOL, PRESIGNED_PROTOCOL_V3);
+  assert.equal(acceptanceEnvironment('signet', PRESIGNED_PROTOCOL).PRESIGNED_BROWSER_PROTOCOL, PRESIGNED_PROTOCOL);
 } finally { if (previous === undefined) delete process.env.BITCOIN_RPC_PASSWORD; else process.env.BITCOIN_RPC_PASSWORD = previous; }
 checks.push('clean child environment omits operational credentials, authorization and test narrowing');
 assert.deepEqual(acceptanceJsonRecords('progress\n{"stage":"start"}\n{\n "passed":true,\n "text":"} { \\\""\n}\nend\n'),
@@ -56,6 +80,60 @@ for (const failed of [{ passed: false }, { status: 'failed' }]) {
   denied(() => validateCommandResults(core, `${coreSummary}\n${JSON.stringify(failed)}\n`));
 }
 checks.push('whole JSON parsing, explicit network coverage and rejection of partial/failed evidence');
+const v3Core = acceptancePlan('local').find(item => item.id === 'presigned-core-v3-recovery')!;
+const v3CoreSummary = { passed: true, syntheticParserFixture: true, protocol: PRESIGNED_PROTOCOL_V3,
+  actualBitcoinChain: 'isolated-regtest', publicNetworkBroadcasts: 0, coreVersion: 310100,
+  confirmedRecoveryQuorums: 9, confirmedNormalOrderings: 6, freshCollusionRefusals: 108, witnessRefusals: 66,
+  annexConsensusRefusals: 9, exactBoundaryChecks: 9, reorgBoundaryChecks: 9,
+  recoveryVsizeByMemberCount: { '2': 240, '3': 332 }, mainnetFundingAuthorized: false };
+validateCommandResults(v3Core, JSON.stringify(v3CoreSummary));
+for (const mutation of [{ protocol: PRESIGNED_PROTOCOL }, { confirmedRecoveryQuorums: 8 }, { confirmedNormalOrderings: 5 },
+  { freshCollusionRefusals: 107 }, { witnessRefusals: 65 }, { annexConsensusRefusals: 8 }, { exactBoundaryChecks: 8 },
+  { reorgBoundaryChecks: 8 }, { recoveryVsizeByMemberCount: { '2': 232, '3': 324 } }, { mainnetFundingAuthorized: true }])
+  denied(() => validateCommandResults(v3Core, JSON.stringify({ ...v3CoreSummary, ...mutation })));
+checks.push('V3 requires complete actual two-leaf quorum, fresh-colluder, witness, annex and reorg evidence; V2 or exploratory sizes cannot substitute');
+const cashoutPure = plan.find(item => item.args.at(-1) === 'src/presigned/cashout-acceptance.ts')!;
+assert.deepEqual(plan.filter(item => item.args.at(-1) === 'src/presigned/cashout-acceptance.ts').map(item => item.network), ['signet','mainnet']);
+const cashoutPureSummary = { passed: true, syntheticParserFixture: true, suite: 'owned-payout-cashout',
+  protocols: [PRESIGNED_PROTOCOL,PRESIGNED_PROTOCOL_V3], networkFormats: ['signet','mainnet'],
+  signedCashouts: 48, negativeControls: 224, destinationTypes: 5, callerPayoutKeyZeroized: true,
+  actualChainVerified: false, publicNetworkBroadcasts: 0, mainnetAuthorized: false,
+  payoutFamilies: ['solo-first','solo-second','final-owned','cooperative','recovery','final-sweep','same-key-external-or-fee-child'] };
+validateCommandResults(cashoutPure, JSON.stringify(cashoutPureSummary));
+for (const mutation of [{ signedCashouts: 47 }, { negativeControls: 223 }, { destinationTypes: 4 }, { callerPayoutKeyZeroized: false },
+  { actualChainVerified: true }, { protocols: [PRESIGNED_PROTOCOL_V3] }, { networkFormats: ['signet'] }, { payoutFamilies: ['solo-first'] }])
+  denied(() => validateCommandResults(cashoutPure, JSON.stringify({ ...cashoutPureSummary, ...mutation })));
+const cashoutCore = acceptancePlan('local').find(item => item.id === 'presigned-core-cashout')!;
+const cashoutCoreSummary = { passed: true, syntheticParserFixture: true, suite: 'owned-payout-cashout-core',
+  protocols: [PRESIGNED_PROTOCOL,PRESIGNED_PROTOCOL_V3], actualChain: 'isolated-regtest', coreVersion: 310100,
+  confirmedCashouts: 24, confirmedParents: 18, rejectedMutations: 192, destinationTypes: 5,
+  actualCoinAnchorsVerified: true, publicNetworkBroadcasts: 0, liveSignetVerified: false, mainnetAuthorized: false,
+  payoutFamilies: ['solo-first','solo-second','final-sweep','final-owned','cooperative','recovery','cpfp-preserved-payout','independently-owned-same-key'] };
+validateCommandResults(cashoutCore, JSON.stringify(cashoutCoreSummary));
+for (const mutation of [{ confirmedCashouts: 23 }, { confirmedParents: 17 }, { rejectedMutations: 191 }, { destinationTypes: 4 },
+  { actualCoinAnchorsVerified: false }, { liveSignetVerified: true }, { mainnetAuthorized: true }, { protocols: [PRESIGNED_PROTOCOL_V3] },
+  { payoutFamilies: ['solo-first'] }, { actualChain: 'signet' }])
+  denied(() => validateCommandResults(cashoutCore, JSON.stringify({ ...cashoutCoreSummary, ...mutation })));
+const offlineCashoutSummary = { passed: true, syntheticParserFixture: true, completeLifecycleEvidence: true, completeFeeEvidence: true,
+  fullSoloOrderings: 6, cooperativeRounds: 4, recoverySignerSubsets: 9, actualBrowserSignedTransactionsConfirmedByCore: 31,
+  feeRescueWalletAndParentCases: 10, replacementFeeChildrenConfirmedByCore: 10, networkRequests: 0, persistentSecretStorage: false,
+  utilitySha256: createHash('sha256').update(readFileSync('public/offline/presigned-recovery.html')).digest('hex'),
+  protocol: PRESIGNED_PROTOCOL_V3, exactArtifactInputsVerified: true, mainnetBoundaryProtocols: [PRESIGNED_PROTOCOL,PRESIGNED_PROTOCOL_V3],
+  ownedPayoutCashoutsConfirmed: 12, cashoutOwnerAndReviewMutationRefusals: 37,
+  cashoutPayoutFamilies: ['cooperative','cpfp-preserved-payout','final-sweep','recovery','solo'] };
+validateCommandResults(offline, JSON.stringify(offlineCashoutSummary));
+for (const mutation of [{ ownedPayoutCashoutsConfirmed: undefined }, { ownedPayoutCashoutsConfirmed: 5 },
+  { cashoutOwnerAndReviewMutationRefusals: undefined }, { cashoutOwnerAndReviewMutationRefusals: 36 },
+  { cashoutPayoutFamilies: ['solo'] }, { cashoutPayoutFamilies: undefined }, { completeLifecycleEvidence: false }, { completeFeeEvidence: false }])
+  denied(() => validateCommandResults(offline, JSON.stringify({ ...offlineCashoutSummary, ...mutation })));
+checks.push('owned-payout cash-out requires full pure/Core coverage and actual full saved-file browser proof; focused/missing cash-outs cannot satisfy release');
+const offlineMerge = plan.find(item => item.args.at(-1) === 'src/presigned/v3-offline-merge-acceptance.ts')!;
+const mergeSummary = { passed: true, syntheticParserFixture: true, protocols: [PRESIGNED_PROTOCOL,PRESIGNED_PROTOCOL_V3],
+  hostilePeerOrKitRefusals: 26, completeCooperativeMerges: 2, browserExecution: false, publicNetworkBroadcasts: 0 };
+validateCommandResults(offlineMerge, JSON.stringify(mergeSummary));
+for (const mutation of [{ hostilePeerOrKitRefusals: 25 }, { completeCooperativeMerges: 1 }, { browserExecution: true },
+  { publicNetworkBroadcasts: 1 }, { protocols: [PRESIGNED_PROTOCOL_V3] }])
+  denied(() => validateCommandResults(offlineMerge, JSON.stringify({ ...mergeSummary, ...mutation })));
 const recycling = plan.find(item => item.args.at(-1) === 'scripts/presigned-live-recycling-verification.mts')!;
 const pureCapital = { passed: true, syntheticParserFixture: true, configuredNetwork: 'signet', scope: 'pure-offline-capital-recycling',
   signedTransactions: 10, normalizedWalletPsbts: 8, rejectedMutations: 96, completedChecks: 13,
@@ -75,6 +153,27 @@ const durableCustodyAudit = { primaryLossRestorations: 2, initializationInterrup
 const lowCapitalSummary = { passed: true, syntheticParserFixture: true, publicNetworkBroadcasts: 0, coreVersion: 310100,
   cases: 19, feeFamilies: 5, lostRepliesWithoutResending: 6, capitalAudit, csvBoundaryAudit, durableCustodyAudit };
 validateCommandResults(lowCapital, JSON.stringify(lowCapitalSummary));
+const v3LowCapital = acceptancePlan('local').find(item => item.id === 'presigned-live-lifecycle-v3-regtest')!;
+const v3LowCapitalSummary = { ...lowCapitalSummary, protocol: PRESIGNED_PROTOCOL_V3, setupSignaturesPerCase: 21, fixedRecoveryTemplatesPerCase: 4,
+  lostRepliesWithoutResending:7, capitalAudit:{ ...capitalAudit, fixedConfirmedFeesSats:47300, returnedSats:38200, recycledParticipantPayouts:56 },
+  durableCustodyAudit:{ ...durableCustodyAudit, durableSendChecks:85, uniqueSubmittedTransactions:90 },
+  ownedCashoutProfile:'missing-carol-refund-to-native-wallet-v1', ownedPayoutCashoutsConfirmed:1,
+  ownedCashoutAudit:{ confirmed:1, feeSats:300, omittedParticipant:'carol', destinationAlreadyBackedUp:true, ownerOnlySignatureVerified:true,
+    lostReplyReconciledWithoutResend:true, cashoutReorganizationRejected:true, refundAncestorReorganizationRejected:true },
+  publicCompletedCaseCacheAudit:{fileMutationsRejected:25,missingFileRejected:true,permissionsRejected:true,returnedAliasMutationIsolated:true,
+    sourceAndProtocolChangesRejected:true,coldMilliseconds:1,warmMilliseconds:1} };
+validateCommandResults(v3LowCapital, JSON.stringify(v3LowCapitalSummary));
+for (const mutation of [{ protocol: PRESIGNED_PROTOCOL }, { setupSignaturesPerCase: 12 }, { fixedRecoveryTemplatesPerCase: 0 }])
+  denied(() => validateCommandResults(v3LowCapital, JSON.stringify({ ...v3LowCapitalSummary, ...mutation })));
+for (const mutation of [{ ownedCashoutProfile:undefined }, { ownedPayoutCashoutsConfirmed:0 }, { ownedCashoutAudit:undefined },
+  { lostRepliesWithoutResending:6 }, { capitalAudit }, { durableCustodyAudit }])
+  denied(() => validateCommandResults(v3LowCapital, JSON.stringify({ ...v3LowCapitalSummary, ...mutation })));
+for (const field of Object.keys(v3LowCapitalSummary.ownedCashoutAudit))
+  denied(() => validateCommandResults(v3LowCapital, JSON.stringify({ ...v3LowCapitalSummary,
+    ownedCashoutAudit:{ ...v3LowCapitalSummary.ownedCashoutAudit, [field]:undefined } })));
+for(const field of Object.keys(v3LowCapitalSummary.publicCompletedCaseCacheAudit))
+  denied(()=>validateCommandResults(v3LowCapital,JSON.stringify({...v3LowCapitalSummary,
+    publicCompletedCaseCacheAudit:{...v3LowCapitalSummary.publicCompletedCaseCacheAudit,[field]:undefined}})));
 for (const mutation of [{ cases: 18 }, { feeFamilies: 4 }, { lostRepliesWithoutResending: 5 }])
   denied(() => validateCommandResults(lowCapital, JSON.stringify({ ...lowCapitalSummary, ...mutation })));
 for (const mutation of [{ initialCapitalSats: 88_999 }, { fixedConfirmedFeesSats: 46_000 }, { allocationFeesSats: 6761 },
@@ -135,21 +234,35 @@ checks.push('real child exit and transcript recording; changed source rejected b
 const sourceDigest = presignedSourceDigest();
 const sha256 = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
 const browser = acceptancePlan('local').find(item => item.id === 'optimized-browser')!;
-const syntheticBrowser = { passed: true, protocol: 'presigned-graph-v2', bundle: 'optimized-webpack-standalone',
+const syntheticBrowser = { passed: true, protocol: PRESIGNED_PROTOCOL_V3, bundle: 'optimized-webpack-standalone',
   sourceDigest, appNetwork: 'signet', actualBitcoinChain: 'isolated-regtest', networkIdentityBridge: true,
   virtualPrfPasskeys: 6, coreVersion: 310100, realSignetAcceptance: false, physicalPasskeyEvidence: false,
   publicNetworkBroadcasts: 0, mainnetFundingAuthorized: false, completeGameExecution: true, reauthentications: 1,
+  setupSignatures: 21, fixedRecoveryTemplates: 4, fixedMissingParticipantRefundVerified: true,
+  cashoutDestinationAndFeeReviewed: true, cashoutUnsignedPreviewVerified: true,
+  ownedPayoutCashoutsConfirmed: 1, cashoutOwnerAndReviewMutationRefusals: 2,
   audit: { sensitiveRequestDetected: false, forbidden: [], unexpected: [] } };
 validateBrowserAcceptance(syntheticBrowser, sourceDigest, 'signet');
 for (const alteration of [
   { appNetwork: 'mainnet' }, { sourceDigest: '00'.repeat(32) }, { completeGameExecution: false }, { virtualPrfPasskeys: 5 },
   { reauthentications: 0 }, { mainnetFundingAuthorized: true }, { realSignetAcceptance: true }, { physicalPasskeyEvidence: true },
   { publicNetworkBroadcasts: 1 }, { coreVersion: 300000 }, { audit: { sensitiveRequestDetected: true, forbidden: [], unexpected: [] } },
+  { protocol: PRESIGNED_PROTOCOL }, { setupSignatures: 12 }, { fixedRecoveryTemplates: 3 }, { fixedMissingParticipantRefundVerified: false },
+  { cashoutDestinationAndFeeReviewed: false }, { cashoutUnsignedPreviewVerified: false },
+  { cashoutDestinationAndFeeReviewed: undefined }, { cashoutUnsignedPreviewVerified: undefined },
+  { ownedPayoutCashoutsConfirmed: 0 }, { ownedPayoutCashoutsConfirmed: undefined },
+  { cashoutOwnerAndReviewMutationRefusals: 1 }, { cashoutOwnerAndReviewMutationRefusals: undefined },
 ]) denied(() => validateBrowserAcceptance({ ...syntheticBrowser, ...alteration }, sourceDigest, 'signet'));
+const { setupSignatures: ignoredSetup, fixedRecoveryTemplates: ignoredRefunds, fixedMissingParticipantRefundVerified: ignoredRecovery, ...legacyBrowser } = syntheticBrowser;
+void ignoredSetup; void ignoredRefunds; void ignoredRecovery;
+validateBrowserAcceptance({ ...legacyBrowser, protocol: PRESIGNED_PROTOCOL }, sourceDigest, 'signet', PRESIGNED_PROTOCOL);
+denied(() => validateBrowserAcceptance(syntheticBrowser, sourceDigest, 'signet', PRESIGNED_PROTOCOL));
 const syntheticMainnet = { ...syntheticBrowser, appNetwork: 'mainnet', completeGameExecution: false, mainnetFundingGateVerified: true };
 validateBrowserAcceptance(syntheticMainnet, sourceDigest, 'mainnet');
 denied(() => validateBrowserAcceptance({ ...syntheticMainnet, mainnetFundingGateVerified: false }, sourceDigest, 'mainnet'));
 denied(() => validateBrowserAcceptance({ ...syntheticMainnet, completeGameExecution: true }, sourceDigest, 'mainnet'));
+denied(() => validateBrowserAcceptance({ ...syntheticMainnet, cashoutDestinationAndFeeReviewed: undefined }, sourceDigest, 'mainnet'));
+denied(() => validateBrowserAcceptance({ ...syntheticMainnet, cashoutUnsignedPreviewVerified: undefined }, sourceDigest, 'mainnet'));
 const browserPath = `${browser.id}-browser.json`;
 const browserBytes = JSON.stringify(syntheticBrowser);
 writeFileSync(`${directory}/${browserPath}`, browserBytes, { mode: 0o600, flag: 'wx' });
@@ -179,12 +292,50 @@ writeFileSync(`${directory}/${restorePath}`, noRestoredCustody, { mode: 0o600 })
 dbArtifacts.at(-1)!.sha256 = sha256(noRestoredCustody);
 denied(() => validateAcceptanceArtifacts(database, dbArtifacts, directory, sourceDigest));
 checks.push('all five distinct retained database artifacts mandatory; a rehashed missing custody restoration remains rejected');
+const v3Database = acceptancePlan('local').find(item => item.id === 'database-v3-all')!;
+const cashoutDbSummary = { actualDatabase: 'isolated-PostgreSQL', actualChain: 'isolated-regtest', networkIdentityBridge: true,
+  realDefaultSignetEvidence: false, realWebAuthnTransport: false, publicNetworkBroadcasts: 0,
+  missingParticipantRefundCashedOut: true, serverIndependentKeyRestoration: true, ownerCashoutSends: 1,
+  checks: ['synthetic-owner-boundary','synthetic-durable-send','synthetic-confirmed-conflict','synthetic-reorg'] };
+const queueDbSummary = { actualDatabase: 'disposable-loopback-PostgreSQL', disabledV2RowsPerQueue: 100,
+  enabledV3RowsRetriedPerQueue: 1, rpcCalls: 0, publicNetworkBroadcasts: 0, realMainnetAuthorizationGranted: false };
+const v3DbArtifacts = ['ceremony', 'runtime', 'chain-broadcast', 'fee', 'restore', 'cashout', 'protocol-queue'].map(name => {
+  const relativePath = `${v3Database.id}-${name}.log`;
+  const bytes = JSON.stringify({ passed: true, syntheticParserFixture: true, protocol: PRESIGNED_PROTOCOL_V3,
+    ...(name === 'restore' ? { restoredEncryptedKeys: 6, negativeBoundaries: 22 } : {}),
+    ...(name === 'cashout' ? cashoutDbSummary : {}), ...(name === 'protocol-queue' ? queueDbSummary : {}) });
+  writeFileSync(`${directory}/${relativePath}`, bytes, { mode: 0o600, flag: 'wx' });
+  return { relativePath, sha256: sha256(bytes) };
+});
+validateAcceptanceArtifacts(v3Database, v3DbArtifacts, directory, sourceDigest);
+denied(() => validateAcceptanceArtifacts(v3Database, v3DbArtifacts.slice(0, 5), directory, sourceDigest));
+for (const [name, summary, mutations] of [
+  ['cashout', cashoutDbSummary, [{ missingParticipantRefundCashedOut: undefined }, { serverIndependentKeyRestoration: false },
+    { ownerCashoutSends: 2 }, { checks: [] }]],
+  ['protocol-queue', queueDbSummary, [{ disabledV2RowsPerQueue: 99 }, { enabledV3RowsRetriedPerQueue: 0 },
+    { rpcCalls: 1 }, { realMainnetAuthorizationGranted: true }]],
+] as const) {
+  const artifact = v3DbArtifacts.find(item => item.relativePath === `${v3Database.id}-${name}.log`)!;
+  for (const mutation of mutations) {
+    const changed = JSON.stringify({ passed: true, syntheticParserFixture: true, protocol: PRESIGNED_PROTOCOL_V3, ...summary, ...mutation });
+    writeFileSync(`${directory}/${artifact.relativePath}`, changed, { mode: 0o600 }); artifact.sha256 = sha256(changed);
+    denied(() => validateAcceptanceArtifacts(v3Database, v3DbArtifacts, directory, sourceDigest));
+  }
+  const restored = JSON.stringify({ passed: true, syntheticParserFixture: true, protocol: PRESIGNED_PROTOCOL_V3, ...summary });
+  writeFileSync(`${directory}/${artifact.relativePath}`, restored, { mode: 0o600 }); artifact.sha256 = sha256(restored);
+}
+const legacyDbSubstitution = JSON.stringify({ passed: true, syntheticParserFixture: true, protocol: PRESIGNED_PROTOCOL });
+writeFileSync(`${directory}/${v3DbArtifacts[0]!.relativePath}`, legacyDbSubstitution, { mode: 0o600 });
+v3DbArtifacts[0]!.sha256 = sha256(legacyDbSubstitution);
+denied(() => validateAcceptanceArtifacts(v3Database, v3DbArtifacts, directory, sourceDigest));
+checks.push('V3 low-capital and database evidence require actual V3 setup and all seven matching-protocol suite outputs including durable cash-out and queue isolation');
 
 for (const network of ['signet', 'mainnet'] as const) {
   const fixed = IMAGE_EXECUTION_STAGES.map(stage => imageExecutionCommand(stage, network, '/tmp/btc-presigned-image.synthetic', `sha256:${'12'.repeat(32)}`));
   assert.equal(fixed.length, 7);
   assert(fixed[4]!.args.includes('--read-only') && fixed[4]!.args.includes('none'));
   assert.deepEqual(fixed[6]!.environment, { PRESIGNED_BROWSER_NETWORK: network,
+    PRESIGNED_BROWSER_PROTOCOL: PRESIGNED_PROTOCOL_V3,
     PRESIGNED_BROWSER_CONTAINER_IMAGE_ID: `sha256:${'12'.repeat(32)}`,
     BROWSER_TEST_BUILD_IDENTITY: '/tmp/btc-presigned-image.synthetic/build-identity.json' });
 }
@@ -196,12 +347,12 @@ checks.push('image stages reconstruct exact fixed commands, immutable IDs, read-
 // An intentionally incomplete negative fixture, not a passing run or release.
 const partial = mkdtempSync('/tmp/btc-presigned-incomplete-run.');
 const now = new Date().toISOString();
-const partialBody = { version: 2, protocol: 'presigned-graph-v2', kind: 'presigned-v2-local-executable-run', mode: 'local',
+const partialBody = { version: 3, protocol: PRESIGNED_PROTOCOL_V3, kind: 'presigned-v3-local-executable-run', mode: 'local',
   sourceDigest, createdAt: now, completedAt: now, reviewedNodeVersion: readFileSync('.node-version', 'utf8').trim(),
   commands: [], offlineUtilityDigest: null, physicalPasskeysVerified: false, realSignetVerified: false,
   exactImageVerified: false, fundingAuthorized: false };
 writeAcceptanceJson(`${partial}/run.json`, { ...partialBody,
-  runDigest: commitmentDigest('vault/presigned-graph-v2/local-executable-run', partialBody) });
+  runDigest: commitmentDigest('vault/presigned-graph-v3/local-executable-run', partialBody) });
 denied(() => validateLocalAcceptanceRun(partial, sourceDigest, 'local'));
 const output = `${partial}/must-not-exist.json`;
 const assemblyArgs = ['--local-run', partial, '--signet-image', `${partial}/missing-signet`, '--mainnet-image', `${partial}/missing-mainnet`,
@@ -273,7 +424,8 @@ const runSyntheticRelease = (expected: string) => {
   assert.equal(result.status, 1);
   const records = acceptanceJsonRecords(result.stdout);
   const refusal = records.find(item => item.passed === false);
-  assert(refusal?.reportWritten === false && refusal.fundingAllowed === false && refusal.detail.includes(expected));
+  assert(refusal?.reportWritten === false && refusal.fundingAllowed === false && refusal.detail.includes(expected),
+    JSON.stringify({ expectedSyntheticRefusal: expected, observedSyntheticRefusal: refusal?.detail }));
   assert.equal(records.find(item => item.syntheticNegativeProbe)?.networkAttempts, 0);
   assert.equal(existsSync(syntheticReport), false); negatives++;
 };

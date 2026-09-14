@@ -6,12 +6,12 @@ import { authorizePresignedSpendTransaction, finalizePresignedCooperative, final
   verifyPresignedCooperativePublicNonce, verifyPresignedRecoveryContribution,
   type PresignedSpendProposal, type PresignedCooperativePartial, type PresignedCooperativePublicNonce,
   type PresignedRecoveryContribution } from './spends.js';
-import { PRESIGNED_PROTOCOL, type PresignedGraph, type PresignedPublicKit } from './types.js';
+import { type PresignedGraph, type PresignedPublicKit } from './types.js';
 import { assert, canonicalJson, exactKeys, sameCanonical } from './validation.js';
 
 /** Public-only peer file. Secret nonces are never exportable or restorable. */
 export interface PresignedOfflineExchange {
-  version: 2; protocol: typeof PRESIGNED_PROTOCOL; format: 'presigned-offline-exchange-v1';
+  version: PresignedGraph['version']; protocol: PresignedGraph['protocol']; format: 'presigned-offline-exchange-v1';
   graphDigest: string; proposal: PresignedSpendProposal;
   publicNonces: PresignedCooperativePublicNonce[];
   partials: PresignedCooperativePartial[];
@@ -20,14 +20,19 @@ export interface PresignedOfflineExchange {
 export function newPresignedOfflineExchange(graph: PresignedGraph, proposal: PresignedSpendProposal): PresignedOfflineExchange {
   validatePresignedSpend(graph, proposal);
   assert(proposal.kind !== 'final-sweep', 'final sweep needs no peer exchange');
-  return { version: 2, protocol: PRESIGNED_PROTOCOL, format: 'presigned-offline-exchange-v1',
+  return { version: graph.version, protocol: graph.protocol, format: 'presigned-offline-exchange-v1',
     graphDigest: graph.digest, proposal, publicNonces: [], partials: [], recoveryContributions: [] };
 }
 export function validatePresignedOfflineExchange(kit: PresignedPublicKit, input: unknown): PresignedOfflineExchange {
   const { graph } = validatePresignedPublicKit(kit);
+  return validateExchangeForGraph(graph, input);
+}
+
+/** Private only: callers validate the complete kit once at each public boundary. */
+function validateExchangeForGraph(graph: PresignedGraph, input: unknown): PresignedOfflineExchange {
   exactKeys(input, ['version','protocol','format','graphDigest','proposal','publicNonces','partials','recoveryContributions'], 'offline peer file');
   const exchange = input as PresignedOfflineExchange;
-  assert(exchange.version === 2 && exchange.protocol === PRESIGNED_PROTOCOL &&
+  assert(exchange.version === graph.version && exchange.protocol === graph.protocol &&
     exchange.format === 'presigned-offline-exchange-v1' && exchange.graphDigest === graph.digest, 'offline peer file changed its protocol or graph');
   const proposal = validatePresignedSpend(graph, exchange.proposal);
   assert(proposal.kind === 'cooperative' || proposal.kind === 'recovery', 'offline peer file has another spend kind');
@@ -37,19 +42,27 @@ export function validatePresignedOfflineExchange(kit: PresignedPublicKit, input:
   }
   if (proposal.kind === 'cooperative') {
     assert(exchange.recoveryContributions.length === 0, 'cooperative file contains recovery contributions');
-    for (const publicNonce of exchange.publicNonces) verifyPresignedCooperativePublicNonce({ graph, proposal, publicNonce });
+    if (exchange.publicNonces.length === proposal.participantIds.length) {
+      // Validate the complete set together, including every member binding,
+      // curve point, duplicate refusal and aggregate nonce context.
+      validatePresignedCooperativeNonces({ graph, proposal, publicNonces: exchange.publicNonces });
+    } else {
+      for (const publicNonce of exchange.publicNonces) verifyPresignedCooperativePublicNonce({ graph, proposal, publicNonce });
+      assert(exchange.partials.length === 0, 'all public nonces must be present before partial signatures');
+    }
     assert(new Set(exchange.publicNonces.map(item => item.pubnonce)).size === exchange.publicNonces.length, 'offline peer file repeats a public nonce');
-    if (exchange.partials.length) validatePresignedCooperativeNonces({ graph, proposal, publicNonces: exchange.publicNonces });
     for (const partial of exchange.partials) verifyPresignedCooperativePartial({ graph, proposal, publicNonces: exchange.publicNonces, partial });
   } else {
     assert(!exchange.publicNonces.length && !exchange.partials.length, 'recovery file contains cooperative material');
+    assert(exchange.recoveryContributions.length <= proposal.threshold, 'recovery exchange exceeds its exact trigger quorum');
     for (const contribution of exchange.recoveryContributions) verifyPresignedRecoveryContribution({ graph, proposal, contribution });
   }
   return JSON.parse(canonicalJson(exchange)) as PresignedOfflineExchange;
 }
 export function mergePresignedOfflineExchanges(kit: PresignedPublicKit, current: PresignedOfflineExchange, incoming: unknown): PresignedOfflineExchange {
-  const left = validatePresignedOfflineExchange(kit, current);
-  const right = validatePresignedOfflineExchange(kit, incoming);
+  const { graph } = validatePresignedPublicKit(kit);
+  const left = validateExchangeForGraph(graph, current);
+  const right = validateExchangeForGraph(graph, incoming);
   sameCanonical(left.proposal, right.proposal, 'offline peer proposal');
   const merge = <T extends { participantId: string }>(first: T[], second: T[]): T[] => {
     const values = new Map(first.map(item => [item.participantId, item]));
@@ -60,7 +73,9 @@ export function mergePresignedOfflineExchanges(kit: PresignedPublicKit, current:
     }
     return [...values.values()].sort((a, b) => a.participantId.localeCompare(b.participantId));
   };
-  return validatePresignedOfflineExchange(kit, { ...left,
+  // Revalidate the merged context too: signatures valid under either original
+  // nonce set are not assumed valid under a combined peer context.
+  return validateExchangeForGraph(graph, { ...left,
     publicNonces: merge(left.publicNonces, right.publicNonces), partials: merge(left.partials, right.partials),
     recoveryContributions: merge(left.recoveryContributions, right.recoveryContributions) });
 }
@@ -68,11 +83,12 @@ export function finalizePresignedOfflineExchange(kit: PresignedPublicKit, value:
   const exchange = validatePresignedOfflineExchange(kit, value);
   return exchange.proposal.kind === 'cooperative' ? finalizePresignedCooperative({ graph: kit.graph,
     proposal: exchange.proposal, publicNonces: exchange.publicNonces, partials: exchange.partials })
-    : finalizePresignedRecovery({ graph: kit.graph, proposal: exchange.proposal, contributions: exchange.recoveryContributions });
+    : finalizePresignedRecovery({ graph: kit.graph, proposal: exchange.proposal, contributions: exchange.recoveryContributions,
+      ...(kit.graph.version === 3 ? { recoveryAuthorizations: kit.recoveryAuthorizations } : {}) });
 }
 
 export type PresignedOfflineTransaction = {
-  version: 2; protocol: typeof PRESIGNED_PROTOCOL; format: 'presigned-offline-transaction-v1';
+  version: PresignedGraph['version']; protocol: PresignedGraph['protocol']; format: 'presigned-offline-transaction-v1';
   graphDigest: string; transactionHex: string; txid: string;
 } & ({ kind: 'funding'; exitId: null; proposal: null } |
   { kind: 'solo'; exitId: string; proposal: null } |
@@ -83,7 +99,7 @@ export function validatePresignedOfflineTransaction(kit: PresignedPublicKit, inp
   const { graph } = validatePresignedPublicKit(kit);
   exactKeys(input, ['version','protocol','format','graphDigest','transactionHex','txid','kind','exitId','proposal'], 'offline transaction file');
   const value = input as PresignedOfflineTransaction;
-  assert(value.version === 2 && value.protocol === PRESIGNED_PROTOCOL && value.format === 'presigned-offline-transaction-v1' &&
+  assert(value.version === graph.version && value.protocol === graph.protocol && value.format === 'presigned-offline-transaction-v1' &&
     value.graphDigest === graph.digest, 'offline transaction changed its protocol or graph');
   let completed;
   if (value.kind === 'funding') {

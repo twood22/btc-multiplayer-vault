@@ -7,7 +7,7 @@ import { validatePresignedFeePackage, type PresignedFeePackage } from '../../../
 import type { FeeCoinObservation } from '../../../src/presigned/fees';
 import type { PresignedRuntimeState } from '../../../src/presigned/runtime';
 import { nonWitnessTransactionHex } from '../../../src/presigned/graph';
-import { type ParticipantId, PRESIGNED_PROTOCOL } from '../../../src/presigned/types';
+import { PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, type ParticipantId, type PresignedProtocol } from '../../../src/presigned/types';
 import { assert, canonicalJson, commitmentDigest, identifier, safeInteger, sameCanonical } from '../../../src/presigned/validation';
 import { exactAuthority, presignedBroadcastEnabled } from './presigned-broadcast-store';
 import { loadPresignedFundingEpoch } from './presigned-chain-store';
@@ -23,11 +23,11 @@ export interface PresignedFeeDependencies {
   backend: ReturnType<typeof presignedCoreBackend>;
   rpc: typeof presignedCoreRpc;
   requiredConfirmations: number;
-  assertEnabled: () => void;
+  assertEnabled: (protocol: PresignedProtocol) => void;
 }
 function defaultDependencies(): PresignedFeeDependencies {
   return { backend: presignedCoreBackend(), rpc: presignedCoreRpc, requiredConfirmations: chainConfirmationsRequired(),
-    assertEnabled: () => assert(presignedBroadcastEnabled(), 'fee broadcasting is separately approval-gated for this network') };
+    assertEnabled: protocol => assert(presignedBroadcastEnabled(protocol), 'fee broadcasting is separately approval-gated for this protocol and network') };
 }
 export interface PresignedFeeChallenge {
   id: string; vaultId: string; participantId: ParticipantId; challenge: string;
@@ -61,10 +61,10 @@ export async function getPresignedFeeStatus(userId: string) {
     SELECT id, package_json, status, created_at FROM presigned_fee_packages
     WHERE vault_id = ${runtime.vaultId}::uuid AND user_id = ${userId}::uuid ORDER BY created_at
   `;
-  return { version: 2 as const, protocol: PRESIGNED_PROTOCOL, vaultId: runtime.vaultId,
+  return { version: runtime.version, protocol: runtime.protocol, vaultId: runtime.vaultId,
     participantId: runtime.participantId, parents,
     packages: packages.map(row => ({ id: row.id, package: row.package_json, status: row.status,
-      createdAt: row.created_at.toISOString() })), broadcastAvailable: presignedBroadcastEnabled() };
+      createdAt: row.created_at.toISOString() })), broadcastAvailable: presignedBroadcastEnabled(runtime.protocol) };
 }
 export type PresignedFeeStatus = Awaited<ReturnType<typeof getPresignedFeeStatus>>;
 
@@ -82,8 +82,8 @@ export async function createPresignedFeeChallenge(input: {
     await sql`UPDATE presigned_fee_challenges SET invalidated_at = now() WHERE user_id = ${input.userId}::uuid
       AND vault_id = ${membership.vaultId}::uuid AND consumed_at IS NULL AND invalidated_at IS NULL`;
     const rows = await sql<Array<{ id: string }>>`INSERT INTO presigned_fee_challenges
-      (vault_id, user_id, participant_id, credential_id, credential_counter, challenge, package_json, package_digest, expires_at)
-      VALUES (${membership.vaultId}::uuid, ${input.userId}::uuid, ${membership.participantId}, ${selected.id}, ${selected.counter},
+      (vault_id, protocol, user_id, participant_id, credential_id, credential_counter, challenge, package_json, package_digest, expires_at)
+      VALUES (${membership.vaultId}::uuid, ${checked.package.protocol}, ${input.userId}::uuid, ${membership.participantId}, ${selected.id}, ${selected.counter},
         ${input.challenge}, ${sql.json(json(checked.package))}, ${bytes(checked.packageDigest)}, now() + interval '5 minutes') RETURNING id`;
     return { id: rows[0]!.id, vaultId: membership.vaultId, participantId: membership.participantId,
       challenge: input.challenge, package: checked.package, packageDigest: checked.packageDigest, credential: selected };
@@ -114,8 +114,8 @@ export async function completePresignedFeeChallenge(challenge: PresignedFeeChall
         AND counter = ${current.credential.counter} AND prf_enabled = true RETURNING credential_id`;
     assert(counters.length === 1, 'fee passkey changed concurrently');
     const rows = await sql<Array<{ id: string }>>`INSERT INTO presigned_fee_packages
-      (vault_id, epoch_id, proposal_id, user_id, participant_id, package_json, package_digest)
-      VALUES (${current.vaultId}::uuid, ${current.package.epochId}::uuid, ${current.package.proposalId}::uuid,
+      (vault_id, protocol, epoch_id, proposal_id, user_id, participant_id, package_json, package_digest)
+      VALUES (${current.vaultId}::uuid, ${current.package.protocol}, ${current.package.epochId}::uuid, ${current.package.proposalId}::uuid,
         ${current.credential.userId}::uuid, ${current.participantId}, ${sql.json(json(current.package))}, ${bytes(current.packageDigest)})
       ON CONFLICT (vault_id, package_digest) DO UPDATE SET updated_at = presigned_fee_packages.updated_at RETURNING id`;
     return { packageId: rows[0]!.id, packageDigest: current.packageDigest, status: 'approved' as const };
@@ -124,8 +124,11 @@ export async function completePresignedFeeChallenge(challenge: PresignedFeeChall
 
 /** Persisted, passkey-approved bytes only; there is no caller-supplied send body. */
 export async function submitPresignedFeePackage(packageId: string, dependencies = defaultDependencies()) {
-  dependencies.assertEnabled(); identifier(packageId, 'submitted fee package');
+  identifier(packageId, 'submitted fee package');
   const claimed = await transaction(async sql => {
+    const protocols = await sql<Array<{ protocol: PresignedProtocol }>>`SELECT protocol FROM presigned_fee_packages WHERE id=${packageId}::uuid FOR UPDATE`;
+    assert(protocols.length === 1, 'fee package not found');
+    dependencies.assertEnabled(protocols[0]!.protocol);
     const rows = await sql<FeeRow[]>`UPDATE presigned_fee_packages SET status = 'submitting',
       attempt_count = attempt_count + 1, last_error_code = NULL, updated_at = now()
       WHERE id = ${packageId}::uuid AND (status IN ('prepared','deferred','accepted') OR
@@ -169,10 +172,10 @@ export async function submitPresignedFeePackage(packageId: string, dependencies 
 }
 export async function submitPresignedFeeForUser(userId: string, packageId: string) {
   identifier(userId, 'fee submit user'); identifier(packageId, 'fee submit package');
-  assert(presignedBroadcastEnabled(), 'fee broadcasting is separately approval-gated for this network');
   await consumeRateLimit({ action: 'presigned_fee_broadcast', subject: userId, limit: 40, windowSeconds: 900 });
-  const owned = await db()`SELECT id FROM presigned_fee_packages WHERE id = ${packageId}::uuid AND user_id = ${userId}::uuid`;
+  const owned = await db()<Array<{ id: string; protocol: PresignedProtocol }>>`SELECT id, protocol FROM presigned_fee_packages WHERE id = ${packageId}::uuid AND user_id = ${userId}::uuid`;
   assert(owned.length === 1, 'fee package does not belong to this user');
+  assert(presignedBroadcastEnabled(owned[0]!.protocol), 'fee broadcasting is separately approval-gated for this protocol and network');
   // Approval is not a send intent. Only this explicit user action places a
   // package in the watcher's retry queue, before the first network request.
   await db()`UPDATE presigned_fee_packages SET status = 'prepared', updated_at = now()
@@ -180,12 +183,14 @@ export async function submitPresignedFeeForUser(userId: string, packageId: strin
   return submitPresignedFeePackage(packageId);
 }
 export async function retryPresignedFeePackages(dependencies?: PresignedFeeDependencies) {
-  if (!presignedBroadcastEnabled()) return { enabled: false, results: [] };
-  const rows = await db()<Array<{ id: string }>>`SELECT id FROM presigned_fee_packages
-    WHERE status IN ('prepared','deferred','accepted') OR (status = 'submitting' AND updated_at < now() - interval '45 seconds')
+  const protocols = [PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3].filter(protocol => presignedBroadcastEnabled(protocol));
+  if (!protocols.length) return { enabled: false, results: [] };
+  const rows = await db()<Array<{ id: string; protocol: PresignedProtocol }>>`SELECT id, protocol FROM presigned_fee_packages
+    WHERE protocol IN ${db()(protocols)} AND
+      (status IN ('prepared','deferred','accepted') OR (status = 'submitting' AND updated_at < now() - interval '45 seconds'))
     ORDER BY updated_at, id LIMIT 100`;
   const results = [];
-  for (const row of rows) results.push(await submitPresignedFeePackage(row.id, dependencies));
+  for (const row of rows) if (presignedBroadcastEnabled(row.protocol)) results.push(await submitPresignedFeePackage(row.id, dependencies));
   return { enabled: true, results };
 }
 
@@ -294,8 +299,8 @@ async function member(sql: TransactionSql, userId: string) {
   identifier(userId, 'fee user');
   const rows = await sql<Array<{ vault_id: string; participant_id: ParticipantId }>>`SELECT m.vault_id, m.participant_id
     FROM vault_members m JOIN vaults v ON v.id = m.vault_id
-    WHERE m.user_id = ${userId}::uuid AND v.protocol = ${PRESIGNED_PROTOCOL} FOR UPDATE OF v`;
-  assert(rows.length === 1, 'exactly one V2 fee membership is required');
+    WHERE m.user_id = ${userId}::uuid AND v.protocol IN ('presigned-graph-v2','presigned-graph-v3') FOR UPDATE OF v`;
+  assert(rows.length === 1, 'exactly one known presigned fee membership is required');
   return { vaultId: rows[0]!.vault_id, participantId: rows[0]!.participant_id };
 }
 async function credential(sql: TransactionSql, userId: string, credentialId: string,

@@ -9,16 +9,14 @@ import {
   validatePresignedAction, type PresignedAction, type PresignedCeremonySettings, type PresignedCeremonyState,
   type PresignedEligibleCredentials, type PresignedFundingInputVerifier,
 } from '../../../src/presigned/ceremony.js';
-import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, type ParticipantId } from '../../../src/presigned/types.js';
-import { assert, canonicalJson, commitmentDigest, exactKeys, identifier, sameCanonical } from '../../../src/presigned/validation.js';
+import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL_V3, isPresignedProtocol, type PresignedProtocol, type ParticipantId } from '../../../src/presigned/types.js';
+import { assert, canonicalJson, commitmentDigest, exactKeys, identifier, sameCanonical, presignedDomain, validatePresignedProtocol } from '../../../src/presigned/validation.js';
 import { db, transaction } from './db';
 import { consumeRateLimit } from './rate-limit';
 import type { StoredCredential } from './webauthn-store';
 
-const STATE_DOMAIN = 'vault/presigned-graph-v2/ceremony/state';
-const EPOCH_DOMAIN = 'vault/presigned-graph-v2/ceremony/epoch';
-interface Membership { vaultId: string; participantId: ParticipantId; vaultStatus: string }
-interface CeremonyRow { settings_json: PresignedCeremonySettings; settings_digest: Buffer;
+interface Membership { vaultId: string; participantId: ParticipantId; vaultStatus: string; protocol: PresignedProtocol }
+interface CeremonyRow { protocol: PresignedProtocol; settings_json: PresignedCeremonySettings; settings_digest: Buffer;
   state_json: PresignedCeremonyState; state_digest: Buffer }
 
 export interface PresignedActionChallenge {
@@ -26,7 +24,7 @@ export interface PresignedActionChallenge {
   challenge: string;
   vaultId: string;
   participantId: ParticipantId;
-  protocol: typeof PRESIGNED_PROTOCOL;
+  protocol: PresignedProtocol;
   action: PresignedAction;
   actionDigest: string;
   credential: StoredCredential;
@@ -37,7 +35,7 @@ export interface PresignedActionDependencies {
   verifyFundingInput?: PresignedFundingInputVerifier;
 }
 
-/** Private creation boundary: the caller must first explicitly create vaults.protocol as V2. */
+/** Private creation boundary: the caller must explicitly create the matching immutable protocol. */
 export async function initializePresignedCeremony(input: {
   vaultId: string; settings: PresignedCeremonySettings;
 }): Promise<void> {
@@ -48,12 +46,12 @@ export async function initializePresignedCeremony(input: {
     const rows = await sql<Array<{ protocol: string; status: string }>>`
       SELECT protocol, status FROM vaults WHERE id = ${input.vaultId}::uuid FOR UPDATE
     `;
-    assert(rows[0]?.protocol === PRESIGNED_PROTOCOL, 'presigned ceremony requires an explicitly created V2 vault');
+    assert(rows[0]?.protocol === state.protocol, 'presigned ceremony requires an explicitly created matching-protocol vault');
     assert(rows[0].status === 'setup', 'only an unfunded setup vault can initialize settings');
     await sql`
-      INSERT INTO presigned_ceremonies (vault_id, settings_json, settings_digest, state_json, state_digest)
-      VALUES (${input.vaultId}::uuid, ${sql.json(json(state.settings))}, ${hex(state.settingsDigest)},
-        ${sql.json(json(state))}, ${hex(commitmentDigest(STATE_DOMAIN, state))})
+      INSERT INTO presigned_ceremonies (vault_id, protocol, settings_json, settings_digest, state_json, state_digest)
+      VALUES (${input.vaultId}::uuid, ${state.protocol}, ${sql.json(json(state.settings))}, ${hex(state.settingsDigest)},
+        ${sql.json(json(state))}, ${hex(commitmentDigest(presignedDomain(state.protocol, 'ceremony/state'), state))})
       ON CONFLICT (vault_id) DO NOTHING
     `;
     const persisted = await loadState(sql, input.vaultId);
@@ -94,15 +92,15 @@ export async function createPresignedActionChallenge(input: {
     `;
     const actionDigest = presignedActionDigest(action);
     const rows = await sql<Array<{ id: string; expires_at: Date }>>`
-      INSERT INTO presigned_action_challenges (vault_id, user_id, participant_id, credential_id,
+      INSERT INTO presigned_action_challenges (vault_id, protocol, user_id, participant_id, credential_id,
         credential_counter, kind, action_json, action_digest, challenge, expires_at)
-      VALUES (${membership.vaultId}::uuid, ${input.userId}::uuid, ${membership.participantId}, ${credential.id},
+      VALUES (${membership.vaultId}::uuid, ${membership.protocol}, ${input.userId}::uuid, ${membership.participantId}, ${credential.id},
         ${credential.counter}, ${action.kind}, ${sql.json(json(action))}, ${hex(actionDigest)},
         ${input.challenge}, now() + interval '5 minutes')
       RETURNING id, expires_at
     `;
     return { id: rows[0]!.id, challenge: input.challenge, vaultId: membership.vaultId,
-      participantId: membership.participantId, protocol: PRESIGNED_PROTOCOL, action, actionDigest,
+      participantId: membership.participantId, protocol: membership.protocol, action, actionDigest,
       credential, expiresAt: rows[0]!.expires_at.toISOString() };
   });
 }
@@ -124,7 +122,7 @@ export async function completePresignedAction(challenge: PresignedActionChalleng
     assert(membership.vaultId === challenge.vaultId && membership.participantId === challenge.participantId,
       'action changed vault membership');
     const current = await loadChallenge(sql, challenge.credential.userId, challenge.id, true);
-    assert(challenge.protocol === PRESIGNED_PROTOCOL &&
+    assert(challenge.protocol === membership.protocol && current.protocol === membership.protocol &&
       ((current.credential.counter === 0 && newCounter === 0) || newCounter > current.credential.counter),
     'passkey counter must advance unless the authenticator uses zero counters');
     assert(current.actionDigest === challenge.actionDigest && current.challenge === challenge.challenge &&
@@ -154,17 +152,17 @@ export async function completePresignedAction(challenge: PresignedActionChalleng
     `;
     assert(changed.length === 1, 'passkey counter changed before action completion');
     await persistState(sql, next);
-    const stateDigest = commitmentDigest(STATE_DOMAIN, next);
+    const stateDigest = commitmentDigest(presignedDomain(next.protocol, 'ceremony/state'), next);
     await sql`
-      INSERT INTO presigned_action_events (challenge_id, vault_id, user_id, participant_id, credential_id,
+      INSERT INTO presigned_action_events (challenge_id, vault_id, protocol, user_id, participant_id, credential_id,
         action_digest, action_json, resulting_state_digest)
-      VALUES (${current.id}::uuid, ${membership.vaultId}::uuid, ${current.credential.userId}::uuid,
+      VALUES (${current.id}::uuid, ${membership.vaultId}::uuid, ${membership.protocol}, ${current.credential.userId}::uuid,
         ${membership.participantId}, ${current.credential.id}, ${hex(current.actionDigest)},
         ${sql.json(json(current.action))}, ${hex(stateDigest)})
     `;
     const ready = presignedWalletSigningReady(next, eligibleCredentials);
     const vaultStatus = ready ? 'ready' : next.rosterApprovals.length === 3 ? 'roster_confirmed' : 'setup';
-    await sql`UPDATE vaults SET status = ${vaultStatus} WHERE id = ${membership.vaultId}::uuid AND protocol = ${PRESIGNED_PROTOCOL}`;
+    await sql`UPDATE vaults SET status = ${vaultStatus} WHERE id = ${membership.vaultId}::uuid AND protocol = ${membership.protocol}`;
     return statusFor(next, { ...membership, vaultStatus }, eligibleCredentials);
   });
 }
@@ -177,11 +175,11 @@ function statusFor(state: PresignedCeremonyState, membership: Membership, eligib
   const phase = epoch?.status === 'approved' ? 'funding-approved'
     : epoch?.finalization ? 'funding-approvals'
     : walletSigningReady ? 'wallet-signing'
-    : epoch?.preauthorizations.length === 12 ? 'backup-verification'
+    : epoch?.preauthorizations.length === 12 && (state.protocol !== PRESIGNED_PROTOCOL_V3 || epoch.recoveryAuthorizations?.length === 9) ? 'backup-verification'
     : epoch?.graph ? 'preauthorizations'
     : epoch ? 'funding-inputs'
     : state.roster ? 'roster-confirmation' : 'identity-registration';
-  return { version: 2 as const, protocol: PRESIGNED_PROTOCOL, vaultId: state.vaultId,
+  return { version: state.version, protocol: state.protocol, vaultId: state.vaultId,
     participantId: membership.participantId, vaultStatus: membership.vaultStatus, phase,
     settings: state.settings, settingsDigest: state.settingsDigest, identities: state.identities,
     roster: state.roster, rosterDigest: state.rosterDigest, rosterApprovals: state.rosterApprovals,
@@ -204,28 +202,29 @@ async function membershipForUser(sql: TransactionSql, userId: string, lock: bool
     SELECT m.vault_id, m.participant_id, v.status, v.protocol FROM vault_members m
     JOIN vaults v ON v.id = m.vault_id WHERE m.user_id = ${userId}::uuid
   `;
-  assert(rows.length === 1 && rows[0]!.protocol === PRESIGNED_PROTOCOL, 'exactly one V2 vault membership is required');
-  return { vaultId: rows[0]!.vault_id, participantId: rows[0]!.participant_id, vaultStatus: rows[0]!.status };
+  assert(rows.length === 1 && isPresignedProtocol(rows[0]!.protocol), 'exactly one known presigned vault membership is required');
+  return { vaultId: rows[0]!.vault_id, participantId: rows[0]!.participant_id, vaultStatus: rows[0]!.status, protocol: rows[0]!.protocol };
 }
 function assertSetupVault(membership: Membership): void {
   assert(['setup', 'roster_confirmed', 'ready'].includes(membership.vaultStatus), 'funded or closed vault cannot change its setup ceremony');
 }
 async function loadState(sql: TransactionSql, vaultId: string): Promise<PresignedCeremonyState> {
   const rows = await sql<CeremonyRow[]>`
-    SELECT settings_json, settings_digest, state_json, state_digest FROM presigned_ceremonies
-    WHERE vault_id = ${vaultId}::uuid AND protocol = ${PRESIGNED_PROTOCOL}
+    SELECT protocol, settings_json, settings_digest, state_json, state_digest FROM presigned_ceremonies
+    WHERE vault_id = ${vaultId}::uuid AND protocol IN ('presigned-graph-v2', 'presigned-graph-v3')
   `;
   const row = rows[0];
-  assert(row, 'V2 immutable ceremony settings have not been initialized');
+  assert(row, 'presigned immutable ceremony settings have not been initialized');
   const state = row.state_json;
   exactKeys(state, ['version', 'protocol', 'vaultId', 'settings', 'settingsDigest', 'identities', 'roster', 'rosterDigest', 'rosterApprovals', 'epochs'], 'persisted ceremony state');
-  assert(state.version === 2 && state.protocol === PRESIGNED_PROTOCOL && state.vaultId === vaultId,
+  validatePresignedProtocol(state.version, state.protocol);
+  assert(state.protocol === row.protocol && state.vaultId === vaultId,
     'persisted ceremony protocol differs from its vault');
   sameCanonical(state.settings, row.settings_json, 'persisted ceremony settings');
   const rebuilt = newPresignedCeremony(vaultId, row.settings_json);
   assert(state.settingsDigest === row.settings_digest.toString('hex') && state.settingsDigest === rebuilt.settingsDigest,
     'persisted ceremony settings digest changed');
-  assert(commitmentDigest(STATE_DOMAIN, state) === row.state_digest.toString('hex'), 'persisted ceremony state digest changed');
+  assert(commitmentDigest(presignedDomain(state.protocol, 'ceremony/state'), state) === row.state_digest.toString('hex'), 'persisted ceremony state digest changed');
   assert(state.settings.network === BITCOIN_NETWORK_NAME, 'stored ceremony belongs to another deployment network');
   assert(Array.isArray(state.epochs) && state.epochs.length <= 64 &&
     state.epochs.filter(epoch => epoch.status !== 'retired').length <= 1, 'persisted ceremony has inconsistent epoch history');
@@ -240,16 +239,16 @@ async function loadState(sql: TransactionSql, vaultId: string): Promise<Presigne
 async function persistState(sql: TransactionSql, state: PresignedCeremonyState): Promise<void> {
   await sql`
     UPDATE presigned_ceremonies SET state_json = ${sql.json(json(state))},
-      state_digest = ${hex(commitmentDigest(STATE_DOMAIN, state))}, updated_at = now()
-    WHERE vault_id = ${state.vaultId}::uuid AND protocol = ${PRESIGNED_PROTOCOL}
+      state_digest = ${hex(commitmentDigest(presignedDomain(state.protocol, 'ceremony/state'), state))}, updated_at = now()
+    WHERE vault_id = ${state.vaultId}::uuid AND protocol = ${state.protocol}
   `;
   for (const [index, epoch] of state.epochs.entries()) {
     await sql`
-      INSERT INTO presigned_funding_epochs (epoch_id, vault_id, ordinal, status, graph_digest,
+      INSERT INTO presigned_funding_epochs (epoch_id, vault_id, protocol, ordinal, status, graph_digest,
         funding_txid, snapshot_json, snapshot_digest)
-      VALUES (${epoch.epochId}::uuid, ${state.vaultId}::uuid, ${index + 1}, ${epoch.status},
+      VALUES (${epoch.epochId}::uuid, ${state.vaultId}::uuid, ${state.protocol}, ${index + 1}, ${epoch.status},
         ${epoch.graph ? hex(epoch.graph.digest) : null}, ${epoch.graph ? hex(epoch.graph.fundingTxid) : null},
-        ${sql.json(json(epoch))}, ${hex(commitmentDigest(EPOCH_DOMAIN, epoch))})
+        ${sql.json(json(epoch))}, ${hex(commitmentDigest(presignedDomain(state.protocol, 'ceremony/epoch'), epoch))})
       ON CONFLICT (epoch_id) DO UPDATE SET status = EXCLUDED.status, graph_digest = EXCLUDED.graph_digest,
         funding_txid = EXCLUDED.funding_txid, snapshot_json = EXCLUDED.snapshot_json,
         snapshot_digest = EXCLUDED.snapshot_digest, updated_at = now()
@@ -279,25 +278,25 @@ async function selectedCredential(sql: TransactionSql, userId: string, credentia
 }
 async function loadChallenge(sql: TransactionSql, userId: string, challengeId: string, lock: boolean): Promise<PresignedActionChallenge> {
   const select = lock ? sql`FOR UPDATE OF a` : sql``;
-  const rows = await sql<Array<{ id: string; vault_id: string; participant_id: ParticipantId; credential_id: string;
+  const rows = await sql<Array<{ id: string; vault_id: string; protocol: PresignedProtocol; participant_id: ParticipantId; credential_id: string;
     credential_counter: string; action_json: PresignedAction; action_digest: Buffer; challenge: string; expires_at: Date }>>`
-    SELECT a.id, a.vault_id, a.participant_id, a.credential_id, a.credential_counter::text,
+    SELECT a.id, a.vault_id, a.protocol, a.participant_id, a.credential_id, a.credential_counter::text,
       a.action_json, a.action_digest, a.challenge, a.expires_at
     FROM presigned_action_challenges a JOIN vaults v ON v.id = a.vault_id AND v.protocol = a.protocol
     JOIN vault_members m ON m.vault_id = a.vault_id AND m.user_id = a.user_id AND m.participant_id = a.participant_id
-    WHERE a.id = ${challengeId}::uuid AND a.user_id = ${userId}::uuid AND a.protocol = ${PRESIGNED_PROTOCOL}
+    WHERE a.id = ${challengeId}::uuid AND a.user_id = ${userId}::uuid AND a.protocol IN ('presigned-graph-v2', 'presigned-graph-v3')
       AND a.consumed_at IS NULL AND a.invalidated_at IS NULL AND a.expires_at > now()
     ${select}
   `;
   const row = rows[0]; assert(row, 'action challenge is unavailable, expired, used or superseded');
   const action = validatePresignedAction(row.action_json);
   const actionDigest = presignedActionDigest(action);
-  assert(actionDigest === row.action_digest.toString('hex'), 'stored action payload digest changed');
+  assert(action.protocol === row.protocol && actionDigest === row.action_digest.toString('hex'), 'stored action payload digest or protocol changed');
   const credential = await selectedCredential(sql, userId, row.credential_id,
-    { vaultId: row.vault_id, participantId: row.participant_id, vaultStatus: 'setup' });
+    { vaultId: row.vault_id, participantId: row.participant_id, vaultStatus: 'setup', protocol: row.protocol });
   assert(credential.counter === Number(row.credential_counter), 'passkey counter changed after action challenge');
   return { id: row.id, challenge: row.challenge, vaultId: row.vault_id, participantId: row.participant_id,
-    protocol: PRESIGNED_PROTOCOL, action, actionDigest, credential, expiresAt: row.expires_at.toISOString() };
+    protocol: row.protocol, action, actionDigest, credential, expiresAt: row.expires_at.toISOString() };
 }
 async function validateIdentityRegistration(sql: TransactionSql, userId: string, action: PresignedAction): Promise<void> {
   if (action.kind !== 'register-identity') return;
@@ -306,7 +305,7 @@ async function validateIdentityRegistration(sql: TransactionSql, userId: string,
   `;
   assert(rows.length === 1 && rows[0]!.personal_public_key.toString('hex') === action.identity.personalPublicKeyHex &&
     rows[0]!.payout_xonly_public_key.toString('hex') === action.identity.payoutXonlyPublicKeyHex,
-  'V2 registration does not match the existing passkey-held public identity');
+  'presigned registration does not match the existing passkey-held public identity');
 }
 async function verifyInputObservation(action: PresignedAction, state: PresignedCeremonyState,
   dependencies: PresignedActionDependencies): Promise<void> {

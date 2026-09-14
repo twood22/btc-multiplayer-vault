@@ -8,7 +8,7 @@ import { advanceLiveLifecycle, fundLiveLifecycle, initializeLiveLifecycle, lifec
   verifyCompletedLiveLifecycle, type LiveLifecycleCore } from './lib/presigned-live-lifecycle.js';
 import { createDurableLifecycleJournal, DurableLifecycleJournal, privateJournalDirectory } from './lib/presigned-durable-journal.js';
 import { acquirePersistentSignetOperationLocks, assertPersistentSignetIdentity, DEFAULT_SIGNET_GENESIS, persistentSignetRpc,
-  readPersistentSignetControl, verifyReceivingWalletRecovery } from './lib/presigned-signet-host-state.js';
+  readPersistentSignetControl, verifyReceivingWalletRecovery, persistentSignetProtocol, persistentSignetLifecycleDirectory } from './lib/presigned-signet-host-state.js';
 
 process.umask(0o077);
 const [operation, filename, capitalArgument, coinArgument] = process.argv.slice(2);
@@ -20,7 +20,8 @@ const coinMatch = /^--initial-outpoint=([0-9a-f]{64}):([0-9]{1,8})$/u.exec(coinA
 assert(operation !== 'init' || (capitalMatch && coinMatch), 'init requires the exact capital limit and confirmed initial outpoint');
 const control = readPersistentSignetControl(filename);
 const call = persistentSignetRpc(control);
-const runDirectory = `${control.directory}/lifecycle-v2`;
+const protocol = persistentSignetProtocol(control);
+const runDirectory = persistentSignetLifecycleDirectory(control);
 const binding = { sourceDigest: control.sourceDigest, chain: 'default-Signet' as const, actualGenesisHash: DEFAULT_SIGNET_GENESIS };
 // One stable HOST inode also excludes start/stop while a lifecycle operation is
 // signing. A long-running follow holds it continuously; crash/reboot releases it.
@@ -45,7 +46,7 @@ try {
     const rpc: PresignedCoreRpc = async <T,>(method: string, params: unknown[] = []) => await call(method, params) as T;
     const backend = createPresignedCoreBackend({ network: 'signet', genesisHash: DEFAULT_SIGNET_GENESIS, rpc });
     await backend.getTip();
-    const core: LiveLifecycleCore = { ...binding, durableJournal, restorationParent: control.restorationParent,
+    const core: LiveLifecycleCore = { ...binding, protocol, durableJournal, restorationParent: control.restorationParent,
       nativeWalletBackup: { binary: control.binaryPath, binarySha256: control.binarySha256, parentDirectory: control.nativeWalletBackupParent },
       rpc: async (method, params) => {
         assert(['getblockchaininfo', 'getblockhash', 'getblockheader', 'getmempoolentry', 'getrawtransaction', 'gettxout',

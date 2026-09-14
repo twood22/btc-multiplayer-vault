@@ -3,8 +3,7 @@ import { BITCOIN_GENESIS_HASH, BITCOIN_NETWORK_NAME } from '../../../src/network
 import { validatePresignedFeePackage, type PresignedFeePackage } from '../../../src/presigned/fee-package';
 import { authorizePresignedFundingTransaction } from '../../../src/presigned/funding';
 import type { FeeCoinObservation } from '../../../src/presigned/fees';
-import { PRESIGNED_PROTOCOL } from '../../../src/presigned/types';
-import { assert, commitmentDigest, sameCanonical } from '../../../src/presigned/validation';
+import { assert, commitmentDigest, sameCanonical, presignedDomain, validatePresignedProtocol } from '../../../src/presigned/validation';
 import type { PresignedFeeStatus } from '../server/presigned-fee-store';
 import { observePresignedConfirmedSource, validatedPresignedChainApi } from './presigned-chain';
 import { presignedPost } from './presigned-ceremony';
@@ -12,7 +11,8 @@ import type { PresignedBrowserRuntimeStatus } from './presigned-runtime';
 import { assertPasskey, stripPrfSecrets } from './webauthn';
 
 export function verifyPresignedFeeView(status: PresignedFeeStatus, runtime: PresignedBrowserRuntimeStatus) {
-  assert(status.version === 2 && status.protocol === PRESIGNED_PROTOCOL && status.vaultId === runtime.vaultId &&
+  validatePresignedProtocol(status.version, status.protocol);
+  assert(status.version === runtime.version && status.protocol === runtime.protocol && status.vaultId === runtime.vaultId &&
     status.participantId === runtime.participantId, 'fee status changed vault or identity');
   assert(Array.isArray(status.parents) && status.parents.length <= 1100 && Array.isArray(status.packages) &&
     status.packages.length <= 1024, 'fee status exceeds bounds');
@@ -22,8 +22,8 @@ export function verifyPresignedFeeView(status: PresignedFeeStatus, runtime: Pres
     if (parent.kind === 'funding') {
       assert(parent.proposalId === null && kit.epochStatus === 'approved', 'fee funding is not an approved epoch');
       const completed = authorizePresignedFundingTransaction({ graph: kit.publicKit.graph, transactionHex: parent.transactionHex });
-      const digest = commitmentDigest('vault/presigned-graph-v2/funding-finalization', {
-        protocol: PRESIGNED_PROTOCOL, graphDigest: kit.publicKit.graph.digest, ...completed });
+      const digest = commitmentDigest(presignedDomain(kit.publicKit.protocol, 'funding-finalization'), {
+        protocol: kit.publicKit.protocol, graphDigest: kit.publicKit.graph.digest, ...completed });
       assert(completed.txid === parent.txid && digest === parent.authorityDigest, 'fee funding changed its signed bytes');
     } else {
       const proposal = runtime.proposals.find(item => item.proposal.proposalId === parent.proposalId);

@@ -15,7 +15,7 @@ import { unlockPublishedVault } from '../lib/client/vault-signing.js';
 import { scrubUnlockedVaultCustody } from '../lib/client/unlocked-vault-custody.js';
 import { createIsolatedSoloFixture } from './solo-signing-fixture.js';
 import { createParticipantSetupMaterial, participantSetupReadiness } from '../lib/client/participant-setup.js';
-import { LEGACY_PROTOCOL, PRESIGNED_PROTOCOL } from '../../src/presigned/types.js';
+import { LEGACY_PROTOCOL, PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3 } from '../../src/presigned/types.js';
 
 const checks: Array<{ name: string; ok: boolean }> = [];
 
@@ -133,13 +133,15 @@ await check('PRF encryption material is removed from server-bound assertions', (
   assert(!JSON.stringify(response).includes(sentinel), 'PRF output survived assertion sanitization');
 });
 
-await check('setup guidance preserves explicit V1 and V2 recovery requirements for both networks', () => {
+await check('setup guidance preserves explicit V1, V2 and V3 recovery requirements for both networks', () => {
   for (const network of ['signet', 'mainnet']) {
     const v2 = participantSetupReadiness(PRESIGNED_PROTOCOL, network);
     assert(v2.includes('both distinct passkeys and their saved offline recovery kit'), 'V2 omitted a mandatory recovery method');
     assert(v2.includes('independently verify the same graph and exact payouts'), 'V2 omitted independent graph verification');
     assert(v2.includes(`presigned ${network} release checks`), 'V2 guidance selected the wrong release network');
     assert(!/Sigbash|second passkey or/i.test(v2), 'V2 inherited a legacy readiness requirement');
+    const v3 = participantSetupReadiness(PRESIGNED_PROTOCOL_V3, network);
+    assert(v3 === v2, 'V3 first enrollment must accept the explicit protocol and retain every required custody gate');
     const v1 = participantSetupReadiness(LEGACY_PROTOCOL, network);
     assert(v1.includes('second passkey or offline recovery kit') && v1.includes(`live Sigbash ${network}`), 'legacy guidance changed');
     assert(!v1.includes('presigned'), 'legacy setup was silently reinterpreted as V2');
@@ -147,7 +149,7 @@ await check('setup guidance preserves explicit V1 and V2 recovery requirements f
 });
 
 await check('setup guidance never infers a protocol from missing or unknown membership', async () => {
-  for (const protocol of [undefined, null, '', 'sigbash-v2', 'mainnet', {}]) {
+  for (const protocol of [undefined, null, '', 'sigbash-v2', 'presigned-graph-v4', 'mainnet', {}]) {
     await expectReject(async () => participantSetupReadiness(protocol, 'mainnet'));
   }
 });

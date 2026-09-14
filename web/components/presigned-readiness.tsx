@@ -1,9 +1,9 @@
 'use client';
 import { useState } from 'react';
-import { PRESIGNED_PROTOCOL } from '../../src/presigned/types';
-import { assert } from '../../src/presigned/validation';
+import { PRESIGNED_PROTOCOL, type PresignedProtocol } from '../../src/presigned/types';
+import { assert, presignedVersion } from '../../src/presigned/validation';
 
-export function PresignedReadiness({ vaultId }: { vaultId: string }) {
+export function PresignedReadiness({ vaultId, protocol = PRESIGNED_PROTOCOL }: { vaultId: string; protocol?: PresignedProtocol }) {
   const [checks, setChecks] = useState<Array<{ id: string; passed: boolean; detail: string }> | null>(null);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState('Readiness is separate from signing authority. This check never signs or broadcasts.');
@@ -12,7 +12,7 @@ export function PresignedReadiness({ vaultId }: { vaultId: string }) {
     try {
       const response = await fetch('/api/vault/presigned/readiness', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(90_000) });
       const status = await response.json();
-      assert(response.ok && status.version === 2 && status.protocol === PRESIGNED_PROTOCOL && status.vaultId === vaultId &&
+      assert(response.ok && status.version === presignedVersion(protocol) && status.protocol === protocol && status.vaultId === vaultId &&
         status.fundingAuthorized === false && Array.isArray(status.checks), 'Readiness unavailable or changed protocol');
       setChecks(status.checks); setMessage(status.note);
     } catch { setMessage('Readiness could not be verified. Funding gates remain enforced; retain your existing recovery material.'); }

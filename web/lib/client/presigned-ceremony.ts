@@ -1,13 +1,15 @@
 'use client';
 import { BITCOIN_GENESIS_HASH, BITCOIN_NETWORK_NAME } from '../../../src/network';
-import { newPresignedCeremony, presignedActionDigest, validatePresignedRestorationReceipt,
+import { newPresignedCeremony, presignedActionDigest, validatePresignedRestorationReceipts,
   type PresignedAction } from '../../../src/presigned/ceremony';
 import { validatePresignedGraph } from '../../../src/presigned/graph';
+import { createPresignedPublicKit } from '../../../src/presigned/backup';
+import { verifyRecoveryAuthorizations } from '../../../src/presigned/fixed-recovery';
 import { finalizePresignedFunding, verifyPresignedFundingSignature } from '../../../src/presigned/funding';
 import { validatePresignedRoster } from '../../../src/presigned/roster';
 import { verifyPreauthorizations } from '../../../src/presigned/signing';
-import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, type PresignedPublicKit } from '../../../src/presigned/types';
-import { assert, commitmentDigest, sameCanonical } from '../../../src/presigned/validation';
+import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL_V3, type PresignedPublicKit } from '../../../src/presigned/types';
+import { assert, commitmentDigest, sameCanonical, presignedDomain, validatePresignedProtocol } from '../../../src/presigned/validation';
 import type { PresignedCeremonyStatus } from '../server/presigned-store';
 import { assertPasskey, stripPrfSecrets } from './webauthn';
 import { assertPresignedLocalStatus, presignedLocalChecks, type PresignedLocalCeremony } from './presigned-local-ceremony';
@@ -24,11 +26,13 @@ export async function presignedPost<T>(path: string, body: unknown): Promise<T> 
 export function verifyPresignedCeremonyView(status: PresignedCeremonyStatus, expected: {
   vaultId: string; participantId: string; settingsDigest: string; localState: PresignedLocalCeremony;
 }): { publicKit: PresignedPublicKit | null; walletSigningReady: boolean } {
-  assert(status.version === 2 && status.protocol === PRESIGNED_PROTOCOL && status.vaultId === expected.vaultId &&
+  validatePresignedProtocol(status.version, status.protocol);
+  assert(status.vaultId === expected.vaultId &&
     status.participantId === expected.participantId, 'coordinator changed protocol or membership');
   assert(status.settings.network === BITCOIN_NETWORK_NAME && status.settings.genesisHash === BITCOIN_GENESIS_HASH,
     'coordinator changed deployment network');
   const initial = newPresignedCeremony(status.vaultId, status.settings);
+  assert(initial.version === status.version && initial.protocol === status.protocol, 'coordinator changed settings protocol');
   assert(initial.settingsDigest === status.settingsDigest && status.settingsDigest === expected.settingsDigest,
     'coordinator changed the locally approved settings');
   assertPresignedLocalStatus(status, expected.localState);
@@ -38,8 +42,10 @@ export function verifyPresignedCeremonyView(status: PresignedCeremonyStatus, exp
     const roster = validatePresignedRoster(status.roster);
     sameCanonical(roster.participants, status.identities, 'registered roster identities');
     sameCanonical({ network: roster.network, genesisHash: roster.genesisHash, economics: roster.economics,
-      feePolicy: roster.feePolicy, fundingFeeSats: status.settings.fundingFeeSats }, status.settings, 'roster settings');
-    assert(status.rosterDigest === commitmentDigest('vault/presigned-graph-v2/roster', roster), 'coordinator changed roster digest');
+      feePolicy: roster.feePolicy, fundingFeeSats: status.settings.fundingFeeSats,
+      ...(roster.protocol === PRESIGNED_PROTOCOL_V3 ? { protocol: roster.protocol, recoveryPolicy: roster.recoveryPolicy } : {}) }, status.settings, 'roster settings');
+    assert(roster.protocol === status.protocol && roster.version === status.version, 'roster protocol differs from status');
+    assert(status.rosterDigest === commitmentDigest(presignedDomain(roster.protocol, 'roster'), roster), 'coordinator changed roster digest');
   } else assert(status.rosterDigest === null && !status.epoch, 'epoch exists without a complete roster');
   const epoch = status.epoch;
   if (!epoch?.graph) {
@@ -56,10 +62,14 @@ export function verifyPresignedCeremonyView(status: PresignedCeremonyStatus, exp
   assert(graph.funding.epochId === epoch.epochId && graph.funding.feeSats === status.settings.fundingFeeSats,
     'graph changed funding epoch or fee');
   const entries = verifyPreauthorizations(graph, epoch.preauthorizations, false);
-  const publicKit: PresignedPublicKit | null = entries.length === 12
-    ? { version: 2, protocol: PRESIGNED_PROTOCOL, graph, preauthorizations: entries } : null;
-  epoch.backups.forEach(receipt => validatePresignedRestorationReceipt({ graph, preauthorizations: entries,
-    participantId: receipt.participantId, proof: receipt.proof }));
+  const recoveryAuthorizations = graph.protocol === PRESIGNED_PROTOCOL_V3
+    ? verifyRecoveryAuthorizations(graph, epoch.recoveryAuthorizations!, false) : undefined;
+  assert(graph.protocol === PRESIGNED_PROTOCOL_V3 || epoch.recoveryAuthorizations === undefined, 'legacy epoch has V3 authorizations');
+  const publicKit: PresignedPublicKit | null = entries.length === 12 &&
+    (graph.protocol !== PRESIGNED_PROTOCOL_V3 || recoveryAuthorizations?.length === 9)
+    ? createPresignedPublicKit({ graph, preauthorizations: entries, recoveryAuthorizations }) : null;
+  if (epoch.backups.length) validatePresignedRestorationReceipts({ graph, preauthorizations: entries,
+    recoveryAuthorizations, receipts: epoch.backups });
   const backupsComplete = PARTICIPANT_IDS.every(id => {
     const receipts = epoch.backups.filter(item => item.participantId === id);
     return receipts.some(item => item.backupKind === 'offline' && item.backupFileDigest !== null) &&
@@ -89,7 +99,7 @@ export async function approvePresignedCeremonyAction(credentialId: string, actio
   const digest = presignedActionDigest(action);
   const approval = await presignedPost<{ challengeId: string; protocol: string; action: PresignedAction;
     actionDigest: string; options: Record<string, unknown> }>('/api/vault/presigned/action/options', { credentialId, action });
-  assert(approval.protocol === PRESIGNED_PROTOCOL && approval.actionDigest === digest &&
+  assert(approval.protocol === action.protocol && approval.actionDigest === digest &&
     presignedActionDigest(approval.action) === digest, 'coordinator changed the action before passkey approval');
   const credentials = approval.options.allowCredentials as Array<{ id: string; type: string }>;
   assert(approval.options.userVerification === 'required' && credentials?.length === 1 &&

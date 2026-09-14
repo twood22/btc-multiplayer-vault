@@ -13,6 +13,8 @@ import { parseAcceptanceJson, readPrivateAcceptanceFile, validateLocalAcceptance
 import { validateRetainedImageEvidence } from './presigned-image-evidence.js';
 import { IMAGE_EXECUTION_STAGES } from './presigned-image-commands.js';
 import { presignedSourceDigest } from '../presigned-build-identity.mjs';
+import { PRESIGNED_PROTOCOL_V3, type PresignedProtocol } from '../../src/presigned/types.js';
+import { presignedVersion } from '../../src/presigned/validation.js';
 
 const MAX_FILE_BYTES = 2 * 1024 ** 3;
 const MAX_TOTAL_BYTES = 8 * 1024 ** 3;
@@ -163,20 +165,21 @@ export async function archiveRegularEvidenceFiles(input: {
   }
 }
 
-export async function packPresignedEvidence(kind: EvidenceArchiveKind, directory: string, output: string) {
+export async function packPresignedEvidence(kind: EvidenceArchiveKind, directory: string, output: string,
+  protocol: PresignedProtocol = PRESIGNED_PROTOCOL_V3) {
   assert(['local', 'signet-image', 'mainnet-image'].includes(kind), 'unsupported evidence archive kind');
   const sourceDigest = presignedSourceDigest();
   let files: string[]; let offlineUtilityDigest: string; let evidenceDigest: string;
   let validate: (candidate: string) => Promise<void>;
   if (kind === 'local') {
-    const run = validateLocalAcceptanceRun(directory, sourceDigest, 'local');
+    const run = validateLocalAcceptanceRun(directory, sourceDigest, 'local', protocol);
     evidenceDigest = run.runDigest; offlineUtilityDigest = run.offlineUtilityDigest!;
     files = ['run.json', ...run.commands.flatMap(execution => [`${execution.command.id}.stdout.log`,
       `${execution.command.id}.stderr.log`, ...execution.artifactDigests.map(artifact => artifact.relativePath)])];
-    validate = async candidate => { assert.equal(validateLocalAcceptanceRun(candidate, sourceDigest, 'local').runDigest, evidenceDigest); };
+    validate = async candidate => { assert.equal(validateLocalAcceptanceRun(candidate, sourceDigest, 'local', protocol).runDigest, evidenceDigest); };
   } else {
     const network = kind === 'signet-image' ? 'signet' : 'mainnet';
-    const image = await validateRetainedImageEvidence(directory, sourceDigest, network);
+    const image = await validateRetainedImageEvidence(directory, sourceDigest, network, protocol);
     evidenceDigest = image.receiptDigest; offlineUtilityDigest = image.offlineUtilityDigest;
     const receipt = parseAcceptanceJson(readPrivateAcceptanceFile(`${directory}/image-acceptance.json`)) as any;
     const digests = [...new Set<string>([receipt.image.manifestDigest, receipt.image.configDigest, ...receipt.image.layerDigests])];
@@ -184,7 +187,7 @@ export async function packPresignedEvidence(kind: EvidenceArchiveKind, directory
     files = ['image-acceptance.json', 'browser.json', 'runtime.json', 'oci/oci-layout', 'oci/index.json',
       ...IMAGE_EXECUTION_STAGES.flatMap(stage => [`${stage}.stdout.log`, `${stage}.stderr.log`]),
       ...digests.map(digest => `oci/blobs/sha256/${digest.slice(7)}`)];
-    validate = async candidate => { assert.equal((await validateRetainedImageEvidence(candidate, sourceDigest, network)).receiptDigest, evidenceDigest); };
+    validate = async candidate => { assert.equal((await validateRetainedImageEvidence(candidate, sourceDigest, network, protocol)).receiptDigest, evidenceDigest); };
   }
   const archive = await archiveRegularEvidenceFiles({ directory, files, output,
     // The local suite builds/tests this standalone utility. Image jobs already
@@ -195,7 +198,7 @@ export async function packPresignedEvidence(kind: EvidenceArchiveKind, directory
       await validate(candidate);
       assert.equal(presignedSourceDigest(), sourceDigest, 'source changed during archive evidence validation');
     } });
-  return { passed: true, kind: 'presigned-v2-local-evidence-archive', evidenceKind: kind, sourceDigest, evidenceDigest,
+  return { passed: true, protocol, kind: `presigned-v${presignedVersion(protocol)}-local-evidence-archive`, evidenceKind: kind, sourceDigest, evidenceDigest,
     archiveSha256: archive.archiveSha256, archiveBytes: archive.archiveBytes, files: archive.files.length,
     restoredBytesRevalidated: true, contentPrivacyReviewed: false, published: false, realDefaultSignetVerified: false,
     releaseReceiptProduced: false, fundingAuthorized: false };

@@ -1,4 +1,4 @@
-name: Presigned V2 acceptance
+name: Presigned V3 acceptance
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: presigned-v2-acceptance-${{ github.ref }}
+  group: presigned-v3-acceptance-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -28,6 +28,8 @@ jobs:
     name: ${{ matrix.suite }} executable acceptance
     env:
       NEXT_TELEMETRY_DISABLED: '1'
+      PRESIGNED_ACCEPTANCE_PROTOCOL: presigned-graph-v3
+      PRESIGNED_BUILD_PROTOCOL: presigned-graph-v3
     steps:
       - name: Check out the exact public commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

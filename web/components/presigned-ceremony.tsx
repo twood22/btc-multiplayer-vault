@@ -1,15 +1,18 @@
 'use client';
 import { useEffect, useState } from 'react';
+import * as bitcoin from 'bitcoinjs-lib';
 import { encryptPresignedOfflineBackup, generatePresignedOfflineSecret, MAX_PRESIGNED_BACKUP_FILE_BYTES,
   parsePresignedOfflineBackup, presignedBackupBinding, serializePresignedOfflineBackup,
   verifyPresignedKitRestoration, verifyPresignedOfflineBackupRestoration } from '../../src/presigned/backup';
 import { authorizePresignedFundingSignedPsbt } from '../../src/presigned/funding';
 import { validatePresignedOfflineTransaction } from '../../src/presigned/offline';
 import { fundingFeeShare } from '../../src/presigned/graph';
+import { LAST_SURVIVOR_PAYOUT_SCHEDULE } from '../../src/presigned/economics';
 import { buildPresignedRounds } from '../../src/presigned/roster';
 import { createPreauthorizations } from '../../src/presigned/signing';
-import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, type PresignedParticipant } from '../../src/presigned/types';
-import { assert, commitmentDigest } from '../../src/presigned/validation';
+import { createRecoveryAuthorizations } from '../../src/presigned/fixed-recovery';
+import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL_V3, type PresignedParticipant } from '../../src/presigned/types';
+import { assert, commitmentDigest, networkParameters, presignedDomain } from '../../src/presigned/validation';
 import { fromBase64url, toBase64url } from '../lib/client/base64url';
 import { downloadVerifiedPresignedUtility } from '../lib/client/presigned-offline-utility';
 import { approvePresignedCeremonyAction, presignedPost, verifyPresignedCeremonyView } from '../lib/client/presigned-ceremony';
@@ -22,18 +25,21 @@ import { appendPresignedLocalRecord, assertPresignedLocalRestartAllowed, emptyPr
   readPresignedLocalCeremony, withPresignedLocalCeremonyLock, type PresignedLocalRecord } from '../lib/client/presigned-local-ceremony';
 
 type InitialIdentity = Pick<PresignedParticipant, 'id' | 'personalPublicKeyHex' | 'payoutXonlyPublicKeyHex'>;
-const BASE = { version: 2 as const, protocol: PRESIGNED_PROTOCOL };
 
 export function PresignedCeremony({ initialStatus, passkeys, expectedIdentity, chainConfig }: {
   initialStatus: PresignedCeremonyStatus; passkeys: Array<{ id: string; name: string }>; expectedIdentity: InitialIdentity;
   chainConfig: { apiUrl: string; allowedOrigins: string[] };
 }) {
-  const localBinding = presignedLocalBinding(initialStatus.vaultId, expectedIdentity);
+  const BASE = { version: initialStatus.version, protocol: initialStatus.protocol };
+  const v3 = initialStatus.protocol === PRESIGNED_PROTOCOL_V3;
+  const localBinding = presignedLocalBinding(initialStatus.vaultId, expectedIdentity, initialStatus.protocol);
   const [local, setLocal] = useState(() => emptyPresignedLocalCeremony(localBinding));
   const [status, setStatus] = useState(initialStatus);
   const [credentialId, setCredentialId] = useState(passkeys[0]?.id || '');
   const [message, setMessage] = useState('Rebuild and verify this protocol in your browser before each approval.');
   const [working, setWorking] = useState(false);
+  const [operation, setOperation] = useState('idle');
+  const [operationOutcome, setOperationOutcome] = useState('idle');
   const [hydrated, setHydrated] = useState(false);
   const [rosterCompared, setRosterCompared] = useState<string | null>(null);
   const [graphReviewed, setGraphReviewed] = useState<string | null>(null);
@@ -99,11 +105,11 @@ export function PresignedCeremony({ initialStatus, passkeys, expectedIdentity, c
 
   async function run(action: () => Promise<void>) {
     if (disabled) return;
-    setWorking(true);
+    setWorking(true); setOperation('verify-current-state'); setOperationOutcome('running');
     try { await withPresignedLocalCeremonyLock(localBinding, async () => {
       verifyPresignedCeremonyView(status, expected()); await action();
-    }); }
-    catch (error) { setMessage(error instanceof Error ? error.message : 'Presigned ceremony action failed'); }
+    }); setOperationOutcome('completed'); }
+    catch (error) { setOperationOutcome('failed'); setMessage(error instanceof Error ? error.message : 'Presigned ceremony action failed'); }
     finally { setWorking(false); }
   }
   async function checkFundingCoins() {
@@ -121,7 +127,7 @@ export function PresignedCeremony({ initialStatus, passkeys, expectedIdentity, c
     const checked = verifyPresignedCeremonyView(status, binding);
     const own = presignedLocalChecks(status, binding.localState);
     assert(own.rosterCompared && own.graphReviewed, 'compare the roster and review this exact graph locally first');
-    assert(checked.publicKit && identity, 'all twelve verified preauthorizations and your identity are required');
+    assert(checked.publicKit && identity, 'all solo and recovery setup authorizations and your identity are required');
     return checked.publicKit;
   }
   async function verifyLocalKit() {
@@ -131,12 +137,14 @@ export function PresignedCeremony({ initialStatus, passkeys, expectedIdentity, c
         expectedBinding: presignedBackupBinding(publicKit, participantId) }) });
   }
   async function register() {
-    setMessage('Unlock your passkey to derive all three vault-scoped solo keys locally…');
+    setMessage(v3 ? 'Unlock your passkey to derive separate solo, refund-authorization and recovery-trigger keys locally…'
+      : 'Unlock your passkey to derive all three vault-scoped solo keys locally…');
     const publicIdentity = await withUnregisteredPresignedParticipant({ credentialId, expectedVaultId: status.vaultId,
-      expectedParticipant: expectedIdentity, action: local => local.publicIdentity });
+      expectedProtocol: status.protocol, expectedParticipant: expectedIdentity, action: local => local.publicIdentity });
     accept(await approvePresignedCeremonyAction(credentialId, { ...BASE, kind: 'register-identity',
       settingsDigest: status.settingsDigest, identity: publicIdentity }));
-    setMessage('Your personal, payout and three solo public keys are registered. No private key was transmitted.');
+    setMessage(v3 ? 'Your identity and nine separately scoped signing public keys are registered. No private key was transmitted.'
+      : 'Your personal, payout and three solo public keys are registered. No private key was transmitted.');
   }
   async function confirmRoster() {
     assert(rosterCompared === status.rosterDigest && identity && status.rosterDigest, 'compare the exact roster with both friends first');
@@ -170,22 +178,26 @@ export function PresignedCeremony({ initialStatus, passkeys, expectedIdentity, c
     setMessage('Your exact input and change are approved. The private Core backend independently rechecked them.');
   }
   async function preauthorize() {
-    assert(graph && epoch && identity && graphReviewed === graph.digest, 'review all nine rebuilt exits before preauthorizing');
+    assert(graph && epoch && identity && graphReviewed === graph.digest, 'review every rebuilt exit and fixed refund before preauthorizing');
     assert(presignedLocalChecks(status, expected().localState).rosterCompared, 'compare and pin the roster locally first');
     // A fresh device may review an already-funded graph without emitting another preauthorization.
     // Actual wallet export and every NEW preauthorization still recheck all funding inputs.
     if (!epoch.preauthorizations.some(item => item.participantId === participantId)) await checkFundingCoins();
-    const preauthorizations = await withUnlockedPresignedParticipant({ credentialId, expectedVaultId: status.vaultId,
+    const contributions = await withUnlockedPresignedParticipant({ credentialId, expectedVaultId: status.vaultId,
       expectedParticipant: identity, action: unlocked => {
         remember({ kind: 'input-committed', epochId: epoch.epochId, rosterDigest: graph.rosterDigest,
           input: graph.funding.inputs.find(input => input.participantId === participantId)! });
         remember(presignedLocalGraphRecord('graph-reviewed', status));
         return epoch.preauthorizations.some(item => item.participantId === participantId) ? null
-          : createPreauthorizations({ graph, participantId, privateKeys: unlocked.keys.soloPrivateKeys, approvedGraphDigest: graph.digest });
+          : { preauthorizations: createPreauthorizations({ graph, participantId, privateKeys: unlocked.keys.soloPrivateKeys,
+              approvedGraphDigest: graph.digest }),
+            ...(v3 ? { recoveryAuthorizations: createRecoveryAuthorizations({ graph, participantId,
+              privateKeys: unlocked.keys.recoveryAuthorizationPrivateKeys!, approvedGraphDigest: graph.digest }) } : {}) };
       } });
-    if (preauthorizations) accept(await approvePresignedCeremonyAction(credentialId, { ...BASE, kind: 'contribute-preauthorizations',
-      epochId: epoch.epochId, graphDigest: graph.digest, preauthorizations }));
-    setMessage('This browser pinned the exact graph and your input/change. Your three leaver signatures remain unreleased.');
+    if (contributions) accept(await approvePresignedCeremonyAction(credentialId, { ...BASE, kind: 'contribute-preauthorizations',
+      epochId: epoch.epochId, graphDigest: graph.digest, ...contributions }));
+    setMessage(v3 ? 'Your four counterparty exits and three exact refunds are authorized. Your own exit and recovery-trigger signatures remain unreleased.'
+      : 'This browser pinned the exact graph and your input/change. Your three leaver signatures remain unreleased.');
   }
   async function exportBackup() {
     const publicKit = requireKit();
@@ -201,7 +213,7 @@ export function PresignedCeremony({ initialStatus, passkeys, expectedIdentity, c
   }
   async function exportRecoveryUtility() {
     const publicKit = requireKit();
-    const utility = await downloadVerifiedPresignedUtility();
+    const utility = await downloadVerifiedPresignedUtility(status.protocol);
     download('presigned-recovery.html', utility.bytes);
     download('presigned-independent-recovery-record.json', JSON.stringify({ ...BASE,
       format: 'presigned-independent-recovery-record-v1', binding: presignedBackupBinding(publicKit, participantId),
@@ -226,7 +238,7 @@ export function PresignedCeremony({ initialStatus, passkeys, expectedIdentity, c
       assert(offlineSecret.length === 32 && toBase64url(offlineSecret) === restoreSecret.trim(), 'recovery key must be the exact 43-character random key');
       const proof = await verifyPresignedOfflineBackupRestoration({ envelope: parsePresignedOfflineBackup(raw), offlineSecret,
         expectedBinding: presignedBackupBinding(publicKit, participantId) });
-      const backupFileDigest = commitmentDigest('vault/presigned-graph-v2/offline-file', { serialized: raw });
+      const backupFileDigest = commitmentDigest(presignedDomain(publicKit.protocol, 'offline-file'), { serialized: raw });
       remember(presignedLocallyRestoredRecord({ publicKit, participantId, proof, backupKind: 'offline',
         credentialId: null, backupFileDigest }));
       setRestoreSecret('');
@@ -237,7 +249,9 @@ export function PresignedCeremony({ initialStatus, passkeys, expectedIdentity, c
         graphDigest: publicKit.graph.digest, backupKind: 'offline', restoreCredentialId: null,
         backupFileDigest, proof }));
       }
-      setMessage('Saved offline file independently reopened and all three owner exits verified locally. Only verification digests were sent.');
+      setMessage(v3
+        ? 'Saved offline file reopened; all three owner exits and recovery trigger keys verified locally. Only public verification proofs were sent, never usable recovery trigger signatures.'
+        : 'Saved offline file independently reopened and all three owner exits verified locally. Only verification digests were sent.');
     } finally { offlineSecret.fill(0); setRestoreSecret(''); }
   }
   async function restorePasskey(id: string) {
@@ -253,10 +267,15 @@ export function PresignedCeremony({ initialStatus, passkeys, expectedIdentity, c
     setMessage('This exact passkey restored your identity and completed all three owner exits locally.');
   }
   async function exportFunding() {
+    setOperation('funding-export-readiness');
     assert(verifyPresignedCeremonyView(status, expected()).walletSigningReady, 'complete local offline and two-passkey restores before wallet signing');
+    setOperation('funding-export-chain-check');
     await checkFundingCoins();
+    setOperation('funding-export-key-restoration');
     await verifyLocalKit();
+    setOperation('funding-export-wallet-intent');
     await beginWalletSigning();
+    setOperation('funding-export-download');
     download(`vault-funding-${epoch!.epochId}.psbt.txt`, graph!.fundingPsbtBase64);
     setMessage('Verified funding PSBT exported. Sign only your input in your external wallet, without changing any transaction field.');
   }
@@ -270,17 +289,24 @@ export function PresignedCeremony({ initialStatus, passkeys, expectedIdentity, c
     }
   }
   async function submitWallet() {
+    setOperation('funding-signature-readiness');
     assert(graph && epoch && verifyPresignedCeremonyView(status, expected()).walletSigningReady,
       'wallet signatures cannot be released before every participant backup');
+    setOperation('funding-signature-chain-check');
     await checkFundingCoins();
+    setOperation('funding-signature-key-restoration');
     await verifyLocalKit();
+    setOperation('funding-signature-wallet-intent');
     await beginWalletSigning();
+    setOperation('funding-signature-psbt-verification');
     const signature = authorizePresignedFundingSignedPsbt({ graph, participantId,
       signedPsbtBase64: signedPsbt.trim(), approvedGraphDigest: graph.digest });
     setMessage('Sending the exact wallet signature now. Cancelling the following passkey prompt cannot recall a signature already sent.');
+    setOperation('funding-signature-passkey-approval');
     accept(await approvePresignedCeremonyAction(credentialId, { ...BASE, kind: 'submit-funding-signature',
       epochId: epoch.epochId, graphDigest: graph.digest, signature }));
     setSignedPsbt('');
+    setOperation('funding-signature-completed');
     setMessage('Your exact wallet signature was released. This epoch can no longer be revoked by restarting or deleting coordinator data.');
   }
   async function approveFunding() {
@@ -301,13 +327,27 @@ export function PresignedCeremony({ initialStatus, passkeys, expectedIdentity, c
     setMessage('Restart vote recorded. A new epoch requires unanimous approval of this exact state and reason; history is retained.');
   }
 
-  return <section className="setup-card" data-testid="presigned-ceremony">
-    <p className="eyebrow">Presigned graph v2 · {status.settings.network} · {status.phase}</p>
+  return <section className="setup-card" data-testid="presigned-ceremony" data-operation={operation} data-operation-outcome={operationOutcome}>
+    {working && operation.startsWith('funding-') && <p>Current step: {operation.replaceAll('-', ' ')}.</p>}
+    <p className="eyebrow">Presigned graph v{status.version} · {status.settings.network} · {status.phase}</p>
     <h2>Agree, preauthorize, back up, then fund</h2>
     <p>No online policy signer is involved. Each leaver retains the final signature for their own exit.</p>
-    <p>Each deposit: {economic.depositSatsPerParticipant.toLocaleString()} sats. First payout: {economic.firstWithdrawalSats.toLocaleString()}.
-      Second: {economic.secondWithdrawalSats.toLocaleString()}. Final remainder: {finalPayout.toLocaleString()} sats, before its optional sweep.
-      Recovery delay: {economic.recoveryDelayBlocks} blocks. Additional sponsored fees are separate.</p>
+    <p data-testid="presigned-payouts">Each deposit: {economic.depositSatsPerParticipant.toLocaleString()} sats.
+      First payout: {economic.firstWithdrawalSats.toLocaleString()}. Second: {economic.secondWithdrawalSats.toLocaleString()}.
+      Last: {(finalPayout - economic.finalSweepFeeSats).toLocaleString()} sats after the configured final sweep
+      ({finalPayout.toLocaleString()} sats before that sweep).</p>
+    <p>{economic.payoutSchedule === LAST_SURVIVOR_PAYOUT_SCHEDULE
+      ? 'Last-survivor schedule: normal solo payouts increase first → second → last after the configured base exit and final-sweep fees. The distributable pool is split 19:20:21, with rounding left to the last participant.'
+      : 'Original schedule: this existing vault retains its committed payouts; the last participant is not guaranteed the largest payout.'}
+      {' '}Funding fees and optional fee boosts are additional costs; actual net proceeds may differ.</p>
+    <p>Recovery delay: {economic.recoveryDelayBlocks} blocks from confirmation of each round’s coin.</p>
+    {v3 ? <p data-testid="fixed-recovery-policy">After that delay, any two of three—or either survivor in a pair—can release only
+      the exact pre-approved refunds to every current participant’s committed payout address. They cannot redirect another person’s refund
+      or increase the parent fee. Recovery ends the round with equal refunds, so the last-person bonus applies only to the normal solo sequence.</p>
+      : <p>
+      After that delay, any two of three—or either one of two remaining participants—can spend the entire remaining vault to any address.
+      The app proposes equal refunds to current participants, but the Bitcoin script does not enforce those amounts or destinations.
+      Recovery bypasses the normal solo payout schedule.</p>}
     <p className="muted">Mainnet activation is separately gated. Physical-device passkey checks remain deferred to onboarding.</p>
     <label>Approval passkey<select value={credentialId} disabled={disabled} onChange={event => setCredentialId(event.target.value)}>
       {passkeys.map(key => <option value={key.id} key={key.id}>{key.name}</option>)}
@@ -320,7 +360,7 @@ export function PresignedCeremony({ initialStatus, passkeys, expectedIdentity, c
 
     <details><summary>Immutable settings and personal identity</summary><pre>{JSON.stringify({
       settingsDigest: status.settingsDigest, settings: status.settings, expectedIdentity }, null, 2)}</pre></details>
-    {!identity && <button type="button" disabled={disabled} onClick={() => void run(register)}>Register my v2 public keys</button>}
+    {!identity && <button type="button" disabled={disabled} onClick={() => void run(register)}>Register my v{status.version} public keys</button>}
     {status.roster && <section>
       <h3>1. Confirm the roster together</h3><p>Compare this exact digest with both friends through a separate trusted channel.</p>
       <code>{status.rosterDigest}</code><p>{status.rosterApprovals.length}/3 approvals</p>
@@ -350,23 +390,38 @@ export function PresignedCeremony({ initialStatus, passkeys, expectedIdentity, c
           PARTICIPANT_IDS.indexOf(participantId))} sats · destination script <code>{input.scriptPubKeyHex}</code></p>)}
     </section>}
     {graph && epoch && <section>
-      <h3>3. Verify all nine exits</h3><p>Graph digest: <code>{graph.digest}</code></p>
+      <h3>3. Verify all nine exits{v3 ? ' and four fixed refunds' : ''}</h3><p>Graph digest: <code>{graph.digest}</code></p>
       <p>Stable funding txid: <code>{graph.fundingTxid}</code></p>
       <p>Your exact wallet input and change commitment:</p><pre>{JSON.stringify(graph.funding.inputs.find(input => input.participantId === participantId), null, 2)}</pre>
       <table><thead><tr><th>Exit order</th><th>Leaver</th><th>Base fee, sats</th><th>Successor</th></tr></thead>
         <tbody>{graph.exits.map(exit => <tr key={exit.id}><td>{exit.id}</td><td>{exit.leaver}</td><td>{exit.feeSats}</td>
           <td>{exit.finalParticipant ? `${exit.finalParticipant} final payout` : 'remaining pair vault'}</td></tr>)}</tbody></table>
       <p>{epoch.preauthorizations.length}/12 verified counterparty preauthorizations</p>
+      {v3 && <>
+        <p data-testid="recovery-authorization-count">{epoch.recoveryAuthorizations?.length ?? 0}/9 verified fixed-refund authorizations</p>
+        <table data-testid="fixed-refund-previews"><thead><tr><th>Current members</th><th>Exact refunds</th><th>Fixed fee, sats</th></tr></thead>
+          <tbody>{graph.recoveries!.map(refund => {
+            const transaction = bitcoin.Transaction.fromHex(refund.unsignedTxHex);
+            return <tr key={refund.id}><td>{refund.recipientIds.join(', ')}</td><td>{refund.recipientIds.map((id, index) => {
+              const output = transaction.outs[index]!;
+              return <p key={id}>{id}: {output.value.toString()} sats to <code>{bitcoin.address.fromOutputScript(output.script,
+                networkParameters(status.settings.network))}</code></p>;
+            })}</td><td>{refund.feeSats}</td></tr>;
+          })}</tbody></table>
+        <p>These are your committed payout-key addresses, not editable recovery destinations. Keep the portable key backup: other participants
+          cannot redirect a refund if its owner permanently loses their payout key.</p>
+      </>}
       <details><summary>Entire locally rebuilt graph</summary><pre>{JSON.stringify(graph, null, 2)}</pre></details>
       {(!localChecks.graphReviewed || !epoch.preauthorizations.some(item => item.participantId === participantId)) && <>
         <label><input type="checkbox" checked={graphReviewed === graph.digest} disabled={disabled}
           onChange={event => setGraphReviewed(event.target.checked ? graph.digest : null)} />
-          I reviewed the exact inputs, payouts, fees and successor vaults for every exit order.</label>
+          I reviewed the exact inputs, payouts, fees and successor vaults for every exit order{v3 ? ', including every fixed refund address and amount' : ''}.</label>
         <button disabled={disabled || !localChecks.rosterCompared || graphReviewed !== graph.digest} type="button" onClick={() => void run(preauthorize)}>
-          {epoch.preauthorizations.some(item => item.participantId === participantId) ? 'Pin my graph review on this device' : 'Pin graph and preauthorize four counterparty exits'}</button>
+          {epoch.preauthorizations.some(item => item.participantId === participantId) ? 'Pin my graph review on this device'
+            : v3 ? 'Pin graph and authorize four exits plus three refunds' : 'Pin graph and preauthorize four counterparty exits'}</button>
       </>}
     </section>}
-    {epoch?.preauthorizations.length === 12 && <section>
+    {epoch?.preauthorizations.length === 12 && (!v3 || epoch.recoveryAuthorizations?.length === 9) && <section>
       <h3>4. Restore complete backups before funding</h3>
       <p>The file below contains an authenticated encrypted participant secret and all public exit/recovery material. Its separate random key works without this service or its passkey origin.</p>
       <button disabled={disabled || !localChecks.graphReviewed} type="button" onClick={() => void run(exportRecoveryUtility)}>Save offline recovery utility and public commitments</button>

@@ -4,7 +4,7 @@
 <meta http-equiv="Content-Security-Policy" content="__CSP__">
 <title>Presigned vault · Offline recovery</title><style>__STYLE__</style></head>
 <body><main>
-<p class="eyebrow">Presigned graph v2 · local-file utility</p>
+<p class="eyebrow">Presigned graph v2 / v3 · local-file utility</p>
 <h1>Recover without the service</h1>
 <p>This file contains its own cryptographic code. It makes no network requests and never broadcasts. Open your verified saved copy as a local file on a trusted computer, ideally disconnected from the network.</p>
 <p class="warning">Keep the encrypted backup and recovery key separate. Do not send either to a helper. Anyone with both can act as you. A compromised browser, operating system, or utility file can steal keys; compare this file’s SHA-256 with the independently saved release record.</p>
@@ -71,6 +71,24 @@
 <button id="import-fee-wallet">Verify wallet signatures</button>
 <button id="finalize-fee">Finalize and save signed parent + fee child</button>
 <p>For an unconfirmed parent, inspect both transactions and submit the exact two-transaction package with your own Core. If the parent is already confirmed, submit the child alone. Relay and mining are not guaranteed. Never substitute a newly built parent for the committed one.</p>
+</section>
+<section id="cashouts" hidden><h2>5. Withdraw a confirmed payout to your wallet</h2>
+<p>This spends only a confirmed coin already paid to your personal payout address. It cannot spend the shared vault, redirect a fixed recovery, or spend another participant’s payout. The additional withdrawal fee comes from your own coin and is separate from the game’s base fees.</p>
+<p class="warning">This offline file cannot check the live chain. Independently verify the exact parent transaction, output, active block, confirmations and current unspent status using your own Bitcoin Core. Import its coin observations separately. A report is not a proof and may be stale.</p>
+<label>Public coin observations JSON for your confirmed payout<input id="cashout-observations" type="file" accept="application/json,.json"></label>
+<label>Exact confirmed parent transaction hex<textarea id="cashout-parent" maxlength="800000" spellcheck="false"></textarea></label>
+<label>Your payout output number<input id="cashout-vout" type="number" min="0" value="0"></label>
+<label>Your external wallet receiving address<input id="cashout-address" maxlength="100" autocomplete="off" spellcheck="false"></label>
+<label>Exact additional withdrawal fee, sats<input id="cashout-fee" type="number" min="1" value="300"></label>
+<label>Your maximum withdrawal fee, sats<input id="cashout-fee-cap" type="number" min="1" value="2000"></label>
+<button id="cashout-build">Rebuild and review my withdrawal</button>
+<pre id="cashout-review">No cash-out draft.</pre>
+<label><input id="cashout-reviewed" type="checkbox">I independently checked that this is my confirmed, unspent coin, verified the receiving address on my own wallet, and approve this exact additional fee.</label>
+<button id="cashout-sign">Sign my withdrawal locally</button>
+<pre id="cashout-result">No signed cash-out.</pre>
+<button id="cashout-save-hex">Save raw signed withdrawal hex</button>
+<button id="cashout-save-json">Save verified public withdrawal JSON</button>
+<p>Nothing is broadcast here. Verify the downloaded transaction and recheck the coin with your own Core before broadcasting. A signed withdrawal can be broadcast by anyone who receives it.</p>
 </section>
 <footer>No service login, passkey origin, analytics, remote code, storage, or broadcaster is used by this utility. Mainnet spending remains your separate decision. Physical-device passkey checks remain deferred to onboarding.</footer>
 </main><script>__SCRIPT__</script></body></html>

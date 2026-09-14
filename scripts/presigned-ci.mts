@@ -7,15 +7,20 @@ import { acceptanceJsonRecords, parseAcceptanceJson, readPrivateAcceptanceFile,
 import { validateRetainedImageEvidence } from './lib/presigned-image-evidence.js';
 import { presignedSourceDigest } from './presigned-build-identity.mjs';
 import { packPresignedEvidence } from './lib/presigned-evidence-archive.js';
+import { isPresignedProtocol, PRESIGNED_PROTOCOL_V3, type PresignedProtocol } from '../src/presigned/types.js';
+import { presignedVersion } from '../src/presigned/validation.js';
 
 process.umask(0o077);
 const mode = process.argv[2];
+const selectedProtocol = process.env.PRESIGNED_ACCEPTANCE_PROTOCOL ?? PRESIGNED_PROTOCOL_V3;
+assert(isPresignedProtocol(selectedProtocol), 'unknown CI acceptance protocol');
+const protocol: PresignedProtocol = selectedProtocol;
 assert(process.env.GITHUB_ACTIONS === 'true' && ['local', 'signet', 'mainnet'].includes(mode ?? ''),
   'usage on a disposable GitHub runner: tsx scripts/presigned-ci.mts local|signet|mainnet');
 const sourceDigest = presignedSourceDigest();
 const target = mode === 'local' ? 'presigned-acceptance' : 'presigned-container-acceptance';
 const child = spawn(process.execPath, ['--import', 'tsx', `scripts/${target}.mts`, mode!], {
-  stdio: ['ignore', 'pipe', 'pipe'], env: process.env,
+  stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PRESIGNED_ACCEPTANCE_PROTOCOL: protocol },
 });
 let output = ''; let length = 0;
 // Parent runners emit stage names and bounded failure summaries, not child logs,
@@ -35,10 +40,10 @@ assert(result && typeof result.evidence === 'string');
 const directory = result.evidence;
 if (mode === 'local') {
   assert(/^\/tmp\/btc-presigned-acceptance\.[A-Za-z0-9]+$/u.test(directory));
-  validateLocalAcceptanceRun(directory, sourceDigest, 'local');
+  validateLocalAcceptanceRun(directory, sourceDigest, 'local', protocol);
 } else {
   assert(/^\/tmp\/btc-presigned-image\.[A-Za-z0-9]+$/u.test(directory));
-  await validateRetainedImageEvidence(directory, sourceDigest, mode as 'signet' | 'mainnet');
+  await validateRetainedImageEvidence(directory, sourceDigest, mode as 'signet' | 'mainnet', protocol);
 }
 const filename = mode === 'local' ? 'run.json' : 'image-acceptance.json';
 const receipt = parseAcceptanceJson(readPrivateAcceptanceFile(`${directory}/${filename}`));
@@ -47,12 +52,12 @@ console.log(JSON.stringify({ stage: 'local-only-archive-round-trip', mode }));
 const archiveDirectory = mkdtempSync('/tmp/btc-presigned-archive-output.');
 try {
   const archive = await packPresignedEvidence(mode === 'local' ? 'local' : mode === 'signet' ? 'signet-image' : 'mainnet-image',
-    directory, `${archiveDirectory}/presigned-v2-${mode}.tar.gz`);
+    directory, `${archiveDirectory}/presigned-v${presignedVersion(protocol)}-${mode}.tar.gz`, protocol);
   console.log(JSON.stringify({ stage: 'verified-local-only-archive', ...archive }));
 } catch {
   throw new Error('local evidence archive round-trip failed; no archive was uploaded and raw errors are omitted');
 }
-console.log(JSON.stringify({ passed: true, mode, sourceDigest, nodeVersion: readFileSync('.node-version', 'utf8').trim(),
+console.log(JSON.stringify({ passed: true, mode, protocol, sourceDigest, nodeVersion: readFileSync('.node-version', 'utf8').trim(),
   archiveRoundTripVerified: true, archivesRetainedAfterRunnerExit: false,
   artifactUploads: false, caches: false, registryPush: false, deployment: false,
   completeRetainedReleaseDossier: false, realDefaultSignetVerified: false, fundingAuthorized: false }));

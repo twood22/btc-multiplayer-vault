@@ -1,4 +1,4 @@
-import { LEGACY_PROTOCOL, PRESIGNED_PROTOCOL } from '../../../src/presigned/types.js';
+import { LEGACY_PROTOCOL, PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3 } from '../../../src/presigned/types.js';
 import { createParticipantSecretEnvelope, type KeyEnvelope } from './key-envelope.js';
 import { deriveParticipantIdentity, type ParticipantIdentity } from './participant-identity.js';
 
@@ -25,7 +25,7 @@ export async function createParticipantSetupMaterial(
 /** The discriminator comes from authenticated durable vault membership, not an
  * invitation URL, inferred default, or caller-selected funding authorization. */
 export function participantSetupReadiness(protocol: unknown, addressLabel: string): string {
-  if (protocol === PRESIGNED_PROTOCOL) {
+  if (protocol === PRESIGNED_PROTOCOL || protocol === PRESIGNED_PROTOCOL_V3) {
     return 'Funding remains disabled until all three friends restore their complete vault kit with both distinct passkeys and their saved offline recovery kit, independently verify the same graph and exact payouts, and the presigned ' + addressLabel + ' release checks pass.';
   }
   if (protocol === LEGACY_PROTOCOL) {

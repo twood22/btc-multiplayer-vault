@@ -4,7 +4,7 @@ import { loadEnvFile } from 'node:process';
 import postgres from 'postgres';
 import { assertReviewedNodeRuntime } from '../../src/runtime-version';
 import { assertDatabaseUrl } from '../lib/database-config';
-import { LEGACY_PROTOCOL, PRESIGNED_PROTOCOL } from '../../src/presigned/types';
+import { LEGACY_PROTOCOL, PRESIGNED_PROTOCOL_V3, FIXED_RECOVERY_POLICY, isPresignedProtocol } from '../../src/presigned/types';
 
 assertReviewedNodeRuntime();
 if (existsSync('.env.local')) loadEnvFile('.env.local');
@@ -12,9 +12,10 @@ if (existsSync('.env.local')) loadEnvFile('.env.local');
 // evaluating; changing environment after static imports would freeze defaults.
 const { webConfig, fundingFeeSats } = await import('../lib/server/config');
 const { newPresignedCeremony } = await import('../../src/presigned/ceremony');
-const { commitmentDigest } = await import('../../src/presigned/validation');
+const { commitmentDigest, presignedDomain } = await import('../../src/presigned/validation');
 const { BITCOIN_NETWORK_NAME, BITCOIN_GENESIS_HASH } = await import('../../src/network');
 const { VAULT_ECONOMICS } = await import('../../src/config');
+const { createLastSurvivorEconomics } = await import('../../src/presigned/economics');
 const args = parseArgs(process.argv.slice(2));
 const participantId = required(args, 'participant');
 if (!['alice', 'bob', 'carol'].includes(participantId)) {
@@ -36,14 +37,15 @@ try {
     let vaultId = args['vault-id'];
     let protocol = args.protocol;
     if (!vaultId) {
-      if (![LEGACY_PROTOCOL, PRESIGNED_PROTOCOL].includes(protocol as typeof LEGACY_PROTOCOL)) {
-        throw new Error('--protocol must explicitly name sigbash-v1 or presigned-graph-v2 for a new vault');
+      protocol ??= PRESIGNED_PROTOCOL_V3;
+      if (protocol !== LEGACY_PROTOCOL && !isPresignedProtocol(protocol)) {
+        throw new Error('--protocol must name sigbash-v1, presigned-graph-v2 or presigned-graph-v3');
       }
       const rows = await tx<Array<{ id: string }>>`
         INSERT INTO vaults (name,protocol) VALUES (${required(args, 'vault-name')},${protocol!}) RETURNING id
       `;
       vaultId = rows[0]!.id;
-      if (protocol === PRESIGNED_PROTOCOL) {
+      if (isPresignedProtocol(protocol)) {
         const maxChildFeeSats = Number(args['max-child-fee-sats']);
         if (!Number.isSafeInteger(maxChildFeeSats) || maxChildFeeSats < 1 || maxChildFeeSats > 100_000_000) {
           throw new Error('new presigned vault requires explicit --max-child-fee-sats from 1 to 100000000');
@@ -52,18 +54,20 @@ try {
           throw new Error('new presigned vault requires explicit VAULT_DEPOSIT_SATS and RECOVERY_DELAY_BLOCKS');
         }
         const state = newPresignedCeremony(vaultId, { network: BITCOIN_NETWORK_NAME, genesisHash: BITCOIN_GENESIS_HASH,
-          economics: VAULT_ECONOMICS, feePolicy: { kind: 'confirmed-truc-payout-cpfp-v1', maxChildFeeSats },
+          ...(protocol === PRESIGNED_PROTOCOL_V3 ? { protocol, recoveryPolicy: FIXED_RECOVERY_POLICY } : {}),
+          economics: createLastSurvivorEconomics(VAULT_ECONOMICS),
+          feePolicy: { kind: 'confirmed-truc-payout-cpfp-v1', maxChildFeeSats },
           fundingFeeSats: fundingFeeSats() });
-        await tx`INSERT INTO presigned_ceremonies(vault_id,settings_json,settings_digest,state_json,state_digest)
-          VALUES (${vaultId}::uuid,${tx.json(state.settings as never)},${Buffer.from(state.settingsDigest,'hex')},
-            ${tx.json(state as never)},${Buffer.from(commitmentDigest('vault/presigned-graph-v2/ceremony/state',state),'hex')})`;
+        await tx`INSERT INTO presigned_ceremonies(vault_id,protocol,settings_json,settings_digest,state_json,state_digest)
+          VALUES (${vaultId}::uuid,${state.protocol},${tx.json(state.settings as never)},${Buffer.from(state.settingsDigest,'hex')},
+            ${tx.json(state as never)},${Buffer.from(commitmentDigest(presignedDomain(state.protocol,'ceremony/state'),state),'hex')})`;
       }
     } else {
       const rows = await tx<Array<{ protocol: string; status: string }>>`SELECT protocol,status FROM vaults WHERE id=${vaultId}::uuid FOR UPDATE`;
       if (rows.length !== 1 || rows[0]!.status !== 'setup') throw new Error('invites require an existing setup vault');
       if (protocol && protocol !== rows[0]!.protocol) throw new Error('requested protocol differs from immutable existing vault');
       protocol = rows[0]!.protocol;
-      if (protocol === PRESIGNED_PROTOCOL && !(await tx`SELECT 1 FROM presigned_ceremonies WHERE vault_id=${vaultId}::uuid`).length) {
+      if (isPresignedProtocol(protocol) && !(await tx`SELECT 1 FROM presigned_ceremonies WHERE vault_id=${vaultId}::uuid AND protocol=${protocol}`).length) {
         throw new Error('existing presigned vault lacks immutable settings; do not infer them');
       }
     }

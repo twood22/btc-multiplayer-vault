@@ -6,7 +6,7 @@ import { validatePresignedGraph } from './graph.js';
 import { authorizePresignedExitTransaction } from './signing.js';
 import { payoutScript } from './roster.js';
 import { nativeWalletWitnessFromPsbt, verifyNativeWalletWitness } from './wallet.js';
-import { PRESIGNED_PROTOCOL, type PresignedGraph, type PresignedParticipantKeys } from './types.js';
+import { type PresignedGraph, type PresignedParticipantKeys } from './types.js';
 import { assert, commitmentDigest, exactKeys, hexBytes, networkParameters, safeInteger, supportedWalletScript } from './validation.js';
 
 const MONEY_MAX = 2_100_000_000_000_000;
@@ -60,8 +60,8 @@ export interface PresignedFeeRequest {
 }
 
 export interface PresignedFeeChild {
-  version: 2;
-  protocol: typeof PRESIGNED_PROTOCOL;
+  version: PresignedGraph['version'];
+  protocol: PresignedGraph['protocol'];
   kind: typeof FEE_KIND;
   graphDigest: string;
   exitId: string;
@@ -105,6 +105,7 @@ export function buildPresignedFeeChild(request: PresignedFeeRequest): PresignedF
   assert(supportedWalletScript(sponsor.scriptPubKeyHex), 'sponsor must be native P2WPKH or key-path P2TR');
   assert(!graph.rounds.some(round => round.outputScriptHex === sponsor.scriptPubKeyHex), 'a successor vault cannot sponsor fees');
   assert(sponsor.txid !== graph.fundingTxid && !graph.exits.some(item => item.txid === sponsor.txid), 'sponsor must be outside the funding and exit graph');
+  assert(!graph.recoveries?.some(item => item.txid === sponsor.txid), 'fixed recovery refunds cannot sponsor another participant fee');
   assert(sponsor.txid !== parent.txid || sponsor.vout !== 0, 'sponsor repeats the leaver payout');
   safeInteger(payoutSats + sponsor.valueSats, 1, MONEY_MAX, 'child input total');
 
@@ -147,11 +148,11 @@ export function buildPresignedFeeChild(request: PresignedFeeRequest): PresignedF
   preview.setWitness(1, sponsor.scriptPubKeyHex.startsWith('0014') ? [Buffer.alloc(73), Buffer.alloc(33)] : [Buffer.alloc(65)]);
   assert(preview.virtualSize() <= TRUC_MAX_CHILD_VSIZE, 'fee child exceeds the TRUC descendant size limit');
   const approvalDigest = commitmentDigest('btc-multiplayer-vault/presigned-fee-approval/v1', {
-    protocol: PRESIGNED_PROTOCOL, kind: FEE_KIND, graphDigest: graph.digest, exitId: exit.id,
+    protocol: graph.protocol, kind: FEE_KIND, graphDigest: graph.digest, exitId: exit.id,
     parentTransactionHex: request.parentTransactionHex, unsignedTxHex: tx.toHex(),
     roundInputObservation: request.roundInputObservation, sponsorInput: sponsor, approval,
   });
-  return { version: 2, protocol: PRESIGNED_PROTOCOL, kind: FEE_KIND, graphDigest: graph.digest,
+  return { version: graph.version, protocol: graph.protocol, kind: FEE_KIND, graphDigest: graph.digest,
     exitId: exit.id, approvalDigest, psbtBase64: psbt.toBase64(), unsignedTxid: tx.getId(),
     parentTxid: parent.txid, parentFeeSats: parent.feeSats, parentVsize: parent.vsize,
     payoutSats, sponsorChangeSats, childFeeSats: approval.childFeeSats, maximumChildVsize: preview.virtualSize() };
