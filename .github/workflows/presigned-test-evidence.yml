@@ -6,6 +6,12 @@ on:
     branches: [codex/presigned-v3-test-evidence]
   workflow_dispatch:
     inputs:
+      operation:
+        description: Evidence operation
+        type: choice
+        required: true
+        default: images
+        options: [images, deployment]
       network:
         description: Exact image profile to verify
         type: choice
@@ -16,12 +22,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: presigned-v3-test-evidence-${{ github.ref }}-${{ github.event_name }}-${{ inputs.network || 'both' }}
+  group: presigned-v3-test-evidence-${{ github.ref }}-${{ github.event_name }}-${{ inputs.operation || 'images' }}-${{ inputs.network || 'both' }}
   cancel-in-progress: false
 
 jobs:
   retain:
-    if: github.event.repository.private == false && github.ref == 'refs/heads/codex/presigned-v3-test-evidence'
+    if: github.event.repository.private == false && github.repository == 'twood22/btc-multiplayer-vault' && github.ref == 'refs/heads/codex/presigned-v3-test-evidence' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'images'))
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     # Used only by the final, draft-only upload step. No credential is exported
@@ -87,3 +93,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: node ../scripts/presigned-ci-retain.mjs upload '${{ matrix.network }}' '${{ steps.evidence.outputs.directory }}'
+
+  deployment:
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'deployment' && github.event.repository.private == false && github.repository == 'twood22/btc-multiplayer-vault' && github.ref == 'refs/heads/codex/presigned-v3-test-evidence'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/presigned-v3-deployment-evidence.yml

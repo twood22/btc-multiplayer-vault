@@ -1,0 +1,82 @@
+name: Presigned V3 post-assembly deployment test evidence
+
+# Execution remains manual only, on the separately reviewed tooling branch.
+# The registered image workflow may call this same-commit workflow from its
+# manual deployment operation without any default-branch tooling publication.
+# Reusable workflows retain the caller's github event/repository/ref context;
+# the prove guard below therefore also refuses push/scheduled/foreign callers.
+# No workflow inputs, inherited secrets or alternate artifact pins are accepted.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: presigned-v3-post-assembly-deployment
+  cancel-in-progress: false
+
+jobs:
+  prove:
+    if: github.event_name == 'workflow_dispatch' && github.event.repository.private == false && github.repository == 'twood22/btc-multiplayer-vault' && github.ref == 'refs/heads/codex/presigned-v3-test-evidence'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      PRESIGNED_ACCEPTANCE_PROTOCOL: presigned-graph-v3
+      PRESIGNED_BUILD_PROTOCOL: presigned-graph-v3
+    defaults:
+      run:
+        working-directory: candidate
+        shell: bash
+    steps:
+      - name: Check out separately reviewed tooling without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Refuse incomplete final receipt and image pins
+        id: pins
+        working-directory: .
+        run: node scripts/presigned-deployment-ci.mjs check-pins
+
+      - name: Check out the immutable already-tested candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ steps.pins.outputs.candidate }}
+          path: candidate
+          persist-credentials: false
+
+      - name: Select the candidate's reviewed Node runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: candidate/.node-version
+
+      - name: Test synthetic archive and metadata refusal boundaries
+        run: |
+          python3 ../scripts/test-presigned-public-evidence.py
+          python3 ../scripts/test-presigned-deployment-public-evidence.py
+
+      - name: Install locked candidate dependencies without publication credentials
+        run: npm ci
+
+      - name: Prepare checksum-pinned Core and existing PostgreSQL 16
+        run: bash scripts/setup-presigned-ci.sh
+
+      - name: Download only the exact preapproved draft inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node ../scripts/presigned-deployment-ci.mjs download
+
+      - name: Validate, load and exercise the retained image without rebuilding
+        run: node --import tsx ../scripts/presigned-deployment-ci.mjs run
+
+      - name: Upload only validated public proof and transport metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node ../scripts/presigned-deployment-ci.mjs upload
