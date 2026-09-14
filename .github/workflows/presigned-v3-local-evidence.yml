@@ -1,0 +1,67 @@
+name: Presigned V3 complete local test evidence
+
+# Only the registered workflow's explicit manual LOCAL operation may call this.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: presigned-v3-complete-local-retention
+  cancel-in-progress: false
+
+jobs:
+  retain-local:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.operation == 'local' && github.event.repository.private == false && github.repository == 'twood22/btc-multiplayer-vault' && github.ref == 'refs/heads/codex/presigned-v3-test-evidence'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    permissions:
+      contents: write
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      PRESIGNED_ACCEPTANCE_PROTOCOL: presigned-graph-v3
+      PRESIGNED_BUILD_PROTOCOL: presigned-graph-v3
+      PYTHONDONTWRITEBYTECODE: '1'
+    defaults:
+      run:
+        working-directory: candidate
+        shell: bash
+    steps:
+      - name: Check out separately reviewed tooling without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Inspect fixed local retention pins
+        working-directory: .
+        run: node scripts/presigned-local-ci.mjs check-pins
+      - name: Check out the immutable candidate separately
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: d907d42b49acb440394d703fca1e31d4e575f577
+          path: candidate
+          persist-credentials: false
+      - name: Select the reviewed runtime without dependency caching
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: candidate/.node-version
+      - name: Install locked dependencies without publication credentials
+        run: npm ci
+      - name: Test source-grounded output and hostile archive boundaries
+        run: |
+          node --import tsx ../scripts/test-presigned-local-evidence.mjs
+          python3 ../scripts/test-presigned-local-archive.py
+      - name: Prepare checksum-pinned Core and PostgreSQL
+        run: bash scripts/setup-presigned-ci.sh
+      - name: Install Chromium on this disposable runner
+        run: npx playwright install --with-deps chromium
+      - name: Execute all 75 unchanged candidate commands and retain exact bytes
+        id: evidence
+        run: node --import tsx ../scripts/presigned-local-ci.mjs run
+      - name: Inspect all original transcript bytes and repeat candidate validation
+        run: node --import tsx ../scripts/presigned-local-public-evidence.mjs '${{ steps.evidence.outputs.directory }}'
+      - name: Upload only the three reviewed files to the existing test-only draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node ../scripts/presigned-local-ci.mjs upload '${{ steps.evidence.outputs.directory }}'

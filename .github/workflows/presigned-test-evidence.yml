@@ -11,7 +11,7 @@ on:
         type: choice
         required: true
         default: images
-        options: [images, deployment]
+        options: [images, deployment, local]
       network:
         description: Exact image profile to verify
         type: choice
@@ -99,3 +99,9 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/presigned-v3-deployment-evidence.yml
+
+  local:
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'local' && github.event.repository.private == false && github.repository == 'twood22/btc-multiplayer-vault' && github.ref == 'refs/heads/codex/presigned-v3-test-evidence'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/presigned-v3-local-evidence.yml
