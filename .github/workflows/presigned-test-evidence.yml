@@ -5,12 +5,18 @@ on:
   push:
     branches: [codex/presigned-v3-test-evidence]
   workflow_dispatch:
+    inputs:
+      network:
+        description: Exact image profile to verify
+        type: choice
+        default: both
+        options: [both, signet, mainnet]
 
 permissions:
   contents: read
 
 concurrency:
-  group: presigned-v3-test-evidence-${{ github.ref }}
+  group: presigned-v3-test-evidence-${{ github.ref }}-${{ github.event_name }}-${{ inputs.network || 'both' }}
   cancel-in-progress: false
 
 jobs:
@@ -25,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        network: [signet, mainnet]
+        network: ${{ fromJSON(inputs.network == 'mainnet' && '["mainnet"]' || inputs.network == 'signet' && '["signet"]' || '["signet","mainnet"]') }}
     name: Retain ${{ matrix.network }} test image
     env:
       NEXT_TELEMETRY_DISABLED: '1'

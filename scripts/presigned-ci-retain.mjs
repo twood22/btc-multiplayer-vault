@@ -40,6 +40,48 @@ export function assertV3ContentReview(review) {
     'Require exact V3 synthetic content review, not V2 or a release receipt');
 }
 
+/** Only fixed labels, bounded counts and source locations leave a failed
+ * browser run. Never publish raw logs, errors, DOM snapshots or credentials. */
+export function publicBrowserFailureMetadata(text) {
+  assert(typeof text === 'string' && Buffer.byteLength(text) <= 1024 * 1024);
+  const count = value => Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000;
+  const actors = ['alice', 'bob', 'carol'];
+  const roles = ['primary', 'recovery', 'unknown'];
+  const endpoints = ['/api/vault/presigned/action/options', '/api/vault/presigned/action/finish',
+    '/api/vault/presigned/status', '/api/passkeys/unlock/options', '/api/passkeys/unlock/finish',
+    '/api/passkeys/register/options', '/api/passkeys/register/verify',
+    '/api/passkeys/envelope/options', '/api/passkeys/envelope/finish'];
+  const api = values => Array.isArray(values) ? values.slice(-16).flatMap(item =>
+    item && endpoints.includes(item.endpoint) && count(item.status) && item.status <= 599
+      ? [{ endpoint: item.endpoint, status: item.status }] : []) : [];
+  const diagnostic = (actor, value) => {
+    if (!actors.includes(actor) || !value || typeof value !== 'object') return [];
+    const safe = { actor };
+    for (const key of ['pageErrors', 'crashes', 'failedScriptRequests', 'credentialCreations',
+      'credentialAssertions', 'primaryAssertions', 'recoveryAssertions']) if (count(value[key])) safe[key] = value[key];
+    for (const key of ['selectedAuthenticator', 'unlockRequestedAuthenticator'])
+      if (roles.includes(value[key])) safe[key] = value[key];
+    safe.recentApi = api(value.recentApi);
+    return [safe];
+  };
+  const records = [];
+  for (const line of text.split('\n')) {
+    if (line.length > 65_536 || !line.startsWith('{')) continue;
+    let value; try { value = JSON.parse(line); } catch { continue; }
+    if (!value || !Array.isArray(value.assertionLocations)) continue;
+    const locations = value.assertionLocations.slice(0, 8).flatMap(item => item &&
+      ['presigned-v2.spec.ts', 'presigned-v2-fixture.ts'].includes(item.file) &&
+      count(item.line) && item.line > 0 && count(item.column) && item.column > 0
+      ? [{ file: item.file, line: item.line, column: item.column }] : []);
+    const diagnostics = Array.isArray(value.browserDiagnostics)
+      ? value.browserDiagnostics.slice(0, 3).flatMap(item => item ? diagnostic(item.actor, item) : [])
+      : diagnostic(value.actor, value.diagnostics);
+    records.push({ locations, diagnostics, httpFailures: api(value.httpFailures) });
+    if (records.length === 8) break;
+  }
+  return { records };
+}
+
 async function main() {
   process.umask(0o077);
   const [operation, network, suppliedDirectory] = process.argv.slice(2);
@@ -78,9 +120,10 @@ async function main() {
     assert(!suppliedDirectory && !process.env.GH_TOKEN && !process.env.GITHUB_TOKEN && !process.env.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY,
       'Do not expose publication credentials or operational build keys to acceptance');
     const { presignedSourceDigest } = await import(pathToFileURL(resolve('scripts/presigned-build-identity.mjs')).href);
-    const { acceptanceJsonRecords } = await import(pathToFileURL(resolve('scripts/lib/presigned-acceptance-run.ts')).href);
+    const { acceptanceJsonRecords, readPrivateAcceptanceFile } = await import(pathToFileURL(resolve('scripts/lib/presigned-acceptance-run.ts')).href);
     assert.equal(presignedSourceDigest(), SOURCE);
     const before = new Set(readdirSync('/tmp').filter(name => /^btc-presigned-archive-output\.[A-Za-z0-9]+$/u.test(name)));
+    const beforeBrowsers = new Set(readdirSync('/tmp').filter(name => /^btc-presigned-browser\.[A-Za-z0-9]+$/u.test(name)));
     const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/presigned-ci.mts', network], {
       stdio: ['ignore', 'pipe', 'pipe'], env: process.env,
     });
@@ -91,6 +134,14 @@ async function main() {
       output += chunk.toString(); process.stdout.write(chunk);
     });
     const code = await new Promise((done, fail) => { child.once('error', fail); child.once('close', done); });
+    if (code !== 0) {
+      try {
+        const browsers = readdirSync('/tmp').filter(name => /^btc-presigned-browser\.[A-Za-z0-9]+$/u.test(name) && !beforeBrowsers.has(name));
+        assert.equal(browsers.length, 1);
+        const safe = publicBrowserFailureMetadata(readPrivateAcceptanceFile(join('/tmp', browsers[0], 'browser.log'), 1024 * 1024).toString());
+        console.log(JSON.stringify({ stage: 'safe-browser-failure-metadata', ...safe }));
+      } catch { console.log(JSON.stringify({ stage: 'safe-browser-failure-metadata-unavailable' })); }
+    }
     assert(code === 0 && bytes <= 2 * 1024 * 1024, 'Exact candidate acceptance failed; no upload is permitted');
     assert.equal(presignedSourceDigest(), SOURCE);
     const records = acceptanceJsonRecords(output);

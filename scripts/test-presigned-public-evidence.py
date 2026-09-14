@@ -21,6 +21,35 @@ spec.loader.exec_module(review)
 
 
 class ContentReviewTests(unittest.TestCase):
+    def test_browser_failure_metadata_never_copies_private_fields(self):
+        module = Path(__file__).with_name('presigned-ci-retain.mjs').resolve().as_uri()
+        program = '''import assert from 'node:assert/strict';
+import {publicBrowserFailureMetadata} from MODULE;
+const privateValue='synthetic-private-value-never-publish';
+const location={file:'presigned-v2.spec.ts',line:167,column:108,secret:privateValue};
+const diagnostic={actor:'alice',pageErrors:0,crashes:0,credentialAssertions:14,primaryAssertions:12,recoveryAssertions:2,
+  selectedAuthenticator:'recovery',unlockRequestedAuthenticator:'recovery',secret:privateValue,
+  recentApi:[{endpoint:'/api/passkeys/unlock/options',status:200,body:privateValue},
+    {endpoint:'/'+privateValue,status:500},{endpoint:'/api/passkeys/unlock/finish',status:privateValue}]};
+const raw=JSON.stringify({stage:privateValue,assertionLocations:[location,{file:privateValue,line:1,column:1}],
+  browserDiagnostics:[diagnostic,{actor:privateValue,pageErrors:1}],error:privateValue});
+const safe=publicBrowserFailureMetadata(raw);const serialized=JSON.stringify(safe);
+assert(!serialized.includes(privateValue));assert(!serialized.includes('secret'));assert(!serialized.includes('body'));
+assert.deepEqual(safe.records[0].locations,[{file:'presigned-v2.spec.ts',line:167,column:108}]);
+assert.equal(safe.records[0].diagnostics.length,1);assert.equal(safe.records[0].diagnostics[0].recoveryAssertions,2);
+assert.deepEqual(safe.records[0].diagnostics[0].recentApi,[{endpoint:'/api/passkeys/unlock/options',status:200}]);
+assert.equal(publicBrowserFailureMetadata(JSON.stringify({actor:'bob',assertionLocations:[location],diagnostics:diagnostic})).records[0].diagnostics[0].actor,'bob');
+assert.deepEqual(publicBrowserFailureMetadata(privateValue+'\\n{invalid\\nnull'),{records:[]});
+assert.equal(publicBrowserFailureMetadata(Array(20).fill(raw).join('\\n')).records.length,8);
+assert.deepEqual(publicBrowserFailureMetadata('{'+privateValue.repeat(6000)+'}'),{records:[]});
+assert.throws(()=>publicBrowserFailureMetadata('x'.repeat(1024*1024+1)));
+console.log(JSON.stringify({passed:true,privateValuesCopied:0}));
+'''.replace('MODULE', json.dumps(module))
+        result = subprocess.run(['node', '--input-type=module', '-'], input=program, text=True,
+                                capture_output=True, timeout=10, check=False)
+        self.assertEqual(result.returncode, 0, 'safe browser diagnostic controls failed')
+        self.assertEqual(json.loads(result.stdout), {'passed': True, 'privateValuesCopied': 0})
+
     def retention_fixture(self):
         return {'version': 1, 'protocol': 'presigned-graph-v3', 'kind': 'presigned-v3-public-test-evidence',
                 'network': 'signet', 'sourceCommit': '1' * 40, 'sourceDigest': '2' * 64, 'toolingCommit': '3' * 40,
