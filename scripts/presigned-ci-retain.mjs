@@ -6,9 +6,9 @@ import { appendFileSync, createReadStream, linkSync, lstatSync, mkdirSync, readF
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const CANDIDATE = '19d82053f47a28a386039118ff37de9eecfd5752';
-const SOURCE = '2e47819de8d02e6fa80b6e0ace45f5a6f1edc287d27a93379a6475e0b895c744';
-const TAG = 'presigned-v3-test-evidence-2e47819d-20260914';
+const CANDIDATE = 'cf52826983b839bf0e425f785979db6efc05b307';
+const SOURCE = '21af8d9d682043da26f0550d272d3eea9ad02e1b60d1fd27ded72fa40578923c';
+const TAG = 'presigned-v3-test-evidence-21af8d9d-20260914';
 const PROTOCOL = 'presigned-graph-v3';
 
 export function validateFinalPins(candidate = CANDIDATE, source = SOURCE, tag = TAG) {
@@ -50,7 +50,9 @@ export function publicBrowserFailureMetadata(text) {
   const endpoints = ['/api/vault/presigned/action/options', '/api/vault/presigned/action/finish',
     '/api/vault/presigned/status', '/api/passkeys/unlock/options', '/api/passkeys/unlock/finish',
     '/api/passkeys/register/options', '/api/passkeys/register/verify',
-    '/api/passkeys/envelope/options', '/api/passkeys/envelope/finish'];
+    '/api/passkeys/envelope/options', '/api/passkeys/envelope/finish',
+    '/api/vault/presigned/runtime/status', '/api/vault/presigned/runtime/action/options', '/api/vault/presigned/runtime/action/finish',
+    '/api/vault/presigned/cashout/status', '/api/vault/presigned/cashout/prepare', '/api/vault/presigned/cashout/broadcast'];
   const api = values => Array.isArray(values) ? values.slice(-16).flatMap(item =>
     item && endpoints.includes(item.endpoint) && count(item.status) && item.status <= 599
       ? [{ endpoint: item.endpoint, status: item.status }] : []) : [];
@@ -76,7 +78,8 @@ export function publicBrowserFailureMetadata(text) {
     const diagnostics = Array.isArray(value.browserDiagnostics)
       ? value.browserDiagnostics.slice(0, 3).flatMap(item => item ? diagnostic(item.actor, item) : [])
       : diagnostic(value.actor, value.diagnostics);
-    records.push({ locations, diagnostics, httpFailures: api(value.httpFailures) });
+    const failureKind = ['timeout', 'strict-locator', 'closed-page', 'other'].includes(value.failureKind) ? value.failureKind : 'other';
+    records.push({ locations, diagnostics, failureKind, httpFailures: api(value.httpFailures) });
     if (records.length === 8) break;
   }
   return { records };

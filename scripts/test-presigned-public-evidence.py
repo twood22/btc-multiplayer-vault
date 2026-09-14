@@ -34,6 +34,10 @@ const diagnostic={actor:'alice',pageErrors:0,crashes:0,credentialAssertions:14,p
 const raw=JSON.stringify({stage:privateValue,assertionLocations:[location,{file:privateValue,line:1,column:1}],
   browserDiagnostics:[diagnostic,{actor:privateValue,pageErrors:1}],error:privateValue});
 const safe=publicBrowserFailureMetadata(raw);const serialized=JSON.stringify(safe);
+assert.equal(safe.records[0].failureKind,'other');
+for(const failureKind of ['timeout','strict-locator','closed-page','other'])
+  assert.equal(publicBrowserFailureMetadata(JSON.stringify({assertionLocations:[location],failureKind})).records[0].failureKind,failureKind);
+assert.equal(publicBrowserFailureMetadata(JSON.stringify({assertionLocations:[location],failureKind:privateValue})).records[0].failureKind,'other');
 assert(!serialized.includes(privateValue));assert(!serialized.includes('secret'));assert(!serialized.includes('body'));
 assert.deepEqual(safe.records[0].locations,[{file:'presigned-v2.spec.ts',line:167,column:108}]);
 assert.equal(safe.records[0].diagnostics.length,1);assert.equal(safe.records[0].diagnostics[0].recoveryAssertions,2);
