@@ -22,6 +22,7 @@ MAX_DECODED = 8 * 1024 ** 3
 MAX_MEMBER = 512 * 1024 ** 2
 STAGES = ('rootless-preflight', 'build-image', 'inspect-image', 'export-oci',
           'runtime-identity', 'operator-runtime', 'browser-execution')
+PROTOCOL = 'presigned-graph-v3'
 SECRET_PATTERNS = (
     rb'-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----[ \t\r\n]+(?:[A-Za-z0-9-]{1,40}:[^\r\n]{0,200}\r?\n){0,8}[ \t\r\n]*(?:[A-Za-z0-9+/=][ \t\r\n]*){32}',
     rb'(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{60,})',
@@ -357,20 +358,55 @@ def hash_file(path):
     return digest.hexdigest()
 
 
+def validate_retention_profile(retention):
+    """Retention schema 1 is distinct from the exact Bitcoin protocol V3."""
+    fields = {'version', 'protocol', 'kind', 'network', 'sourceCommit', 'sourceDigest', 'toolingCommit',
+              'workflowRunId', 'assetName', 'archiveSha256', 'archiveBytes', 'evidenceDigest', 'files',
+              'restoredBytesRevalidated', 'syntheticOnly', 'productionUsePermitted', 'realDefaultSignetVerified',
+              'physicalPasskeysVerified', 'releaseReceiptProduced', 'fundingAuthorized'}
+    require(isinstance(retention, dict) and set(retention) == fields, 'unexpected V3 retention schema')
+    require(type(retention['version']) is int and retention['version'] == 1 and retention['protocol'] == PROTOCOL and
+            retention['kind'] == 'presigned-v3-public-test-evidence', 'only exact V3 retention evidence can be reviewed')
+    require(retention['network'] in ('signet', 'mainnet') and retention['syntheticOnly'] is True and
+            retention['restoredBytesRevalidated'] is True, 'only restored synthetic image evidence can be reviewed')
+    require(all(retention[field] is False for field in ('productionUsePermitted', 'realDefaultSignetVerified',
+            'physicalPasskeysVerified', 'releaseReceiptProduced', 'fundingAuthorized')), 'synthetic evidence limitations changed')
+    for field, length in (('sourceCommit', 40), ('sourceDigest', 64), ('toolingCommit', 40),
+                          ('archiveSha256', 64), ('evidenceDigest', 64)):
+        require(isinstance(retention[field], str) and bool(re.fullmatch('[0-9a-f]{' + str(length) + '}', retention[field])),
+                'invalid immutable retention identity')
+    require(isinstance(retention['workflowRunId'], str) and bool(re.fullmatch('[1-9][0-9]*', retention['workflowRunId'])),
+            'invalid retention workflow identity')
+    require(type(retention['files']) is int and 0 < retention['files'] <= 512 and type(retention['archiveBytes']) is int and
+            0 < retention['archiveBytes'] <= MAX_ARCHIVE, 'invalid retention archive bounds')
+    require(retention['assetName'] == f"presigned-v3-{retention['network']}-test-evidence.tar.gz", 'unexpected V3 asset name')
+    return retention['network']
+
+
+def validate_image_receipt_profile(receipt, retention):
+    require(isinstance(receipt, dict) and type(receipt.get('version')) is int and receipt['version'] == 3 and
+            receipt.get('protocol') == PROTOCOL and receipt.get('kind') == 'presigned-v3-exact-oci-execution',
+            'only an exact V3 image receipt can be reviewed')
+    require(receipt.get('sourceDigest') == retention['sourceDigest'] and receipt.get('receiptDigest') == retention['evidenceDigest'] and
+            receipt.get('network') == retention['network'], 'receipt differs from retained candidate')
+    require(receipt.get('actualRootlessContainerExecution') is True and receipt.get('readonlyRootFilesystem') is True and
+            all(receipt.get(field) is False for field in ('codeMounts', 'realDefaultSignetVerified', 'physicalPasskeysVerified',
+            'imagePublished', 'fundingAuthorized')), 'image receipt execution or synthetic-only limitations changed')
+
+
 def review(directory):
     os.umask(0o077)
     root = Path(directory)
     info = root.lstat()
     require(root.is_absolute() and root.resolve() == root and stat.S_ISDIR(info.st_mode) and
             info.st_uid == os.getuid() and not info.st_mode & 0o077, 'private canonical review directory required')
-    retained = list(root.glob('presigned-v2-*-retention.json'))
+    retained = list(root.glob('presigned-v*-*-retention.json'))
     require(len(retained) == 1, 'one exact retention record required')
     owned_file(retained[0], 1024 * 1024)
     retention = strict_json(retained[0].read_bytes())
-    network = retention['network']
-    require(network in ('signet', 'mainnet') and retention['syntheticOnly'] is True and
-            retention['productionUsePermitted'] is False, 'only test evidence can be reviewed')
-    asset = f'presigned-v2-{network}-test-evidence.tar.gz'
+    network = validate_retention_profile(retention)
+    require(retained[0].name == f'presigned-v3-{network}-retention.json', 'unexpected V3 retention filename')
+    asset = f'presigned-v3-{network}-test-evidence.tar.gz'
     require(retention['assetName'] == asset, 'unexpected asset name')
     archive = root / asset
     size = owned_file(archive, MAX_ARCHIVE).st_size
@@ -408,8 +444,7 @@ def review(directory):
                 scan_bytes(data, forbidden)
                 if name == 'image-acceptance.json':
                     receipt = strict_json(data)
-                    require(receipt['sourceDigest'] == retention['sourceDigest'] and receipt['receiptDigest'] == retention['evidenceDigest'],
-                            'receipt differs from retained candidate')
+                    validate_image_receipt_profile(receipt, retention)
                 if name.startswith('oci/blobs/sha256/'):
                     json_blobs[f'sha256:{blob}'] = strict_json(data)
     require(receipt is not None, 'missing image receipt')
@@ -438,7 +473,7 @@ def review(directory):
     require(totals['testPreviewManifests'] > 0, 'test preview-manifest evidence missing')
     require(totals['publicSelfTestLibraries'] == 1, 'exact pinned public self-test library evidence missing')
     require(hash_file(archive) == digest, 'archive changed during content review')
-    result = {'version': 1, 'kind': 'presigned-v2-test-archive-content-review', 'passed': True, 'network': network,
+    result = {'version': 1, 'protocol': PROTOCOL, 'kind': 'presigned-v3-test-archive-content-review', 'passed': True, 'network': network,
               'archiveSha256': digest, 'archiveBytes': size, 'archiveMembers': len(names), 'layers': len(layers), **totals,
               'sourceCommit': retention['sourceCommit'], 'sourceDigest': retention['sourceDigest'],
               'toolingCommit': retention['toolingCommit'], 'workflowRunId': retention['workflowRunId'],
@@ -447,8 +482,9 @@ def review(directory):
               'canonicalOuterEnvelopeVerified': True,
               'knownPublicSelfTestPemCount': 6, 'publicSelfTestLibrarySha256': PUBLIC_SELFTEST_LIBRARY_SHA,
               'freshCredentialFreeHostedBuildRequired': True, 'universalSecretAbsenceProven': False,
-              'productionUsePermitted': False, 'fundingAuthorized': False}
-    output = root / f'presigned-v2-{network}-content-review.json'
+              'syntheticOnly': True, 'productionUsePermitted': False, 'realDefaultSignetVerified': False,
+              'physicalPasskeysVerified': False, 'releaseReceiptProduced': False, 'fundingAuthorized': False}
+    output = root / f'presigned-v3-{network}-content-review.json'
     with output.open('x', encoding='utf-8') as stream:
         json.dump(result, stream, indent=2)
         stream.write('\n')

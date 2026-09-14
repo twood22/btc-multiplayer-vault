@@ -10,6 +10,8 @@ import tempfile
 import zlib
 import struct
 import hashlib
+import json
+import subprocess
 
 sys.dont_write_bytecode = True
 
@@ -19,6 +21,101 @@ spec.loader.exec_module(review)
 
 
 class ContentReviewTests(unittest.TestCase):
+    def retention_fixture(self):
+        return {'version': 1, 'protocol': 'presigned-graph-v3', 'kind': 'presigned-v3-public-test-evidence',
+                'network': 'signet', 'sourceCommit': '1' * 40, 'sourceDigest': '2' * 64, 'toolingCommit': '3' * 40,
+                'workflowRunId': '123', 'assetName': 'presigned-v3-signet-test-evidence.tar.gz',
+                'archiveSha256': '4' * 64, 'archiveBytes': 123, 'evidenceDigest': '5' * 64, 'files': 25,
+                'restoredBytesRevalidated': True, 'syntheticOnly': True, 'productionUsePermitted': False,
+                'realDefaultSignetVerified': False, 'physicalPasskeysVerified': False,
+                'releaseReceiptProduced': False, 'fundingAuthorized': False}
+
+    def receipt_fixture(self):
+        retention = self.retention_fixture()
+        return {'version': 3, 'protocol': 'presigned-graph-v3', 'kind': 'presigned-v3-exact-oci-execution',
+                'sourceDigest': retention['sourceDigest'], 'receiptDigest': retention['evidenceDigest'], 'network': 'signet',
+                'actualRootlessContainerExecution': True, 'readonlyRootFilesystem': True, 'codeMounts': False,
+                'realDefaultSignetVerified': False, 'physicalPasskeysVerified': False, 'imagePublished': False,
+                'fundingAuthorized': False}
+
+    def test_v3_retention_schema_one_is_not_protocol_version(self):
+        self.assertEqual(review.validate_retention_profile(self.retention_fixture()), 'signet')
+        review.validate_image_receipt_profile(self.receipt_fixture(), self.retention_fixture())
+        with self.assertRaises(review.ReviewError):
+            review.validate_retention_profile({**self.retention_fixture(), 'version': 3})
+
+    def test_v2_retention_cannot_be_relabelled_as_v3(self):
+        for field, value in (('protocol', 'presigned-graph-v2'), ('kind', 'presigned-v2-public-test-evidence'),
+                             ('assetName', 'presigned-v2-signet-test-evidence.tar.gz')):
+            with self.subTest(field=field), self.assertRaises(review.ReviewError):
+                review.validate_retention_profile({**self.retention_fixture(), field: value})
+
+    def test_v2_image_receipt_cannot_be_relabelled_as_v3(self):
+        for field, value in (('version', 2), ('protocol', 'presigned-graph-v2'), ('kind', 'presigned-v2-exact-oci-execution')):
+            with self.subTest(field=field), self.assertRaises(review.ReviewError):
+                review.validate_image_receipt_profile({**self.receipt_fixture(), field: value}, self.retention_fixture())
+
+    def test_retention_identity_and_bounds_are_required(self):
+        for field, value in (('sourceCommit', 'UNSET_FINAL_CANDIDATE_COMMIT'), ('sourceDigest', 'UNSET_FINAL_SOURCE_DIGEST'),
+                             ('workflowRunId', 'unknown'), ('files', 513), ('archiveBytes', 0), ('version', True)):
+            with self.subTest(field=field), self.assertRaises(review.ReviewError):
+                review.validate_retention_profile({**self.retention_fixture(), field: value})
+        with self.assertRaises(review.ReviewError):
+            review.validate_retention_profile({**self.retention_fixture(), 'unexpected': True})
+
+    def test_synthetic_retention_cannot_authorize_funding_or_claim_real_tests(self):
+        for field in ('productionUsePermitted', 'realDefaultSignetVerified', 'physicalPasskeysVerified',
+                      'releaseReceiptProduced', 'fundingAuthorized'):
+            with self.subTest(field=field), self.assertRaises(review.ReviewError):
+                review.validate_retention_profile({**self.retention_fixture(), field: True})
+
+    def test_image_receipt_requires_matching_network_and_digests(self):
+        for field, value in (('network', 'mainnet'), ('sourceDigest', '6' * 64), ('receiptDigest', '7' * 64)):
+            with self.subTest(field=field), self.assertRaises(review.ReviewError):
+                review.validate_image_receipt_profile({**self.receipt_fixture(), field: value}, self.retention_fixture())
+
+    def test_image_receipt_cannot_claim_a_real_or_unisolated_execution(self):
+        for field in ('codeMounts', 'realDefaultSignetVerified', 'physicalPasskeysVerified', 'imagePublished', 'fundingAuthorized'):
+            with self.subTest(field=field), self.assertRaises(review.ReviewError):
+                review.validate_image_receipt_profile({**self.receipt_fixture(), field: True}, self.retention_fixture())
+        for field in ('actualRootlessContainerExecution', 'readonlyRootFilesystem'):
+            with self.subTest(field=field), self.assertRaises(review.ReviewError):
+                review.validate_image_receipt_profile({**self.receipt_fixture(), field: False}, self.retention_fixture())
+
+    def test_node_retainer_v3_and_unset_pin_refusals(self):
+        # Importing pure validation helpers never enters run/upload or reads
+        # operational state; all identities below are synthetic constants.
+        module = Path(__file__).with_name('presigned-ci-retain.mjs').resolve().as_uri()
+        program = '''import assert from 'node:assert/strict';
+import {validateFinalPins, assertV3ArchivePack, assertV3Retention, assertV3ContentReview} from MODULE;
+const retention = RETENTION;
+const pack={passed:true,protocol:'presigned-graph-v3',kind:'presigned-v3-local-evidence-archive',
+  evidenceKind:'signet-image',sourceDigest:retention.sourceDigest,restoredBytesRevalidated:true,
+  contentPrivacyReviewed:false,published:false,realDefaultSignetVerified:false,releaseReceiptProduced:false,fundingAuthorized:false};
+const content={version:1,protocol:'presigned-graph-v3',kind:'presigned-v3-test-archive-content-review',passed:true,
+  syntheticOnly:true,productionUsePermitted:false,realDefaultSignetVerified:false,physicalPasskeysVerified:false,
+  releaseReceiptProduced:false,fundingAuthorized:false};
+assertV3ArchivePack(pack,'signet',retention.sourceDigest);assertV3Retention(retention);assertV3ContentReview(content);
+let refused=0;const reject=fn=>{assert.throws(fn);refused++;};
+for(const [field,value] of [['protocol','presigned-graph-v2'],['kind','presigned-v2-local-evidence-archive'],
+  ['realDefaultSignetVerified',true],['releaseReceiptProduced',true],['fundingAuthorized',true]])
+  reject(()=>assertV3ArchivePack({...pack,[field]:value},'signet',retention.sourceDigest));
+for(const [field,value] of [['version',3],['protocol','presigned-graph-v2'],['kind','presigned-v2-public-test-evidence'],
+  ['physicalPasskeysVerified',true],['fundingAuthorized',true]]) reject(()=>assertV3Retention({...retention,[field]:value}));
+for(const [field,value] of [['version',3],['protocol','presigned-graph-v2'],['kind','presigned-v2-test-archive-content-review'],
+  ['realDefaultSignetVerified',true],['fundingAuthorized',true]]) reject(()=>assertV3ContentReview({...content,[field]:value}));
+const candidate='1'.repeat(40),source='2'.repeat(64),tag='presigned-v3-test-evidence-22222222-20260914';
+validateFinalPins(candidate,source,tag);
+for(const pins of [['UNSET_FINAL_CANDIDATE_COMMIT',source,tag],[candidate,'UNSET_FINAL_SOURCE_DIGEST',tag],
+  [candidate,source,'UNSET_PREAPPROVED_V3_TEST_DRAFT_TAG'],[candidate,source,'presigned-v2-test-evidence-22222222-20260914'],
+  [candidate,source,'presigned-v3-test-evidence-33333333-20260914']]) reject(()=>validateFinalPins(...pins));
+assert.equal(refused,20);console.log(JSON.stringify({passed:true,refusals:refused,externalOperations:0}));
+'''.replace('MODULE', json.dumps(module)).replace('RETENTION', json.dumps(self.retention_fixture()))
+        result = subprocess.run(['node', '--input-type=module', '-'], input=program, text=True,
+                                capture_output=True, timeout=10, check=False)
+        self.assertEqual(result.returncode, 0, 'pure Node retention validator controls failed')
+        self.assertEqual(json.loads(result.stdout), {'passed': True, 'refusals': 20, 'externalOperations': 0})
+
     def test_regular_public_source(self):
         review.scan_bytes(b'const key = process.env.BITCOIN_RPC_PASSWORD; const digest = "' + b'0' * 64 + b'";')
         review.scan_path('app/src/presigned/backup.ts')

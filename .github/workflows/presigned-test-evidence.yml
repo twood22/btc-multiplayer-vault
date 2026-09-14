@@ -1,21 +1,21 @@
-name: Presigned V2 test-only evidence retention
+name: Presigned V3 test-only evidence retention
 
 on:
   # A separate tooling branch leaves the previously tested candidate unchanged.
   push:
-    branches: [codex/presigned-test-evidence]
+    branches: [codex/presigned-v3-test-evidence]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: presigned-test-evidence-49e4240d
+  group: presigned-v3-test-evidence-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   retain:
-    if: github.event.repository.private == false && github.ref == 'refs/heads/codex/presigned-test-evidence'
+    if: github.event.repository.private == false && github.ref == 'refs/heads/codex/presigned-v3-test-evidence'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     # Used only by the final, draft-only upload step. No credential is exported
@@ -29,6 +29,8 @@ jobs:
     name: Retain ${{ matrix.network }} test image
     env:
       NEXT_TELEMETRY_DISABLED: '1'
+      PRESIGNED_ACCEPTANCE_PROTOCOL: presigned-graph-v3
+      PRESIGNED_BUILD_PROTOCOL: presigned-graph-v3
     defaults:
       run:
         working-directory: candidate
@@ -39,10 +41,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Refuse unset candidate, source, or draft pins before checkout
+        working-directory: .
+        run: node scripts/presigned-ci-retain.mjs check-pins
+
       - name: Check out the exact previously tested candidate separately
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 163afb1ad68566c1ae33d59811b775add4988e12
+          ref: 19d82053f47a28a386039118ff37de9eecfd5752
           path: candidate
           persist-credentials: false
 
