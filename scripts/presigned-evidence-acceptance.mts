@@ -114,18 +114,32 @@ for (const mutation of [{ confirmedCashouts: 23 }, { confirmedParents: 17 }, { r
   { actualCoinAnchorsVerified: false }, { liveSignetVerified: true }, { mainnetAuthorized: true }, { protocols: [PRESIGNED_PROTOCOL_V3] },
   { payoutFamilies: ['solo-first'] }, { actualChain: 'signet' }])
   denied(() => validateCommandResults(cashoutCore, JSON.stringify({ ...cashoutCoreSummary, ...mutation })));
+// Parser fixtures must run from a clean checkout, before the real offline
+// build. Keep their bytes private and separate from the delivered utility;
+// the production validator still checks the exact file in its own cwd.
+const offlineParserFixture = mkdtempSync('/tmp/btc-presigned-offline-parser-fixture.');
+mkdirSync(`${offlineParserFixture}/public/offline`, { recursive: true, mode: 0o700 });
+const parserUtility = 'SYNTHETIC NON-EXECUTABLE OFFLINE PARSER FIXTURE';
+writeFileSync(`${offlineParserFixture}/public/offline/presigned-recovery.html`, parserUtility, { mode: 0o600, flag: 'wx' });
+function validateOfflineParserFixture(summary: unknown, directory = offlineParserFixture) {
+  const previousDirectory = process.cwd();
+  try { process.chdir(directory); validateCommandResults(offline, JSON.stringify(summary)); }
+  finally { process.chdir(previousDirectory); }
+}
 const offlineCashoutSummary = { passed: true, syntheticParserFixture: true, completeLifecycleEvidence: true, completeFeeEvidence: true,
   fullSoloOrderings: 6, cooperativeRounds: 4, recoverySignerSubsets: 9, actualBrowserSignedTransactionsConfirmedByCore: 31,
   feeRescueWalletAndParentCases: 10, replacementFeeChildrenConfirmedByCore: 10, networkRequests: 0, persistentSecretStorage: false,
-  utilitySha256: createHash('sha256').update(readFileSync('public/offline/presigned-recovery.html')).digest('hex'),
+  utilitySha256: createHash('sha256').update(parserUtility).digest('hex'),
   protocol: PRESIGNED_PROTOCOL_V3, exactArtifactInputsVerified: true, mainnetBoundaryProtocols: [PRESIGNED_PROTOCOL,PRESIGNED_PROTOCOL_V3],
   ownedPayoutCashoutsConfirmed: 12, cashoutOwnerAndReviewMutationRefusals: 37,
   cashoutPayoutFamilies: ['cooperative','cpfp-preserved-payout','final-sweep','recovery','solo'] };
-validateCommandResults(offline, JSON.stringify(offlineCashoutSummary));
+validateOfflineParserFixture(offlineCashoutSummary);
+denied(() => validateOfflineParserFixture({ ...offlineCashoutSummary, utilitySha256: '00'.repeat(32) }));
+denied(() => validateOfflineParserFixture(offlineCashoutSummary, mkdtempSync('/tmp/btc-presigned-offline-parser-missing.')));
 for (const mutation of [{ ownedPayoutCashoutsConfirmed: undefined }, { ownedPayoutCashoutsConfirmed: 5 },
   { cashoutOwnerAndReviewMutationRefusals: undefined }, { cashoutOwnerAndReviewMutationRefusals: 36 },
   { cashoutPayoutFamilies: ['solo'] }, { cashoutPayoutFamilies: undefined }, { completeLifecycleEvidence: false }, { completeFeeEvidence: false }])
-  denied(() => validateCommandResults(offline, JSON.stringify({ ...offlineCashoutSummary, ...mutation })));
+  denied(() => validateOfflineParserFixture({ ...offlineCashoutSummary, ...mutation }));
 checks.push('owned-payout cash-out requires full pure/Core coverage and actual full saved-file browser proof; focused/missing cash-outs cannot satisfy release');
 const offlineMerge = plan.find(item => item.args.at(-1) === 'src/presigned/v3-offline-merge-acceptance.ts')!;
 const mergeSummary = { passed: true, syntheticParserFixture: true, protocols: [PRESIGNED_PROTOCOL,PRESIGNED_PROTOCOL_V3],

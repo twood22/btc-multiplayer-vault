@@ -2,10 +2,18 @@
 import assert from 'node:assert/strict';
 import { setTimeout as pause } from 'node:timers/promises';
 import { boundedPresignedBrowserCleanup, disablePresignedFailurePageSnapshots,
-  presignedBrowserFailureLocations } from '../browser-tests/presigned-failure-report.js';
+  presignedBrowserFailureKind, presignedBrowserFailureLocations } from '../browser-tests/presigned-failure-report.js';
 
 export async function verifyPresignedBrowserFailureBoundaries(): Promise<string[]> {
   const checks: string[] = [];
+  for (const [message, kind] of [['strict mode violation: PRIVATE MARKER', 'strict-locator'],
+    ['Timeout 60000ms exceeded: PRIVATE MARKER', 'timeout'],
+    ['Target page, context or browser has been closed: PRIVATE MARKER', 'closed-page'],
+    ['PRIVATE MARKER', 'other']] as const) assert.equal(presignedBrowserFailureKind(new Error(message)), kind);
+  const hostileMessage = new Error(); Object.defineProperty(hostileMessage, 'message', { get() { throw new Error('PRIVATE MARKER'); } });
+  assert.equal(presignedBrowserFailureKind(hostileMessage), 'other');
+  assert.equal(presignedBrowserFailureKind({ message: 'strict mode violation: PRIVATE MARKER' }), 'other');
+  checks.push('failure category emits only fixed labels, never private exception or locator text');
   const synthetic = new Error('short fake secret and longer fake private input must not be serialized');
   synthetic.stack = 'Error: short fake secret\n at /private/presigned-v2.spec.ts:468:78\n' +
     ' at /private/presigned-v2-fixture.ts:95:9\n at /private/presigned-v2.spec.ts:468:78';

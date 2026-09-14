@@ -124,3 +124,28 @@ define the full scope; a partial pass cannot close this checklist.
   before a manifest was finalized; only its separate operation-lock record was
   created. A prepare-only supervised retry is running. No historical cache
   files have been removed or real reclaim authorized at this checkpoint.
+- 2026-09-14 04:00 UTC: candidate `19d82053f47a28a386039118ff37de9eecfd5752`
+  / source `2e47819de8d02e6fa80b6e0ace45f5a6f1edc287d27a93379a6475e0b895c744`
+  was privacy-reviewed and pushed to the existing authorized public repository.
+  Run `34802859714` failed all three jobs; it is not accepted. The local job
+  stopped at `evidence-boundaries`: a fresh source snapshot reproduced its
+  missing generated offline HTML dependency. The parser fixture now uses its
+  own private, explicitly synthetic bytes; the real artifact validator is
+  unchanged and additionally tested against missing/mismatched bytes.
+- Actual rootless mainnet-image build/export/runtime stages passed, but its
+  browser run failed at the cash-out coin selector. Safe diagnostic rerun
+  `34803686595` identified the exact location; a minimal Chromium reproduction
+  found zero exact-label matches but one correct accessible combobox match.
+  The test selector is corrected; a complete image rerun is still required.
+  Local browser `/tmp/btc-presigned-browser.v8E0qm` reached the first solo
+  proposal before failing at its review checkbox. This separate failure remains
+  under investigation; no completed web receipt was produced.
+- Real public-cache preparation subsequently completed and its exact manifest
+  was independently reviewed: 290 files, 22,486,088,175 bytes, manifest
+  `5371d5bb992531c020de5653d0eb585faedcd7315db37ae8e31989b8e730a820`.
+  Reclaim was explicitly approved for this scope. Its first supervised invocation
+  reached the declared 30-minute ceiling after 143 duplicate files were removed
+  and one original was quarantined. The same durable intent is now resuming with
+  a 90-minute bound; completion is not yet asserted. Every removed byte remains
+  in the verified retained keeper. Wallets, backups, unique tail files, indexes,
+  chainstate and historical evidence are outside the reclaim scope.

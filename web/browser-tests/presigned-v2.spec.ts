@@ -22,7 +22,7 @@ import { withPresignedRegtest, type PresignedRegtest } from '../../scripts/lib/p
 import { createV2Browser, installV2EsploraBridge, localV2Gate, seedV2Invitations, startV2CoreBridge,
   reloadV2Vault, useV2Authenticator, v2Status, type V2Browser, type V2BrowserAudit } from './presigned-v2-fixture';
 import { boundedPresignedBrowserCleanup, disablePresignedFailurePageSnapshots,
-  presignedBrowserFailureLocations } from './presigned-failure-report';
+  presignedBrowserFailureKind, presignedBrowserFailureLocations } from './presigned-failure-report';
 
 // Recovery keys appear briefly in the genuine UI. Never trace, screenshot, video or snapshot this test.
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
@@ -377,7 +377,7 @@ test('real version-bound browser ceremony and runtime with virtual PRF passkeys 
   } catch (error) {
     originalFailure = true;
     // Report the failure before any optional renderer diagnostic can wait.
-    console.log(JSON.stringify({ stage, runtimeStage, assertionLocations: presignedBrowserFailureLocations(error),
+    console.log(JSON.stringify({ stage, runtimeStage, failureKind: presignedBrowserFailureKind(error), assertionLocations: presignedBrowserFailureLocations(error),
       walletReleaseAttempts: audit.walletReleaseLocalGates.length, httpFailures: audit.httpFailures ?? [],
       browserDiagnostics: actors.map(actor => ({ actor: actor.id, ...actor.diagnostics })) }));
     const operations = await Promise.all(actors.map(async actor => {
@@ -446,7 +446,9 @@ async function browserCashout(actor: V2Browser, other: V2Browser, graph: Presign
   const panel = actor.page.getByTestId('presigned-cashout');
   await panel.getByRole('button', { name: 'Find my confirmed payouts', exact: true }).click();
   await expect(panel.getByRole('status')).toContainText('confirmed payout coin(s) found');
-  const chosen = await panel.getByLabel('Confirmed payout coin', { exact: true }).inputValue();
+  // The enclosing label contains option text; the combobox accessible name
+  // excludes those choices and remains stable as owned coins are discovered.
+  const chosen = await panel.getByRole('combobox', { name: 'Confirmed payout coin', exact: true }).inputValue();
   const [txid, voutText] = chosen.split(':'); const vout = Number(voutText); assert(txid);
   const raw = await core.rpc('getrawtransaction', [txid, true]);
   const source = raw.vout[vout]; assert.equal(source.scriptPubKey.hex, ownScript);

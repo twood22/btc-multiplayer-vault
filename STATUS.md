@@ -19,6 +19,13 @@ is still required. Several full lifecycle runs were interrupted by unexplained
 SIGTERM signals; supervised local reruns preserve those failures separately.
 No new public deployment or mainnet transaction has been performed.
 
+The first frozen V3 public candidate (`19d82053`, source `2e47819d`) failed its
+hosted acceptance run. The clean-checkout parser dependency and cash-out browser
+selector are being corrected; the full browser's first-solo review failure is
+under investigation. No successful image/release receipt has been substituted
+for these failures. Exact, recoverable duplicate public-cache reclamation is in
+progress to restore testing capacity; all custody and unique data are retained.
+
 Use [the single V3 checklist](./V3-ACCEPTANCE-CHECKLIST.md),
 [participant guide](./V3-USER-GUIDE.md) and [release runbook](./V3-RELEASE-RUNBOOK.md)
 for current work. Dated V2 results below remain historical, not reusable V3 proof.

@@ -5,6 +5,18 @@ export interface PresignedBrowserFailureLocation {
   column: number;
 }
 
+/** Classify locally, but never return any exception text or locator contents. */
+export function presignedBrowserFailureKind(error: unknown): 'timeout' | 'strict-locator' | 'closed-page' | 'other' {
+  try {
+    if (!(error instanceof Error) || typeof error.message !== 'string') return 'other';
+    const message = error.message.slice(0, 32_768);
+    if (message.includes('strict mode violation')) return 'strict-locator';
+    if (message.includes('Target page, context or browser has been closed')) return 'closed-page';
+    if (/\bTimeout\b|\btimeout\b|\btimed out\b/u.test(message)) return 'timeout';
+  } catch { /* Hostile getters have no diagnostic authority. */ }
+  return 'other';
+}
+
 /** Playwright's automatic aria/error-context snapshot is independent of its
  * trace, screenshot and video options. Call before creating any test context,
  * including when the V2 spec is invoked directly without the shell wrapper. */

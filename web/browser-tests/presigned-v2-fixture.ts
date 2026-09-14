@@ -11,7 +11,7 @@ import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL_V3, type ParticipantId, type Presig
 import { commitmentDigest, presignedDomain, presignedVersion } from '../../src/presigned/validation.js';
 import type { PresignedCeremonyStatus } from '../lib/server/presigned-store.js';
 import type { PresignedRegtest } from '../../scripts/lib/presigned-regtest.js';
-import { boundedPresignedBrowserCleanup, presignedBrowserFailureLocations } from './presigned-failure-report';
+import { boundedPresignedBrowserCleanup, presignedBrowserFailureKind, presignedBrowserFailureLocations } from './presigned-failure-report';
 
 // Match this suite's existing action/UI-verification budget, including its
 // helper assertions. This does not change application or network deadlines.
@@ -19,7 +19,9 @@ const expect = baseExpect.configure({ timeout: 60_000 });
 const DIAGNOSTIC_API_PATHS = ['/api/vault/presigned/action/options', '/api/vault/presigned/action/finish',
   '/api/vault/presigned/status', '/api/passkeys/unlock/options', '/api/passkeys/unlock/finish',
   '/api/passkeys/register/options', '/api/passkeys/register/verify',
-  '/api/passkeys/envelope/options', '/api/passkeys/envelope/finish'];
+  '/api/passkeys/envelope/options', '/api/passkeys/envelope/finish',
+  '/api/vault/presigned/runtime/status', '/api/vault/presigned/runtime/action/options', '/api/vault/presigned/runtime/action/finish',
+  '/api/vault/presigned/cashout/status', '/api/vault/presigned/cashout/prepare', '/api/vault/presigned/cashout/broadcast'];
 
 export interface V2Browser { id: ParticipantId; context: BrowserContext; page: Page; cdp: CDPSession;
   primary: string; recovery: string; authenticatedAt: number; reauthentications: number;
@@ -130,7 +132,7 @@ export async function createV2Browser(input: { browser: Browser; baseURL: string
     await expect(page.getByTestId('presigned-ceremony')).toBeVisible();
     return actor;
   } catch (error) {
-    console.log(JSON.stringify({ stage: 'private onboarding failure location only', actor: input.id,
+    console.log(JSON.stringify({ stage: 'private onboarding failure location only', actor: input.id, failureKind: presignedBrowserFailureKind(error),
       assertionLocations: presignedBrowserFailureLocations(error), diagnostics }));
     await boundedPresignedBrowserCleanup(() => context.close());
     throw new Error(`Virtual PRF onboarding failed for ${input.id}; invitation and authenticator details redacted`);
