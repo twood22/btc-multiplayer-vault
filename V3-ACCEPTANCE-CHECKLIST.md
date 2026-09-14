@@ -149,3 +149,131 @@ define the full scope; a partial pass cannot close this checklist.
   a 90-minute bound; completion is not yet asserted. Every removed byte remains
   in the verified retained keeper. Wallets, backups, unique tail files, indexes,
   chainstate and historical evidence are outside the reclaim scope.
+- Reclaim completed with actual service exit 0. Root independently verified the
+  completed record, all 290 absent duplicates, every keeper's pinned metadata,
+  all 1,124 protected inventory entries and 129 protected content hashes
+  (389,356,466 bytes). About 20.94 GiB of duplicate files was removed; every byte
+  remains recoverable from the retained keeper using the exact saved recipe.
+  Original inode numbers/change times cannot be restored. Free disk space was
+  31 GiB at the post-check. This does not authorize any expanded cleanup.
+- Corrected candidate `cf52826983b839bf0e425f785979db6efc05b307` / source
+  `21af8d9d682043da26f0550d272d3eea9ad02e1b60d1fd27ded72fa40578923c`
+  is now running in full CI `34804929173` and exact-image retention
+  `34805003735` (tooling `74aff61411ce9e91dd35c46a61bc32a84d0e1766`).
+  Its clean-checkout evidence parser passed 213 negatives plus 19 archive
+  controls; both affected typechecks and nine diagnostic-privacy checks passed.
+  Independent AI review found no blocking issue in those corrections.
+  The prior first-solo failure's database contained three distinct transaction
+  IDs and one eligible collecting solo proposal; actual server/client runtime
+  validation passed in a bounded read-only restart, then that database stopped.
+  This rules out duplicate saved transactions or deterministic view rejection,
+  but does not establish the original browser failure's cause.
+- Candidate `cf528269` / source `21af8d9d`: both image profiles in regular CI
+  `34804929173` passed, including the complete Signet-format browser game and
+  owner cash-out. The combined 75-command job is still running. Exact-image
+  retention `34805003735` passed both profiles. All six original assets are
+  retained privately under `live-run/presigned-v3-public-ci.07HNtw`; their remote
+  sizes, SHA-256 values, source and tooling/run bindings were independently
+  checked. Neither the test-only draft nor these isolated-Core tests constitute
+  public default-Signet acceptance, deployment or funding authorization.
+- Mainnet-format retained archive independently passed the unchanged full-layer
+  privacy scanner, exact private restoration and actual candidate image/OCI
+  validators with terminal exit 0: 39 files / 837,584,005 bytes / 18 layers / seven
+  executed stages at `mainnet-restored.Bpn1CEXi` under that retention directory.
+  Fresh review matches the original bytes and structure. Archive SHA-256:
+  `70c8f94cbe183c300a88945bd7d94bb0eb504a9d05c540717365cae942b5d263`;
+  image manifest `sha256:e401cbf708ec4f752ee88ab4731273d19bf9ece42a88b5958215a0991956af44`.
+  Local Signet-format privacy scan also exited 0; strict restoration and candidate
+  validation remain in progress. No local container execution has been claimed.
+- Guarded post-assembly deployment proof tooling was independently reviewed,
+  tested and committed as `51b4c9f48756bc8913f666f8fadb362f4d6fa6ed` on the
+  existing test-evidence branch. Sixteen new tests (including 82 Node refusal
+  controls) plus all 33 existing privacy tests passed. Final receipt pins remain
+  unset and the dispatch preflight correctly refuses execution; no deployment
+  proof has been created, because actual final assembled acceptance is pending.
+- Local Signet-format restoration and actual candidate image/OCI validation
+  subsequently passed with terminal exit 0: 39 private single-link files /
+  837,642,053 bytes / 18 layers / seven executed stages at
+  `signet-restored.eXn5EX` in the same retention directory. Archive SHA-256
+  `eb0d3dbe2793a2d833062df4a6c5d5da8ad0f95cc8987265ddba61348a25f821`;
+  manifest `sha256:093ba3daf094c21b3a3f5174cb6a3714cdc76f3f3b498c69d6f53d73662f37af`.
+  A separate root-agent rerun of the actual candidate validator passed for both
+  restored profiles and confirmed the same offline utility and source identity.
+- Exact-source full local acceptance is now running at
+  `/tmp/btc-presigned-acceptance.Rrm4aI`, source snapshot
+  `/tmp/btc-v3-final-local-source.opr8Q7VC`, supervised by
+  `btc-v3-final-local-isolated-PSDpfMeT.service`. It has a separate real dependency
+  directory and all 75 unchanged commands. The first short invocation
+  `/tmp/btc-presigned-acceptance.Hxnc66` was deliberately stopped to remove the
+  shared-dependency build risk; its partial log remains retained and is not a
+  pass. Control notes and both logs are private in
+  `live-run/v3-final-local-control.PSDpfMeT`.
+- Bounded final-contract AI review found no additional missing product feature
+  or blocking code defect. Closeout must generate both prescribed network-bound
+  software receipts and preserve their category dossiers, then execute/retain
+  the separately validated deployment proof. No additional whole-host Signet
+  loss drill is required by these contracts: the actual lifecycle already
+  requires 19 independent case restores, 83 native restored signatures and 57
+  participant-kit restores, plus the full matrix's wallet/database tests. This
+  does not claim whole-disk/off-host recovery or professional human review.
+- Supervised intermediate lifecycle `btc-v3-lifecycle-vkbVudZz` exited 1 at
+  04:43:10 UTC. Its unchanged 90-minute timer stopped the isolated Core node at
+  04:43:09 UTC; refund-ancestor reorg cleanup then failed while reading the
+  removed RPC cookie. All 19 cases reached transaction completion, but the
+  subsequent audits had run about 10m37s without producing the final receipt.
+  No `passed:true` or `resumable-lifecycle-runner.json` exists, and the actual
+  final-source evidence parser rejected this partial run. Its source remains
+  `d4aff7f206259f5648b8b2f7bc54ad51cd6b207c98fdfaf09fc5b3581f6ef86f`;
+  journal and Core reorg state are retained unchanged. This explains that one
+  failure, not earlier unrelated signal interruptions. No source, assertions or
+  deadlines were changed; reduced contention helping a new run is only a
+  hypothesis. The actual final-source CI and full local suite remain running.
+- The private image retention directory now includes a checked
+  `artifact-inventory.json` with all six original hashes/sizes and both restored
+  profile identities. Root independently recomputed every original asset hash
+  and both complete restored-file counts/byte totals. It explicitly marks final
+  software/default-Signet/deployment acceptance incomplete and grants no funds
+  authority. Fresh dependency advisory check exited 0 with no reported findings;
+  this is a dated registry result, not a universal security or human-audit claim.
+- The additional faucet credit confirmed: actual synchronized native test wallet
+  balance is now 40,555 sats, with no pending coins. This remains below the
+  88,652-sat lifecycle envelope, before a separate native transfer fee. A normal
+  sandboxed headed-browser fallback for another faucet failed before launch and
+  submitted nothing; no sandbox or faucet limits were bypassed. Read-only disk
+  review found only about 1.95 GiB of potential safe cleanup, not the requested
+  5 GiB headroom. No further files were removed, no fresh V3 host was created and
+  historical custody/proofs remain untouched.
+- Hosted run `34804929173` completed with a failure at the last command,
+  `database-v3-all`, after 74/75 passed. Both full lifecycle suites and the
+  optimized browser passed. All seven final database child processes exited 0;
+  the evidence validator rejected the restore stdout because its actual V3
+  protocol identifier was omitted. The strict validator remains unchanged;
+  the reporting defect and missing/wrong-protocol regressions are being fixed.
+  Local `Rrm4aI` was deliberately stopped at 65/75 rather than continue a known
+  final failure. Its private evidence remains incomplete, not accepted. Both
+  exact-image artifacts for source `21af8d9d` remain genuine historical tests,
+  but cannot authorize the corrected source. Fresh full/image runs are required.
+- Bounded read-only timing inspection of historical browser `v8E0qm` ruled out
+  simple overall-session-age expiry: Alice's latest session remained unexpired
+  for 13m50.804s after the final log-write upper bound, and her preceding session
+  was also unexpired. It does not establish which cookie was presented or the
+  original failure's cause. The temporary read-only database was stopped again;
+  no browser/Core was started or sensitive fields selected.
+- Private native test-seed helper `live-run/presigned-v3-seed-transfer.l5GIIh`
+  is implemented but inactive with all 27 operational pins unset. Independent
+  root review and all seven CLI refusal checks passed; no control/wallet access
+  occurred. Separate disposable tests passed 56 policy/tamper refusals, four
+  native restored targets, one exact 89,000-sat regtest payment and lost-reply
+  reconciliation without resend. Full configured operational branches remain
+  untested; this is neither current Signet readiness nor transfer authorization.
+- The minimal database-reporting correction passed independent AI review,
+  scripts/web typechecks, 227 evidence refusals and 19 archive controls. Fourteen
+  new negatives rehash each of the seven V3 database summaries after removing
+  or substituting its protocol, require the identity-specific rejection, then
+  restore/revalidate the positive artifact. Actual native V3 restore at
+  `/tmp/btc-presigned-db.9ezpeM` and V2 restore at `/tmp/btc-presigned-db.wqbTIs`
+  both exited 0, each retaining six restored encrypted keys and 22 refusals with
+  matching stdout/private receipt protocol. Both databases stopped afterward.
+  Production validators are unchanged. Corrected source
+  `61d3b2c5e0d37b49775b87c7554b644c4225a7afbaee358e2ad2f1b257780353`
+  requires fresh complete local/image/default-Signet evidence.

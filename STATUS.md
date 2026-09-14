@@ -12,8 +12,9 @@ Actual isolated Core tests passed all six normal orderings, nine recovery
 quorums and fresh-signature collusion negatives. Complete V3 database ceremony,
 runtime, chain/reorg, fees, native restore and owner-withdrawal tests passed.
 The complete saved-file offline suite passed all 19 lifecycles, 71 restorations,
-31 confirmed browser-signed transactions and owner cash-outs. The web workflow
-and final-source/image/default-Signet matrix remain unfinished. Deployment and
+31 confirmed browser-signed transactions and owner cash-outs. The final-source
+previous candidate's hosted web workflow and both exact-image profiles passed. The full
+combined suite and actual default-Signet matrix remain unfinished. Deployment and
 rollback tooling passes 224 refusal controls, but actual exact-image execution
 is still required. Several full lifecycle runs were interrupted by unexplained
 SIGTERM signals; supervised local reruns preserve those failures separately.
@@ -21,10 +22,33 @@ No new public deployment or mainnet transaction has been performed.
 
 The first frozen V3 public candidate (`19d82053`, source `2e47819d`) failed its
 hosted acceptance run. The clean-checkout parser dependency and cash-out browser
-selector are being corrected; the full browser's first-solo review failure is
-under investigation. No successful image/release receipt has been substituted
-for these failures. Exact, recoverable duplicate public-cache reclamation is in
-progress to restore testing capacity; all custody and unique data are retained.
+selector were corrected. The earlier local browser's first-solo review failure
+remains unexplained; its failed evidence is preserved. Corrected candidate
+`cf528269` / source `21af8d9d` passed both image jobs in `34804929173`, but its
+combined local job failed its final evidence check after 74/75 commands passed.
+All seven V3 database children exited successfully; the native restoration
+test's final stdout omitted its actual protocol identifier, so the unchanged
+strict evidence validator correctly refused it. The minimal reporting correction
+and 14 missing/wrong-protocol regressions passed, with independent AI review,
+both typechecks and actual native V2/V3 restores (six keys, 22 refusals each).
+Corrected source `61d3b2c5` requires fresh complete acceptance and image evidence.
+Exact-image retention `34805003735` passed
+both profiles; all six original test-evidence assets were downloaded and checked
+against their retained hashes. Independent local mainnet-format archive
+restoration, privacy review and actual candidate OCI validation passed for both
+network profiles, including a separate root-agent rerun. These image tests use
+isolated Core, not the public default-Signet network, and do not authorize funds.
+Exact, recoverable duplicate public-cache reclamation
+completed: 290 files/20.94 GiB removed with all keeper and protected-file checks
+passing; custody, unique data and restoration instructions are retained.
+
+The retained local run reached 65/75 commands before being deliberately stopped
+after the hosted run proved the deterministic final evidence defect. Its partial
+evidence and source-exact snapshot are preserved, not accepted. The correction
+changes source identity; the complete local and image checks must run on that
+new identity, without reusing the old images as final-source proof. Both final network-specific receipts
+and their category dossiers must still be assembled after completed local and
+public-Signet evidence; a receipt for one image cannot authorize the other.
 
 Use [the single V3 checklist](./V3-ACCEPTANCE-CHECKLIST.md),
 [participant guide](./V3-USER-GUIDE.md) and [release runbook](./V3-RELEASE-RUNBOOK.md)

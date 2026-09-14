@@ -292,9 +292,11 @@ denied(() => validateAcceptanceArtifacts(browser, [{ relativePath: browserPath,
 checks.push('retained browser artifacts revalidate exact role, full-game or mainnet-refusal scope, source, bytes and paths');
 
 const database = acceptancePlan('local').find(item => item.id === 'database-v2-all')!;
+assert.equal(database.protocol, PRESIGNED_PROTOCOL);
 const dbArtifacts = ['ceremony', 'runtime', 'chain-broadcast', 'fee', 'restore'].map(name => {
   const relativePath = `${database.id}-${name}.log`;
-  const bytes = JSON.stringify({ passed: true, syntheticParserFixture: true, ...(name === 'restore' ? { restoredEncryptedKeys: 6, negativeBoundaries: 22 } : {}) });
+  const bytes = JSON.stringify({ passed: true, syntheticParserFixture: true, protocol: PRESIGNED_PROTOCOL,
+    ...(name === 'restore' ? { restoredEncryptedKeys: 6, negativeBoundaries: 22 } : {}) });
   writeFileSync(`${directory}/${relativePath}`, bytes, { mode: 0o600, flag: 'wx' });
   return { relativePath, sha256: sha256(bytes) };
 });
@@ -307,6 +309,7 @@ dbArtifacts.at(-1)!.sha256 = sha256(noRestoredCustody);
 denied(() => validateAcceptanceArtifacts(database, dbArtifacts, directory, sourceDigest));
 checks.push('all five distinct retained database artifacts mandatory; a rehashed missing custody restoration remains rejected');
 const v3Database = acceptancePlan('local').find(item => item.id === 'database-v3-all')!;
+assert.equal(v3Database.protocol, PRESIGNED_PROTOCOL_V3);
 const cashoutDbSummary = { actualDatabase: 'isolated-PostgreSQL', actualChain: 'isolated-regtest', networkIdentityBridge: true,
   realDefaultSignetEvidence: false, realWebAuthnTransport: false, publicNetworkBroadcasts: 0,
   missingParticipantRefundCashedOut: true, serverIndependentKeyRestoration: true, ownerCashoutSends: 1,
@@ -323,6 +326,23 @@ const v3DbArtifacts = ['ceremony', 'runtime', 'chain-broadcast', 'fee', 'restore
 });
 validateAcceptanceArtifacts(v3Database, v3DbArtifacts, directory, sourceDigest);
 denied(() => validateAcceptanceArtifacts(v3Database, v3DbArtifacts.slice(0, 5), directory, sourceDigest));
+// Exercise the protocol identity of every retained summary, including restore.
+// Rehash the mutation so rejection cannot be attributed to a stale byte hash.
+for (const artifact of v3DbArtifacts) {
+  const path = `${directory}/${artifact.relativePath}`;
+  const original = readFileSync(path);
+  const summary = JSON.parse(original.toString());
+  for (const protocol of [undefined, PRESIGNED_PROTOCOL]) {
+    const changed = JSON.stringify({ ...summary, protocol });
+    writeFileSync(path, changed, { mode: 0o600 }); artifact.sha256 = sha256(changed);
+    assert.throws(() => validateAcceptanceArtifacts(v3Database, v3DbArtifacts, directory, sourceDigest),
+      /V3 database artifact must come from an actual V3 suite/u);
+    negatives++;
+  }
+  writeFileSync(path, original, { mode: 0o600 }); artifact.sha256 = sha256(original);
+  validateAcceptanceArtifacts(v3Database, v3DbArtifacts, directory, sourceDigest);
+}
+checks.push('every V3 database summary rejects missing or V2 protocol after rehashing; exact V3 restoration remains accepted');
 for (const [name, summary, mutations] of [
   ['cashout', cashoutDbSummary, [{ missingParticipantRefundCashedOut: undefined }, { serverIndependentKeyRestoration: false },
     { ownerCashoutSends: 2 }, { checks: [] }]],

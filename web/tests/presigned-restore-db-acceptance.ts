@@ -155,7 +155,7 @@ try {
     nativeDatabaseDumpAndRestore: true, restoredEncryptedKeys: restoredKeys, negativeBoundaries: negatives,
     syntheticFundingCoins: true, realDefaultSignetVerified: false, physicalPasskeysProven: false, fundingAuthorized: false,
     checks }, null, 2), { mode: 0o600, flag: 'wx' });
-  console.log(JSON.stringify({ passed: true, evidence: directory, restoredEncryptedKeys: restoredKeys, negativeBoundaries: negatives, checks }));
+  console.log(JSON.stringify({ passed: true, protocol, evidence: directory, restoredEncryptedKeys: restoredKeys, negativeBoundaries: negatives, checks }));
 } finally {
   for (const prf of prfs.values()) prf.fill(0);
   await restored?.end({ timeout: 5 });
