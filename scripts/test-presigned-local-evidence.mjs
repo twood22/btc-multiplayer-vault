@@ -33,6 +33,19 @@ validString('txid','a'.repeat(64),lexicon);
 for(const value of ['a'.repeat(63),'g'.repeat(64),'A'.repeat(64),'a'.repeat(64)+'private'])denied(()=>validString('txid',value,lexicon));
 for(const value of ['TRUC-violation, private secret','min relay fee not met, private','unknown-policy','bad-witness-nonstandard private'])
   denied(()=>validString('mempoolRejection.reject-details',value,lexicon));
+// Genuine unchanged Core 31.1 observed-witness runs have both 350-vB/35-sat
+// and 351-vB/36-sat outcomes. These are privacy-shape controls, not new evidence.
+for (const path of ['mempoolRejection.reject-details','results[].mempoolRejection.reject-details']) {
+  for (const value of ['min relay fee not met','min relay fee not met, 1 < 35','min relay fee not met, 1 < 36']) validString(path,value,lexicon);
+  for (const number of ['0','1','2','34','37','350','360','035','036','-35','+35','35.0','3.5e1','35 36','35, 36','35secret','３５'])
+    denied(()=>validString(path,`min relay fee not met, 1 < ${number}`,lexicon));
+  for (const suffix of [' private','a'.repeat(64),'\n','\r','\t','\u0000','\u007f','\nprivate'])
+    for (const value of ['min relay fee not met, 1 < 35','min relay fee not met, 1 < 36'])
+      denied(()=>validString(path,`${value}${suffix}`,lexicon));
+  for (const value of [' min relay fee not met, 1 < 35','min relay fee not met, 2 < 35','min relay fee not met, 0 < 35',
+    'min relay fee not met, 01 < 35','min relay fee not met, 1<35','min relay fee not met, 1 <  35','min relay fee not met, 1 <= 35'])
+    denied(()=>validString(path,value,lexicon));
+}
 validString('descendantRejection','TRUC-violation',lexicon);
 validString('mempoolRejection.reject-details',`mempool-script-verify-flag-failed (Non-canonical signature: S value is unnecessarily high), input 0 of ${'a'.repeat(64)} (wtxid ${'b'.repeat(64)}), spending ${'c'.repeat(64)}:3`,lexicon);
 for(const path of ['/tmp/btc-presigned-core-ABC/../../wallet.dat','/tmp/private-secret','/home/codex/private','/tmp/btc-presigned-core-ABC/.cookie',

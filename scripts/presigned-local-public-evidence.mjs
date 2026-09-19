@@ -144,7 +144,10 @@ export function validString(path, value, lexicon) {
   if (path === 'ordering' || path.endsWith('.ordering')) { assert(orders.includes(value) || actors.some(a => actors.some(b => b !== a && actors.some(c => c !== a && c !== b && `${a}/${b}/${c}` === value)))); return; }
   if (path.endsWith('reject-reason') || path.endsWith('reject-details') || path === 'descendantRejection') {
     // Core 31.1 public policy strings. No arbitrary exception detail is allowed.
-    assert(/^(?:TRUC-violation|bad-witness-nonstandard|min relay fee not met(?:, 1 < 36)?|mempool-script-verify-flag-failed \(Non-canonical signature: S value is unnecessarily high\)(?:, input 0 of [0-9a-f]{64} \(wtxid [0-9a-f]{64}\), spending [0-9a-f]{64}:[0-9]{1,2})?)$/u.test(value), 'unreviewed Core rejection');
+    // The unchanged three-P2WPKH one-sat fixture genuinely produces 350/351 vB
+    // as DER signature lengths vary. Core's 100 sat/kvB floor rounds up to 35/36.
+    // Keep the finite reviewed variants, not an arbitrary numeric interpolation.
+    assert(!/[\u0000-\u001f\u007f]/u.test(value) && /^(?:TRUC-violation|bad-witness-nonstandard|min relay fee not met(?:, 1 < (?:35|36))?|mempool-script-verify-flag-failed \(Non-canonical signature: S value is unnecessarily high\)(?:, input 0 of [0-9a-f]{64} \(wtxid [0-9a-f]{64}\), spending [0-9a-f]{64}:[0-9]{1,2})?)$/u.test(value), 'unreviewed Core rejection');
     return;
   }
   assert(lexicon.has(value) || path.endsWith('strictReason') && /^presigned-v[23]: /u.test(value) && lexicon.has(value.replace(/^presigned-v[23]: /u,'')), 'string not grounded in pinned public producer');
