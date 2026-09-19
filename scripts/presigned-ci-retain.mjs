@@ -6,9 +6,9 @@ import { appendFileSync, createReadStream, linkSync, lstatSync, mkdirSync, readF
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const CANDIDATE = 'd907d42b49acb440394d703fca1e31d4e575f577';
-const SOURCE = '61d3b2c5e0d37b49775b87c7554b644c4225a7afbaee358e2ad2f1b257780353';
-const TAG = 'presigned-v3-test-evidence-61d3b2c5-20260914';
+const CANDIDATE = '94dc1046a29d2b027fc8186baa5932c1b1ab236a';
+const SOURCE = '83e9001523b7029a0da6e945be5e6258d5f50ed6f4f529cab9e70413cf7127bc';
+const TAG = 'presigned-v3-test-evidence-83e90015-20260919';
 const PROTOCOL = 'presigned-graph-v3';
 
 export function validateFinalPins(candidate = CANDIDATE, source = SOURCE, tag = TAG) {

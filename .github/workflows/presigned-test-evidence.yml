@@ -58,7 +58,7 @@ jobs:
       - name: Check out the exact previously tested candidate separately
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: d907d42b49acb440394d703fca1e31d4e575f577
+          ref: 94dc1046a29d2b027fc8186baa5932c1b1ab236a
           path: candidate
           persist-credentials: false
 
