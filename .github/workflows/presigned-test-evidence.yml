@@ -1,9 +1,7 @@
 name: Presigned V3 test-only evidence retention
 
 on:
-  # A separate tooling branch leaves the previously tested candidate unchanged.
-  push:
-    branches: [codex/presigned-v3-test-evidence]
+  # Tooling/pin pushes never start hosted work; select each operation explicitly.
   workflow_dispatch:
     inputs:
       operation:
@@ -27,7 +25,7 @@ concurrency:
 
 jobs:
   retain:
-    if: github.event.repository.private == false && github.repository == 'twood22/btc-multiplayer-vault' && github.ref == 'refs/heads/codex/presigned-v3-test-evidence' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'images'))
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'images' && github.event.repository.private == false && github.repository == 'twood22/btc-multiplayer-vault' && github.ref == 'refs/heads/codex/presigned-v3-test-evidence'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     # Used only by the final, draft-only upload step. No credential is exported

@@ -21,6 +21,58 @@ spec.loader.exec_module(review)
 
 
 class ContentReviewTests(unittest.TestCase):
+    def retention_workflow(self):
+        return (Path(__file__).resolve().parents[1] / '.github/workflows/presigned-test-evidence.yml').read_text()
+
+    def test_retention_workflow_has_only_explicit_manual_operations(self):
+        workflow = self.retention_workflow()
+        # Exact reviewed-source checks, not a general YAML parser. Reject new
+        # triggers without adding a dependency or executing any hosted work.
+        triggers = workflow.split('\non:\n', 1)[1].split('\npermissions:\n', 1)[0]
+        self.assertEqual([line for line in triggers.splitlines() if line.strip() and not line.lstrip().startswith('#')], [
+            '  workflow_dispatch:', '    inputs:', '      operation:',
+            '        description: Evidence operation', '        type: choice', '        required: true',
+            '        default: images', '        options: [images, deployment, local]',
+            '      network:', '        description: Exact image profile to verify', '        type: choice',
+            '        default: both', '        options: [both, signet, mainnet]',
+        ])
+        jobs = workflow.split('\njobs:\n', 1)[1]
+        self.assertEqual([line.strip() for line in jobs.splitlines()
+                          if line.startswith('  ') and not line.startswith('   ') and line.endswith(':')],
+                         ['retain:', 'deployment:', 'local:'])
+        self.assertEqual([line.strip() for line in workflow.splitlines() if line.startswith('    if:')], [
+            "if: github.event_name == 'workflow_dispatch' && inputs.operation == '" + operation +
+            "' && github.event.repository.private == false && github.repository == 'twood22/btc-multiplayer-vault' && "
+            "github.ref == 'refs/heads/codex/presigned-v3-test-evidence'"
+            for operation in ['images', 'deployment', 'local']
+        ])
+        self.assertNotIn("github.event_name == 'push'", workflow)
+
+    def test_manual_retention_preserves_runner_pins_and_credential_isolation(self):
+        workflow = self.retention_workflow()
+        self.assertEqual([line.strip() for line in workflow.splitlines() if 'runs-on:' in line],
+                         ['runs-on: ubuntu-24.04'])
+        self.assertIn('\n    timeout-minutes: 120\n', workflow)
+        self.assertIn('\n  cancel-in-progress: false\n', workflow)
+        self.assertIn("group: presigned-v3-test-evidence-${{ github.ref }}-${{ github.event_name }}-${{ inputs.operation || 'images' }}-${{ inputs.network || 'both' }}", workflow)
+        self.assertEqual([line.strip() for line in workflow.splitlines() if line.strip().startswith('uses: actions/')], [
+            'uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+            'uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+            'uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020',
+        ])
+        self.assertIn('uses: ./.github/workflows/presigned-v3-deployment-evidence.yml', workflow)
+        self.assertIn('uses: ./.github/workflows/presigned-v3-local-evidence.yml', workflow)
+        self.assertEqual(workflow.count('persist-credentials: false'), 2)
+        self.assertEqual(workflow.count('GH_TOKEN: ${{ github.token }}'), 1)
+        self.assertNotIn('secrets:', workflow)
+        self.assertNotIn('${{ secrets.', workflow)
+        self.assertNotIn('cache:', workflow)
+        self.assertIn('PRESIGNED_ACCEPTANCE_PROTOCOL: presigned-graph-v3', workflow)
+        self.assertIn('PRESIGNED_BUILD_PROTOCOL: presigned-graph-v3', workflow)
+        self.assertLess(workflow.index('run: node scripts/presigned-ci-retain.mjs check-pins'), workflow.index('run: npm ci'))
+        self.assertLess(workflow.index('Inspect actual archive contents before any upload'), workflow.index('GH_TOKEN:'))
+        self.assertEqual(workflow.count('GH_REPO: ${{ github.repository }}'), 1)
+
     def test_browser_failure_metadata_never_copies_private_fields(self):
         module = Path(__file__).with_name('presigned-ci-retain.mjs').resolve().as_uri()
         program = '''import assert from 'node:assert/strict';
