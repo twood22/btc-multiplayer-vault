@@ -23,6 +23,10 @@ const plan = acceptancePlan('pure');
 assert.equal(new Set(plan.map(item => item.id)).size, plan.length);
 assert.deepEqual(plan.filter(item => item.args.at(-1) === 'src/presigned/acceptance.ts').map(item => item.network), ['signet', 'mainnet']);
 assert(acceptancePlan('local').some(item => item.id === 'offline-full'));
+assert(acceptancePlan('local').some(item => item.id === 'offline-fee-review-boundaries'));
+assert(!plan.some(item => item.id === 'offline-fee-review-boundaries'));
+assert(plan.some(item => item.id === 'observation-cli-boundaries'));
+assert(plan.some(item => item.id === 'offline-source-boundaries'));
 assert(acceptancePlan('local').some(item => item.id === 'optimized-browser'));
 for (const id of ['presigned-core-v3-recovery', 'presigned-core-cashout', 'presigned-live-lifecycle-v3-regtest', 'database-v3-all']) {
   assert(acceptancePlan('local').some(item => item.id === id));
@@ -30,6 +34,51 @@ for (const id of ['presigned-core-v3-recovery', 'presigned-core-cashout', 'presi
 }
 denied(() => acceptancePlan('optional' as 'pure'));
 checks.push('fixed unique mandatory plan and both explicit graph-format runs');
+const observationCli = plan.find(item => item.id === 'observation-cli-boundaries')!;
+const observationCliSummary = { passed: true, syntheticParserFixture: true, suite: 'presigned-observe-coins-actual-cli',
+  commandCount: 30, negativeCases: 24, successfulProducerConsumerCases: 6,
+  protocols: [PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3], networks: ['mainnet', 'signet'],
+  legacyV2DefaultPreserved: true, preCookieArgumentRejection: true,
+  readOnlyMethods: ['getblockchaininfo','getblockhash','getblockheader','getindexinfo','getrawtransaction','gettxout','gettxspendingprevout'],
+  evidence: 'loopback-synthetic-rpc-only', syntheticRpcFixture: true, productionRpcOrChainContact: false,
+  actualChainEvidence: false, realCredentials: false, signed: false, broadcast: false };
+validateCommandResults(observationCli, JSON.stringify(observationCliSummary));
+for (const mutation of [{ commandCount: 29 }, { negativeCases: 23 }, { successfulProducerConsumerCases: 5 },
+  { protocols: [PRESIGNED_PROTOCOL] }, { networks: ['signet'] }, { legacyV2DefaultPreserved: false },
+  { preCookieArgumentRejection: false }, { syntheticRpcFixture: false }, { productionRpcOrChainContact: true },
+  { actualChainEvidence: true }, { realCredentials: true }, { signed: true }, { broadcast: true },
+  { readOnlyMethods: [...observationCliSummary.readOnlyMethods, 'sendrawtransaction'] }])
+  denied(() => validateCommandResults(observationCli, JSON.stringify({ ...observationCliSummary, ...mutation })));
+const observationConsumer = plan.find(item => item.args.at(-1) === 'src/presigned/coin-observations-acceptance.ts')!;
+const observationConsumerSummary = { passed: true, syntheticParserFixture: true, checks: 76,
+  protocols: [PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3], networks: ['mainnet', 'signet'], actualChainEvidence: false };
+validateCommandResults(observationConsumer, JSON.stringify(observationConsumerSummary));
+for (const mutation of [{ checks: 75 }, { protocols: [PRESIGNED_PROTOCOL] }, { networks: ['signet'] }, { actualChainEvidence: true }])
+  denied(() => validateCommandResults(observationConsumer, JSON.stringify({ ...observationConsumerSummary, ...mutation })));
+const feeReview = acceptancePlan('local').find(item => item.id === 'offline-fee-review-boundaries')!;
+const feeReviewSummary = { passed: true, syntheticParserFixture: true, kind: 'actual-saved-html-fee-review-boundary',
+  validPackages: 16, validFundingPackages: 2, rejectedImports: 24, refusedActions: 144, asyncInvalidations: 6,
+  fundingConflictingImportsRejected: 2, fundingIncompleteFinalizationsRefused: 4,
+  protocols: [PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3], actualBrowserExecuted: true,
+  syntheticPublicFixturesOnly: true, actualBlockchainContact: false, networkRequests: 0, publicNetworkBroadcasts: 0 };
+// These incomplete/false-scope summaries must be rejected before consulting a
+// built artifact. Pure parser tests do not manufacture saved-HTML evidence.
+for (const mutation of [{ validPackages: 15 }, { validFundingPackages: 1 }, { rejectedImports: 23 }, { refusedActions: 143 }, { asyncInvalidations: 5 },
+  { fundingConflictingImportsRejected: 1 }, { fundingIncompleteFinalizationsRefused: 3 },
+  { actualBrowserExecuted: false }, { syntheticPublicFixturesOnly: false }, { actualBlockchainContact: true },
+  { networkRequests: 1 }, { publicNetworkBroadcasts: 1 }])
+  denied(() => validateCommandResults(feeReview, JSON.stringify({ ...feeReviewSummary, ...mutation })));
+checks.push('actual observation CLI and saved-HTML fee review boundaries are mandatory; partial and false-scope summaries fail');
+const offlineSource = plan.find(item => item.id === 'offline-source-boundaries')!;
+const offlineSourceSummary = { passed: true, syntheticParserFixture: true, suite: 'presigned-offline-current-shared-source',
+  checks: 444, positiveCases: 220, negativeCases: 224, graphSources: 16, ageBoundaryCases: 64, pendingConflictCases: 32,
+  protocols: [PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3], networks: ['mainnet', 'signet'], syntheticPublicFixturesOnly: true,
+  actualChainEvidence: false, rpc: false, signed: false, broadcast: false };
+validateCommandResults(offlineSource, JSON.stringify(offlineSourceSummary));
+for (const mutation of [{ checks: 443 }, { positiveCases: 219 }, { negativeCases: 223 }, { graphSources: 15 },
+  { ageBoundaryCases: 63 }, { pendingConflictCases: 31 }, { protocols: [PRESIGNED_PROTOCOL] }, { networks: ['signet'] },
+  { syntheticPublicFixturesOnly: false }, { actualChainEvidence: true }, { rpc: true }, { signed: true }, { broadcast: true }])
+  denied(() => validateCommandResults(offlineSource, JSON.stringify({ ...offlineSourceSummary, ...mutation })));
 const deployment = plan.find(item => item.id === 'deployment-policy-boundaries')!;
 assert(deployment && !acceptancePlan('pure',PRESIGNED_PROTOCOL).some(item=>item.id===deployment.id));
 const deploymentPolicy = {passed:true,syntheticParserFixture:true,suite:'private-deployment-policy',protocol:PRESIGNED_PROTOCOL_V3,
@@ -131,6 +180,8 @@ const offlineCashoutSummary = { passed: true, syntheticParserFixture: true, comp
   feeRescueWalletAndParentCases: 10, replacementFeeChildrenConfirmedByCore: 10, networkRequests: 0, persistentSecretStorage: false,
   utilitySha256: createHash('sha256').update(parserUtility).digest('hex'),
   protocol: PRESIGNED_PROTOCOL_V3, exactArtifactInputsVerified: true, mainnetBoundaryProtocols: [PRESIGNED_PROTOCOL,PRESIGNED_PROTOCOL_V3],
+  recoveryMissingObservationRefusals: 9, recoveryImmatureRefusals: 9, recoveryWrongSourcePeerRefusals: 1,
+  recoveryAsyncSourceInvalidations: 2, recoveryObservedSourceReviews: 21,
   ownedPayoutCashoutsConfirmed: 12, cashoutOwnerAndReviewMutationRefusals: 37,
   cashoutPayoutFamilies: ['cooperative','cpfp-preserved-payout','final-sweep','recovery','solo'] };
 validateOfflineParserFixture(offlineCashoutSummary);
@@ -138,6 +189,8 @@ denied(() => validateOfflineParserFixture({ ...offlineCashoutSummary, utilitySha
 denied(() => validateOfflineParserFixture(offlineCashoutSummary, mkdtempSync('/tmp/btc-presigned-offline-parser-missing.')));
 for (const mutation of [{ ownedPayoutCashoutsConfirmed: undefined }, { ownedPayoutCashoutsConfirmed: 5 },
   { cashoutOwnerAndReviewMutationRefusals: undefined }, { cashoutOwnerAndReviewMutationRefusals: 36 },
+  { recoveryMissingObservationRefusals: 8 }, { recoveryImmatureRefusals: 8 }, { recoveryWrongSourcePeerRefusals: 0 },
+  { recoveryAsyncSourceInvalidations: 1 }, { recoveryObservedSourceReviews: 20 },
   { cashoutPayoutFamilies: ['solo'] }, { cashoutPayoutFamilies: undefined }, { completeLifecycleEvidence: false }, { completeFeeEvidence: false }])
   denied(() => validateOfflineParserFixture({ ...offlineCashoutSummary, ...mutation }));
 checks.push('owned-payout cash-out requires full pure/Core coverage and actual full saved-file browser proof; focused/missing cash-outs cannot satisfy release');

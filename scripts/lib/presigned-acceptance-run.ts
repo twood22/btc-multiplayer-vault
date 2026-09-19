@@ -47,6 +47,10 @@ export function acceptancePlan(mode: AcceptanceMode, protocol: PresignedProtocol
     network: 'signet', category: 'cryptographic' });
   plan.push({ id: 'oci-boundaries', executable: 'node', args: ['--import', 'tsx', 'scripts/presigned-oci-acceptance.mts'],
     network: 'signet', category: 'cryptographic' });
+  plan.push({ id: 'observation-cli-boundaries', executable: 'node', args: ['--import', 'tsx', 'scripts/presigned-observe-coins-acceptance.mts'],
+    network: 'signet', category: 'cryptographic' });
+  plan.push({ id: 'offline-source-boundaries', executable: 'node', args: ['--import', 'tsx', 'src/presigned/offline-source-acceptance.ts'],
+    network: 'signet', category: 'cryptographic' });
   for (const network of ['signet', 'mainnet'] as const) plan.push({ id: `legacy-unit-${network}`, executable: 'npm',
     args: ['run', 'web:test'], network, category: 'legacy' });
   if (protocol === PRESIGNED_PROTOCOL_V3) {
@@ -66,6 +70,8 @@ export function acceptancePlan(mode: AcceptanceMode, protocol: PresignedProtocol
     plan.push({ id: 'database-v2-all', executable: 'bash', args: ['scripts/run-presigned-db-acceptance.sh', 'all'],
       network: 'signet', category: 'database' });
     plan.push({ id: 'offline-build', executable: 'node', args: ['scripts/build-presigned-offline.mjs'], network: 'signet', category: 'offline-browser' });
+    plan.push({ id: 'offline-fee-review-boundaries', executable: 'node', args: ['--import', 'tsx', 'scripts/presigned-offline-fee-review-acceptance.mts'],
+      network: 'signet', category: 'offline-browser' });
     plan.push({ id: 'offline-full', executable: 'node', args: ['--import', 'tsx', 'scripts/presigned-offline-acceptance.mts'],
       network: 'signet', category: 'offline-browser' });
     plan.push({ id: 'optimized-browser', executable: 'bash', args: ['scripts/run-presigned-browser-acceptance.sh'],
@@ -182,6 +188,32 @@ export function validateCommandResults(command: AcceptanceCommand, stdout: strin
         'graph acceptance did not cover the actual requested network and wallet matrix');
     }
     const result = records.findLast(resultPassed);
+    if (command.id === 'observation-cli-boundaries') {
+      assert(result?.suite === 'presigned-observe-coins-actual-cli' && result.commandCount >= 30 &&
+        result.negativeCases >= 24 && result.successfulProducerConsumerCases === 6 &&
+        result.legacyV2DefaultPreserved === true && result.preCookieArgumentRejection === true &&
+        result.evidence === 'loopback-synthetic-rpc-only' && result.syntheticRpcFixture === true &&
+        result.productionRpcOrChainContact === false && result.actualChainEvidence === false &&
+        result.realCredentials === false && result.signed === false && result.broadcast === false,
+      'observation proof must exercise the actual producer, protocol compatibility and pre-I/O refusals without claiming chain evidence');
+      assert.deepEqual(result.protocols, [PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3]);
+      assert.deepEqual(result.networks, ['mainnet', 'signet']);
+      assert.deepEqual(result.readOnlyMethods, ['getblockchaininfo','getblockhash','getblockheader','getindexinfo','getrawtransaction','gettxout','gettxspendingprevout']);
+    }
+    if (command.args.at(-1) === 'src/presigned/coin-observations-acceptance.ts') {
+      assert(result && result.checks >= 76 && result.actualChainEvidence === false, 'coin observation proof lacks cross-protocol import refusals');
+      assert.deepEqual(result.protocols, [PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3]);
+      assert.deepEqual(result.networks, ['mainnet', 'signet']);
+    }
+    if (command.id === 'offline-source-boundaries') {
+      assert(result?.suite === 'presigned-offline-current-shared-source' && result.checks >= 444 &&
+        result.positiveCases >= 220 && result.negativeCases >= 224 && result.graphSources === 16 &&
+        result.ageBoundaryCases === 64 && result.pendingConflictCases === 32 && result.syntheticPublicFixturesOnly === true &&
+        result.actualChainEvidence === false && result.rpc === false && result.signed === false && result.broadcast === false,
+      'offline source proof lacks exact current-coin, age, membership, ambiguity or pending-conflict boundaries');
+      assert.deepEqual(result.protocols, [PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3]);
+      assert.deepEqual(result.networks, ['mainnet', 'signet']);
+    }
     if (command.id === 'deployment-policy-boundaries') assert(result?.suite === 'private-deployment-policy' &&
       result.protocol === PRESIGNED_PROTOCOL_V3 && result.negativeControls >= 112 && result.hardenedCommandRoles === 3 &&
       result.realPrivateJournalChecks === true && result.exactImageEvidenceRefusals >= 40 && result.runtimeHardeningRefusals >= 40 &&
@@ -297,6 +329,22 @@ export function validateCommandResults(command: AcceptanceCommand, stdout: strin
         'V3 lifecycle public-case cache lacks current-byte, permission, source/protocol and alias invalidation proof');
       }
     }
+  } else if (command.id === 'offline-fee-review-boundaries') {
+    assert(!records.some(item => item.passed === false || item.status === 'failed'), 'offline fee review proof reported a failure');
+    const record = records.findLast(resultPassed);
+    assert(record?.kind === 'actual-saved-html-fee-review-boundary' && record.validPackages === 16 && record.validFundingPackages === 2 &&
+      record.rejectedImports === 24 && record.refusedActions >= 144 && record.asyncInvalidations === 6 &&
+      record.fundingConflictingImportsRejected === 2 && record.fundingIncompleteFinalizationsRefused === 4 &&
+      record.actualBrowserExecuted === true && record.syntheticPublicFixturesOnly === true &&
+      record.actualBlockchainContact === false && record.networkRequests === 0 && record.publicNetworkBroadcasts === 0,
+    'offline fee review proof lacks actual rejected-import, stale-signature or asynchronous approval boundaries');
+    assert.deepEqual(record.protocols, [PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3]);
+    assert.equal(record.sourceDigest, presignedSourceDigest(), 'offline fee review proof is for another source');
+    assert.equal(record.suiteSha256, sha256(readFileSync('scripts/presigned-offline-fee-review-acceptance.mts')));
+    assert.equal(record.artifactSha256, sha256(readFileSync('public/offline/presigned-recovery.html')));
+    const manifest = readFileSync('public/offline/presigned-recovery.manifest.json');
+    assert.equal(record.manifestSha256, sha256(manifest));
+    assert.equal(record.inputDigest, JSON.parse(manifest.toString()).inputDigest);
   } else if (command.id === 'offline-full') {
     assert(!records.some(item => item.passed === false || item.status === 'failed'), 'offline proof reported a failed result');
     const record = records.findLast(resultPassed);
@@ -307,6 +355,9 @@ export function validateCommandResults(command: AcceptanceCommand, stdout: strin
     'offline proof is partial or lacks actual Core lifecycle/fee confirmations');
     assert(record.utilitySha256 === sha256(readFileSync('public/offline/presigned-recovery.html')), 'offline proof is for a different artifact');
     assert(record.protocol === (command.protocol ?? protocol), 'offline evidence belongs to another vault protocol');
+    assert(record.recoveryMissingObservationRefusals === 9 && record.recoveryImmatureRefusals === 9 &&
+      record.recoveryWrongSourcePeerRefusals === 1 && record.recoveryAsyncSourceInvalidations === 2 &&
+      record.recoveryObservedSourceReviews >= 21, 'offline recovery lacks actual current-source selection, age and pending-signature invalidation checks');
     if ((command.protocol ?? protocol) === PRESIGNED_PROTOCOL_V3) {
       assert(record.exactArtifactInputsVerified === true &&
         Array.isArray(record.mainnetBoundaryProtocols) && record.mainnetBoundaryProtocols.includes(PRESIGNED_PROTOCOL_V3) &&

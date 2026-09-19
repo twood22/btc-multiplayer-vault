@@ -21,11 +21,14 @@
 </section>
 <section id="spending" hidden><h2>2. Choose the exact spend</h2>
 <p class="warning">Offline verification does not prove current chain state. With your own fully validating Bitcoin Core, check the exact network/genesis, source outpoint, active block, confirmations, unspent status and current fee policy. Recovery needs the committed CSV age. These signatures authorize only the fixed payouts shown below.</p>
+<p>Before recovery, use <code>presigned-observe-coins</code> with the explicit protocol matching your kit (<code>--protocol presigned-graph-v3</code> for V3) to observe the current shared vault output. Import your own report below. Only its matching graph source can be selected; a peer file cannot supply chain observations. Each signer needs their own independently checked report. A report may be stale or false: recheck with your Core before broadcast.</p>
+<label>Recovery source observations JSON<input id="recovery-observations" type="file" accept="application/json,.json"></label>
+<pre id="recovery-source-review">No recovery source observations.</pre>
 <label>Spend type<select id="spend-kind"><option value="solo">My unilateral exit</option><option value="cooperative">Unanimous cooperative exit</option><option value="recovery">Timelocked N−1 recovery</option><option value="final-sweep">Final-owner sweep</option></select></label>
 <label>Exact source / exit order<select id="source"></select></label>
 <button id="prepare">Rebuild and review spend</button>
 <pre id="review">Select a spend.</pre>
-<label><input id="reviewed" type="checkbox">I independently checked this exact source, chain age, payouts and fee. I want to release this signature.</label>
+<label><input id="reviewed" type="checkbox">I independently checked this exact source, chain age, payouts, fee and any pending competing spend shown in my report. I want to release this signature.</label>
 <button id="sign-single">Sign my solo exit or final sweep</button>
 <h3>Peer exchange for cooperative exit or recovery</h3>
 <p>Start a fresh proposal, export its public peer file, and pass it to the other current participants through your chosen channel. Each person opens their own kit here, imports the same peer file, reviews it, signs locally, and returns their updated public file. No private key or secret nonce belongs in that exchange.</p>

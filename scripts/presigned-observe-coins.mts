@@ -1,8 +1,8 @@
 import { constants, closeSync, fstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createPresignedCoreBackend, type PresignedCoreRpc } from '../src/presigned/core.js';
-import { PRESIGNED_PROTOCOL } from '../src/presigned/types.js';
-import { assert, genesisHash, sameCanonical } from '../src/presigned/validation.js';
+import { PRESIGNED_PROTOCOL, isPresignedProtocol } from '../src/presigned/types.js';
+import { assert, genesisHash, presignedVersion, sameCanonical } from '../src/presigned/validation.js';
 import type { BitcoinNetworkName } from '../src/types.js';
 
 // Read-only, provider-independent helper. Never reads application .env files,
@@ -11,8 +11,8 @@ async function main() {
   const args = process.argv.slice(2); const values = new Map<string, string>(); const coins: Array<{ txid: string; vout: number }> = [];
   for (let index = 0; index < args.length; index += 2) {
     const name = args[index]!; const value = args[index + 1];
-    assert(value && ['--network','--rpc-url','--cookie-file','--coin','--output'].includes(name),
-      'usage: presigned-observe-coins --network mainnet|signet --rpc-url URL --cookie-file PATH --coin TXID:VOUT [--coin TXID:VOUT] --output NEW_JSON_FILE');
+    assert(value && !value.startsWith('--') && ['--network','--protocol','--rpc-url','--cookie-file','--coin','--output'].includes(name),
+      'usage: presigned-observe-coins --network mainnet|signet [--protocol presigned-graph-v2|presigned-graph-v3] --rpc-url URL --cookie-file PATH --coin TXID:VOUT [--coin TXID:VOUT] --output NEW_JSON_FILE');
     if (name === '--coin') {
       const match = /^([0-9a-f]{64}):(0|[1-9][0-9]{0,9})$/u.exec(value);
       assert(match && Number(match[2]) <= 0xffffffff, 'invalid observed outpoint');
@@ -21,7 +21,11 @@ async function main() {
   }
   const network = values.get('--network');
   assert(network === 'mainnet' || network === 'signet', 'choose the exact network explicitly');
-  assert(values.size === 4 && coins.length >= 1 && coins.length <= 16 && new Set(coins.map(coin => `${coin.txid}:${coin.vout}`)).size === coins.length,
+  // Preserve the original V2 producer default; never infer protocol from the chain.
+  const protocol = values.get('--protocol') ?? PRESIGNED_PROTOCOL;
+  assert(isPresignedProtocol(protocol), 'choose a supported presigned observation protocol');
+  assert(['--network','--rpc-url','--cookie-file','--output'].every(name => values.has(name)) &&
+    coins.length >= 1 && coins.length <= 16 && new Set(coins.map(coin => `${coin.txid}:${coin.vout}`)).size === coins.length,
     'specify one to sixteen distinct coins and all required connection/output options');
   const url = new URL(values.get('--rpc-url')!);
   assert(!url.username && !url.password && !url.search && !url.hash && url.pathname === '/' &&
@@ -69,10 +73,10 @@ async function main() {
       availability.push({ ...coin, kind: state.kind, spendingTxid });
     }
     sameCanonical(before, await backend.getTip(), 'complete public observation tip');
-    const report = { version: 2, protocol: PRESIGNED_PROTOCOL, format: 'presigned-private-core-observations-v1',
+    const report = { version: presignedVersion(protocol), protocol, format: 'presigned-private-core-observations-v1',
       network, genesisHash: genesisHash(network), tip: before, observedAt: new Date().toISOString(), coins: observed, availability };
     writeFileSync(resolve(values.get('--output')!), `${JSON.stringify(report, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
-    console.log(JSON.stringify({ passed: true, network, coins: observed.length, publicObservationFileWritten: true,
+    console.log(JSON.stringify({ passed: true, version: report.version, protocol, network, coins: observed.length, publicObservationFileWritten: true,
       signed: false, broadcast: false, observedHeight: before.height }));
   } finally { cookie = ''; }
 }

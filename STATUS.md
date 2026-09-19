@@ -1,6 +1,64 @@
 # Current project status
 
-## 2026-09-14 — V3 integrated; full release acceptance still in progress
+## 2026-09-19 — Offline review fixes; prior release candidate superseded
+
+Independent AI review found and reproduced a V3 observation-helper protocol
+mismatch and rejected fee-draft state surviving into signing. Both have source
+fixes and new regression coverage. The actual CLI passes 30 runs (six valid,
+24 refused), and the saved HTML passes both protocols with 14 valid package
+finalizations, 24 rejected imports, 144 refused follow-on actions and four
+asynchronous review-change refusals. These are focused synthetic/local-browser
+checks, not full native-chain or release evidence. Additional review found and
+fixed rapid approval-toggle and partial funding-signature-import state issues.
+The expanded saved-HTML fee suite passes16valid packages,24rejected imports,
+144refused actions,6async invalidations and2atomic conflicting-funding imports.
+Offline recovery now requires the own-Core reported current source and maturity;
+its selector passes444pure checks. Focused saved-HTML/native-Core acceptance
+passes missing/immature/wrong-source refusals,2mid-sign source invalidations and
+five confirmed owner cash-outs, preserving the no-current-chain-proof warning.
+
+The fixed local plan now has78 commands. The first run at source83e90015 in
+`/tmp/btc-presigned-acceptance.TRnLqI` ended143 after40 completed commands; no
+cause is established and no complete receipt exists. Its evidence is retained.
+A fresh unchanged-source run is active in `/tmp/btc-presigned-acceptance.3wMcT1`,
+supervised by `btc-v3-local78-FF0rYugO.service` with private logs under
+`live-run/v3-local78-control.FF0rYugO`, a three-hour bound and no restart.
+Source61d3/d907 and its75-command
+LOCAL/images remain historical; they do not certify this changed implementation.
+The old source-pinned seed transfer/full-run package stays disabled. Full local,
+exact-image, real default-Signet and deployment-package acceptance must target
+the eventual corrected source. Nothing is deployed or approved for mainnet.
+
+Native observation at2026-09-19T20:51:06Z found79,819 confirmed test sats and no
+pending receipt. The twentieth faucet input was consumed by another transaction
+in active block322446; exact native search/readback at20:52:55.988Z confirmed
+that competitor and no output to the test receiver. Twentieth was never relayed
+and must not be retried. Eighteenth's confirmed receipt remains preserved. The
+twenty-first distinct public-work attempt was selected at21:44:42Z, actual
+tip322847, and completed once in12.377seconds with exit0 and zero remaining
+workers. Exact work/signature/opcode-model checks passed. Its native gate at
+322847/41confirmations refused relay until322853/47confirmations; no relay or
+receipt exists. This solved work is not received funding. All earlier jobs
+remain closed or confirmed as already recorded; never retry the twentieth.
+
+The Actions warning is account-wide. This repository is currently public with
+standard runners and no queued/running jobs; its runs should be free under the
+current documented rules. Account billing is not readable with existing token
+scope. No permission expansion, new hosted job or billing change was made.
+
+The real observation CLI also passed V2/V3 read-only native Signet checks at
+height322846, using an unchanged test coin and no signing/broadcast. This is
+not any of the required19V3 lifecycle cases. Host free space was about3.0GB at
+21:31UTC; inspect disposable build material before larger stages, preserve all
+wallets/backups/historical evidence and avoid unrelated host cleanup.
+At22:05UTC, the four byte-verified duplicate scan archives (not their originals)
+were reclaimed through a separately reviewed, restore-tested helper; free space
+is about3.8GiB. All unique evidence and custody remain retained (D30).
+
+The dated sections below preserve prior observations, not current activation
+authority. See D12/D26/D27/D28 and the active checklist for the new boundary.
+
+## 2026-09-16 — V3 full hosted matrix passes; release acceptance still incomplete
 
 The replacement fixed-refund protocol, 21-signature ceremony, portable/passkey
 restoration, runtime, fee rescue, protocol-bound database state and browser/offline
@@ -12,13 +70,66 @@ Actual isolated Core tests passed all six normal orderings, nine recovery
 quorums and fresh-signature collusion negatives. Complete V3 database ceremony,
 runtime, chain/reorg, fees, native restore and owner-withdrawal tests passed.
 The complete saved-file offline suite passed all 19 lifecycles, 71 restorations,
-31 confirmed browser-signed transactions and owner cash-outs. The final-source
-previous candidate's hosted web workflow and both exact-image profiles passed. The full
-combined suite and actual default-Signet matrix remain unfinished. Deployment and
+31 confirmed browser-signed transactions and owner cash-outs on intermediate
+source. The corrected candidate now passes the complete 75-command hosted matrix
+and both exact-image profiles. Independent retention/revalidation of the complete
+local archive is complete; the actual default-Signet matrix remains unfinished. Deployment and
 rollback tooling passes 224 refusal controls, but actual exact-image execution
 is still required. Several full lifecycle runs were interrupted by unexplained
 SIGTERM signals; supervised local reruns preserve those failures separately.
 No new public deployment or mainnet transaction has been performed.
+
+Current2026-09-17 04:07UTC: eighteenth is now actually confirmed in block322441,
+in addition to ninth/tenth in322416/322414. Native confirmation and independent
+readbacks prove exact9816-sat receipts and receiver recovery; wallet79819confirmed/
+0pending. One additional actual9816receipt remains necessary; no projected funds
+are counted.
+Both were submitted once; never rerun their relays or exclusive receipt writers.
+Sixteenth and seventeenth closed with actual child exit1, no signals, empty output
+and verified reaping/zero actors. Finite nonce exhaustion is inferred from the
+pinned utility's sole exit1 path; neither was timeout or a received claim.
+Eighteenth actually solved at02:57:30 with native exit0; exact-byte, signature,
+hash and opcode-model review passed. Its retained unit is stopped with zero
+miners. At03:54UTC actual tip322439/47confirmations passed its native gate;
+fresh root review and ONE relay completed with actual exit0 and transport
+acknowledgment. At04:06 actual receipt and separate native readback prove its
+confirmed unspent output, exact wallet receive and spent original input. Never
+repeat that relay or confirmed-receipt writer.
+Nineteenth closed at03:25:55 with child1,
+no signals/empty output and independently verified cleanup; finite exhaustion
+is inferred from the pinned exit path. Twentieth started once at03:29:37 and
+actually SOLVED at03:31:34, child0/reaped/117.187474seconds. Root verified exact
+bytes/signature/opcode model and stopped its retained unit with zero miners.
+It remains NOT relayed: tip322441/45confirmations is below322443/47required.
+Both exact confirmation helpers passed premature refusal controls; twentieth's
+positive receipt branch remains unexecuted. No projected receipt is counted and no worker
+is running. Full pins and one-time-only relay rules are in both private READMEs.
+A fresh bounded native discovery scan
+and independent transaction/anchor readback provide its candidate snapshot; the
+selector still requires fresh native checks. No vault economics or release gate
+changed. The slower compiler-unroll experiment was not adopted.
+Twelfth and all other failed attempts remain closed and preserved.
+The retained bounded AI review still matches all26 named source files, and the
+75-command evidence revalidates; that is not a new audit or final release review.
+Full-run admission and seed transfer remain disabled; all
+19real cases, both final assemblies and actual deployment-package execution
+remain required. Current exact acquisition bindings are in the dated evidence
+log and the eighteenth/twentieth private READMEs, not the historical paragraphs below.
+The additional bounded root nonce review confirms ordinary portable backups
+exclude secret nonces; eight synthetic runtime controls and the pure V3 offline
+suite pass. No browser-profile rollback/cloning experiment or broader audit is
+claimed, and no application change resulted.
+The fresh04:01 npm advisory check reports zero known vulnerabilities across149
+reported dependencies. Package/lockfile/source remain unchanged; this is not a
+security audit or closure of the remaining release gates.
+
+At2026-09-16 22:01UTC the full-run supervisor remains dormant, with a new exact
+funding/custody admission binding,117 synthetic checks/115 refusals and passing
+strict typechecks. Actual disabled paths refuse before operational state; funded
+native integration has not run. Two solved public test-funding claims await real
+chain maturity; another bounded computation is active. Neither projected funding
+nor a solved claim counts as received capital. See the concise acceptance
+checklist and its separate historical evidence log for the unchanged release gates.
 
 The first frozen V3 public candidate (`19d82053`, source `2e47819d`) failed its
 hosted acceptance run. The clean-checkout parser dependency and cash-out browser
@@ -31,8 +142,72 @@ test's final stdout omitted its actual protocol identifier, so the unchanged
 strict evidence validator correctly refused it. The minimal reporting correction
 and 14 missing/wrong-protocol regressions passed, with independent AI review,
 both typechecks and actual native V2/V3 restores (six keys, 22 refusals each).
-Corrected source `61d3b2c5` requires fresh complete acceptance and image evidence.
-Exact-image retention `34805003735` passed
+Corrected candidate `d907d42b` / source `61d3b2c5` now has both fresh exact-image
+profiles retained from run `34809956746`, tooling `ada17b10`. Root independently
+rechecked all six original asset hashes, exact private archive restoration and
+the actual candidate image validators. The mainnet and Signet profiles each
+contain 39 restored files and bind the same offline utility. The private index
+is `live-run/presigned-v3-public-ci.yKBf85nN/artifact-inventory.json`; it expressly
+does not grant release or funding authority. Regular CI `34809778036` passed
+all three jobs. Root checked the completed local job's emitted exact 75-command
+plan, source/protocol identity, execution receipt and successful 165-file archive
+round-trip. Run digest: `63cec50f0cbac0c4d0621ac3be7a849a6362138d601576aa9375baf9618f3656`.
+That runner did not retain its archive after shutdown; this is completed hosted
+execution, not an independently imported local archive or final release receipt.
+Dedicated retention `34812303455` also passed all 75 commands and packed its
+165 files, but publication review refused `presigned-core-observed-witnesses`.
+No upload occurred. An unchanged isolated reproduction proved that legitimate
+350/351-vB transactions yield two different minimum-fee rejection details; the
+reviewer admitted only one. The two-file tooling correction passed independent
+AI review, root replay of the original reproduction, 552 refusal controls and
+six archive tests. The lost hosted archive's exact offending bytes remain
+unknown; the new reproduction is not replacement evidence for it. Fresh run
+`34818898073`, tooling `cf75a90b`, completed successfully with candidate source
+unchanged. Root independently acquired the three original LOCAL assets, ran the
+corrected strict reviewer without credentials, compared its fresh review byte for
+byte, and passed the actual candidate's complete 75-command validator. All 165
+restored files (2,318,631 bytes), the original ordered job events and the offline
+utility match. Private proof:
+`live-run/presigned-v3-local-acquisition-fix.Oci1hru9/root-verification.json`;
+run digest `76569ba44692b550dc3f29d5ceeb6ff09231a5a479901a231658bff4ab50a554`.
+This closes LOCAL evidence retention, not public-Signet or final release acceptance.
+The separate host-local suite `/tmp/btc-presigned-acceptance.DbcjXS` failed at
+07:37:42 UTC after 70/75 commands. Its unchanged browser test timed out polling
+for the final-owner signing result after the first two normal withdrawals.
+The underlying cause is not established; the original private failure and
+successful cleanup are retained. This is not a complete receipt and the hosted
+passes do not explain it. The separate unchanged isolated browser rerun also
+failed, at 08:17:08 UTC while awaiting Alice's recovery-signature contribution.
+Independent, read-only inspection of verified disposable database copies found
+that the first failure never reached the final owner's unlock, whereas the
+second completed unlock only about 13 seconds before its failure. The pending
+request therefore does not prove a 60-second server stall. Both sessions were
+valid; quiet synthetic server validations each took under 200 milliseconds.
+Existing diagnostics omit safe UI-error classification and per-request timing,
+so targeted test-only instrumentation ran in a separate private snapshot.
+That complete diagnostic passed with actual native exit 0 in 30 minutes
+46.883 seconds. Root verified the private result, unchanged app source and no
+remaining owned processes. Its distinct diagnostic identity cannot be accepted
+as a candidate receipt. The compiled app, assertions and deadlines were unchanged;
+heavy local checks were paused during that run. Independent timing analysis and
+root replay are complete: the final-owner signing window took 40.489 seconds,
+including 40.299 seconds of its unchanged 60-second poll. Bounded rings dropped
+earlier events; the original failures' causes are still not established.
+The subsequent unchanged, uninstrumented quiet run passed with actual exit 0
+in 30 minutes 5.366 seconds. Root independently ran the actual candidate browser
+validator, rehashed all 2,850 compiled files in both the test and original
+snapshots, verified source61d3 and confirmed zero remaining owned actors.
+All 21 setup signatures, the absent member's fixed refund, the complete game,
+all fee paths, seven reauthentications and a confirmed owner cashout passed.
+Private proof: `live-run/v3-quiet-browser-control.ZfgS9Ows/root-completion.json`.
+This is genuine unchanged standalone acceptance, not a splice into either failed
+matrix or evidence that establishes the earlier failures' causes.
+Both earlier runs overlapped
+CPU-heavy tests; contention on this older two-core host is an unproved confound,
+not a reason to accept the failures. No candidate tests or validators were
+weakened and no partial results were combined.
+
+Historical exact-image retention `34805003735` passed
 both profiles; all six original test-evidence assets were downloaded and checked
 against their retained hashes. Independent local mainnet-format archive
 restoration, privacy review and actual candidate OCI validation passed for both
@@ -42,11 +217,280 @@ Exact, recoverable duplicate public-cache reclamation
 completed: 290 files/20.94 GiB removed with all keeper and protected-file checks
 passing; custody, unique data and restoration instructions are retained.
 
-The retained local run reached 65/75 commands before being deliberately stopped
+An experimental private copy-on-write cache route is being tested because a
+second full cache copy does not fit the remaining disk capacity. Root's separate
+unchanged fixture rerun passed 32 refusals, seven mount sessions, actual isolated
+Core persistence and controller/fault cleanup. A separate durable fixture
+revision passed root's rerun with two same-wallet restarts, five actual native
+restoration proofs and 44 refusals. A dormant adapter subsequently passed root's
+46-control isolated rerun, including two same-wallet restarts. The bounded,
+continuously lock-held complete-run revision passed root source review, its
+compiler check, 25 continuation controls and 30 transport/locking controls.
+The first root-owned native qualification failed before lifecycle initialization:
+its 101-block maturity-mining request reached only height 39 from 3, then failed
+at the fixture's five-second fetch boundary. All owned processes/mounts stopped
+and original private state is preserved. A focused root reproduction recorded
+an actual TimeoutError after 5.082 seconds and 41 of 101 requested blocks, with
+clean shutdown. Smaller mining batches then completed all maturity blocks but
+exposed a separate fixture error: with automatic wallet broadcasting disabled,
+the fixture created a seed transaction without explicitly submitting it before
+mining. That failed fixture also stopped cleanly before any lifecycle engine
+call. The next test-only correction explicitly submitted the exact new seed and
+waited for the transaction index's current height. Root's native qualification
+then passed in 187.544 seconds: 83 restored native signatures, four unchanged
+lifecycle-engine calls, locking checks and two same-wallet sessions. Independent
+root replay verified the 83 signatures, all frozen hashes, clean ledgers and
+zero owned actors/mounts. The candidate and frozen adapter remain unchanged.
+Private evidence is in `live-run/presigned-v3-cow-follow.NvA1Qt6x/`, including
+`root-test-refinement-review.json` and `root-native-v3-verification.json`.
+The separately prepared unfunded bootstrap configuration passed root diff,
+inventory-provenance and compiler checks in
+`live-run/presigned-v3-cow-bootstrap.xwJrRlUY`. Its finite launcher then passed
+compilation and fresh source/binary/space/stopped-keeper/absent-path checks.
+Root preserved the original policy and enabled only the reviewed unfunded
+bootstrap gate; lifecycle and funding remain disabled. The actual one-shot
+startup reached its native clean-stop checkpoint but exposed a private runner
+deadlock: the parent kept the input pipe open until child exit, while the
+successful child kept waiting on that pipe. Root independently verified the
+native backup, stopped Core, zero mounts and three matching clean checkpoints,
+then invoked the parent's normal stop handler. The parent exited 1 and its
+unchanged native controller exited 0; all evidence remains preserved and no
+bootstrap success receipt was issued. The separate full closed-state review
+passed with actual exit 0, including a fresh 28.77 GB cache read under the keeper
+lock and unchanged clean custody. D16 narrowly requires that review, a qualified
+controller transport fix and a separately approved successful unfunded same-host
+resume before any funding. Chain synchronization and Signet lifecycle acceptance
+remain unclaimed.
+The separately reviewed same-host resume reached a saved synchronized Signet
+observation at322049 using the same wallet and three cache views, then returned
+controller exit0. Its parent still exited1 at the final checkpoint. A separate
+process-only reproduction shows that the parent's pre-exit zero-child check can
+count its own TypeScript compiler service; the failed parent's exact throwing
+line was not retained. Both failed runs remain unchanged. A new independent
+full closed-custody review passed with actual exit0: all15 bound files, native
+receiving proof, three matching clean sequence2 copies and a fresh28.77GB cache
+read under locks. Its retained receipt is
+`live-run/presigned-v3-cow-resume.VANDQ2vz/root-closed-state-review.json`.
+Both failed supervisors remain failed. The narrowly metadata-bound compiler
+cleanup passed all50 isolated controls, including actual pidfd cleanup, without
+changing shared dependency permissions. Root's new locked preflight verified
+all22 prepared files and the full28.77GB lower inventory. The corrected unfunded
+same-host resume then completed with actual controller and outer exit0 in
+502.627seconds. It reached height322366 with10peers and stopped cleanly at
+sequence3. No parent compiler was present in this particular run; its optional
+absence branch passed, not a claimed live pidfd signal. Root's independent
+post-terminal check at17:58:56 UTC verified all22 files, native recovery,
+three clean copies, stopped physical checkpoint, lower metadata and zero
+actors/mounts. Proof:
+`live-run/presigned-v3-cow-resume-toolchain.b5B8xBQh/root-completion.json`,
+SHA `52a60322d645f6d567f5739266416df7c575f8972e06c22a38f9e85955e04319`.
+This closes D16's unfunded resume requirement, not funded lifecycle acceptance.
+The user guide now includes source-checked browser/offline fee-rescue steps
+and the exact confirmed-coin observation command. The supplemental test of the
+documented invitation CLI against fresh PostgreSQL passed with actual exit 0
+in 22.017 seconds: three private role-bound invitations, immutable settings,
+23 real migrations and 11 refusal/atomic-rollback cases. Root verified source,
+receipts, all 17 child outcomes, stopped database, removed generated fixture
+password and zero owned actors. A runner-only configuration guard initially
+rejected the committed example file before fixture creation; that failure is
+preserved, and the correction permits only the exact pinned example. Private
+proof: `live-run/v3-invite-cli-acceptance.iFbxFxY4/root-completion-v4.json`.
+No invitations were delivered and no operational database was modified.
+The real default-Signet lifecycle remains unfinished and its funding/lifecycle
+gates remain disabled. The unfunded host has already mounted private writable
+cache views and stopped cleanly three times; the original lower cache remains
+unchanged. D14–D16 record the limits and required checks. The corrected,
+normally confined Firefox completed its one ordinary faucet visit, but the
+challenge did not complete and no claim was submitted. Its actual exit0 and
+owned cleanup are retained separately, with no protection changes or retries.
+Fresh native readback on September16 at18:00:15 UTC confirms40,555 test sats and
+no pending coins at height322369, below the89,000-sat seed target. The pure public
+PoW constructor, one-attempt worker and disabled relay are independently
+qualified. Root replay passed six worker suites/47 refusals and all53 relay
+controls. Fresh native input checks found earlier eligible outputs already spent;
+the oldest remaining observed output was outside the qualified difficulty
+range. No work job or approval was created, no real mining or relay occurred,
+and these preparations do not count as test capital or Signet acceptance.
+At18:21 UTC a new isolated constructor/worker qualification extended the public
+work range to difficulty33. All18 construction differentials, six constructor
+suites,72 target checks, eight independent hash checks,14 CLI refusals and six
+runner suites/47 refusals passed. Root approved exactly one fresh difficulty32
+job against a native-verified public output and the existing restored receiver.
+The bounded worker in `live-run/powcoins-fast-qualified.yqzt8GhQ` completed
+actual exit0 in773.047seconds. Independent work/signature/script checks passed.
+The first relay refused before sending: the peer advertises an empty experimental
+`sendtemplate` capability. A one-condition compatibility fix passed all58
+protocol controls and an actual handshake-only check, retaining every exact
+transaction and once-only boundary. Fresh native revalidation then authorized
+one corrected relay, which exited0 and received transport acknowledgement.
+Native reconciliation at18:46:24 nevertheless found a competing confirmed spend
+of the public faucet input in block322373. Our claim received zero sats and
+must not be relayed again. The worker and relay are stopped; original failures,
+successful work and failed acquisition remain distinct. Native wallet remains
+40555 confirmed/0pending against the89000-sat seed target. Root outcome SHA
+`d963c5b07f2c456c917208e867a152933abf0282b50c0b2a142e10a98f2d4964`.
+D17 records the isolated184-sat acquisition fee and finite authorization;
+vault economics, source61d3 and all release acceptance gates are unchanged.
+
+A separate fresh public-output attempt then **received9,816 confirmed test sats**
+in block322377. Its worker completed actual0 in1259.718seconds; independent
+work/signature/script/native checks passed and the corrected exact relay exited0
+after one transaction write. Native verification at19:19:02 independently
+matched the raw transaction, owned wallet receipt and unspent confirmed output.
+The existing receiving wallet now has50,371 confirmed/0pending sats; a separate
+19:21 check found three spendable confirmed outputs. Root confirmation SHA
+`cc55d655519a256bd40efc804aff131a198a75c45d44636bef704edf765785f0`;
+closed acquisition summary SHA
+`ad50aeda8021cc043fb64511c2f1a2f718a3fdc873967bc32f2ac5c0e19ec0c4` in
+`live-run/powcoins-next-work.xbbve3Ai`. Both miner and relay are stopped; do not
+repeat this confirmed claim. The earlier competing-loss claim remains failed.
+The89,000-sat seed is still short. A third capsule is prepared but unactivated;
+at19:25 its earliest observed public candidate needed three additional blocks,
+to height322382, for the selected maximum work difficulty32. This is not a
+reservation or a claim of future funds. Real V3 funding/19-case acceptance,
+both final assemblies and actual deployment-package execution remain open.
+
+At19:39 native revalidation still found the exact9,816-sat receipt confirmed
+and unspent, with50,371 total confirmed/0pending. The existing funds comprise
+one39,055-sat P2WPKH completed historical return and two P2TR receipts. A separate
+seed-source backup/restore preparation completed actual exit0 at19:42, proving
+both exact native target keys in a fresh network-disabled Core. Root separately
+revalidated both signatures, current ownership, unchanged receiving proof,
+unspent historical return and zero live restore processes. Evidence:
+`live-run/v3-seed-source-recovery.TbI3iE3d/result.json`, SHA
+`8f044148686a418356efb5b54b4b3df03f5a3926c0cb1e602c70e7f128ad1623`;
+root review SHA`fe7680da0b1733eb2b40b88e04ea3b8daf779f886d9a781562079a58694fe055`.
+No actual transfer was signed or broadcast. Size-only projection for the one
+P2WPKH plus six P2TR inputs gives512 maximum vbytes and154 sats at the unchanged
+0.3sat/vB fee profile. Four additional9,815-sat receipts would leave477 sats
+change after the89,000-sat seed; those future coins are hypothetical and require
+fresh exact input/fee validation. At19:43 the third public candidate remained
+unspent at tip322381, one block short of selected eligibility. Its job/approval
+and relay remain absent; the prepared relay/review templates have unset job pins.
+
+By19:46 the native tip reached322383 and another claimant had spent that waiting
+output before any third job was selected. D17 now permits the already-qualified
+difficulty33 again, one block earlier, accepting its lower bounded-search success
+probability. Only selection threshold/eligibility height and approval choice
+changed; exact reverse comparison verified the unchanged runner/controls. The
+next observed candidate first enters that range at322384 if still unspent.
+
+Actual third work began at19:53 UTC after a successful native selection at
+322384 and fresh exact approval. The unique unit/session7584 binds difficulty33,
+CSV47 and job`fa0a9373831a38330700a8cd9b41c6e002dbc47663238a5469bfb401a178c2ea`.
+It has an1800-second total work bound and no relay authority. Post-work/native/
+relay templates are separately pinned to that actual job; reverse comparison
+against the earlier successful scripts passed. Native19:55 readback found the
+input still unspent and wallet50371confirmed/0pending. Work and receipt outcome
+remain pending; relay is not activated and no V3 acceptance gate has opened.
+
+That third attempt is now CLOSED unsuccessfully. Native20:03 reconciliation
+proved another transaction spent the public input in block322385. Root stopped
+only the exact worker invocation through its normal signal handler; session7584
+actually exited1 after596.388seconds, with the direct child terminated/reaped and
+zero remaining actors. No completed work, relay activation or transaction send
+occurred. Wallet remains50371confirmed/0pending. Native proof SHA
+`265594947e64203cd9f2a3c19c491d2331c6b423d63132a687e608e6a400dbad`.
+The spent input is permanently closed. A fourth path-only worker preparation
+passed six suites/47 refusals but remains unactivated. Available OpenCL platforms
+are zero; no GPU work, driver installation or host setting change was performed.
+
+D19 introduces explicitly labeled early computation, not early relay. Pure
+projection controls85/34 and separate approval/constructor controls91/73 passed;
+all six unchanged worker suites/47 refusals passed. A fresh native observation
+at20:21:57 verified an unspent input at actual tip322390. Its construction context
+projects eligibility at322409; no future block hash or current maturity is claimed.
+One bounded worker15500 is now running in `powcoins-fourth-work.NApAA82X`, job
+`18b3639c59b409b63a3d229a82f59d6f59f5a5b7695f2ec72dda7de1950460de`.
+Native20:27 still found the input unspent at322392/30 confirmations, original
+actual anchors active and receiver recovery intact; real maturity readiness was
+false. Wallet remained50371confirmed/0pending. All three post-work/relay entries
+actually refused while completed work was absent, creating no proof or activation.
+Actual positive post-work/maturity branches remain unexecuted. A refreshed native
+101-block scan found45 outputs for future fresh selection; this is not reserved
+capital. The next worker preparation passed six suites/47 refusals plus92/74
+future controls, with its activation gate still false. Real work stays serial.
+
+Latest20:53 UTC: fourth work CLOSED on bounded timeout; direct child-15 reaped
+after1792.056889seconds, no completed work/relay/funds and zero actors. Native
+journal main exit120 is distinct from original monitor15500 exit143. Fifth
+work now runs in `powcoins-next-future.W88DkN2Z`, job
+`46201cbb7a1caaea65a6e93d08ad916fdb39eb64be77ba6045f579f036a22da3`,
+actual observed tip322396 versus projected eligibility322408. Its service
+retains native terminal state independently of chat monitoring (D20). Source,
+1800-second work limit, maturity/relay gates and acceptance remain unchanged.
+No additional receipt is claimed; all seed-transfer pins remain unset.
+
+Latest21:22 UTC: fifth and sixth work calculations both succeeded and their exact
+work/signature/transaction checks passed. Native service/child exits0, reaped,
+then retained units stopped and zero actors verified. They are NOT receipts:
+current native tip322398 left claims short of required322408 and322410. Both
+native gates returned readinessfalse, wrote no relay proofs, and no relay was
+activated. Seventh bounded work is running for a different public input. The
+latest actual wallet observation remains50371confirmed/0pending. D21's disabled
+complete-run file supervisor has passing local controls, not actual funded-run
+acceptance. Real19-case Signet, final assemblies and deployment remain unfinished.
+
+Latest23:14 UTC: tenth computation also succeeded (actual service/child0,
+1492.240106seconds). Its exact work/signature/narrow-script review passed577cb9;
+retained unit stopped and zero actors verifiedb36c70. Four claims are now solved
+but UNRELAYED, requiring actual tips322408,322410,322412 and322415 respectively.
+Latest native tip322405 leaves all immature; no new receipt is counted. Actual
+source funds remain50371confirmed/0pending. Four9816-sat receipts would provide
+89635sats, sufficient for89000seed plus154fee and481change, but this remains
+conditional on actual confirmations. The tested eleventh fallback is DISABLED;
+no worker is active. Full-run admission, all19realSignet cases, both final
+assemblies and actual deployment-package acceptance remain required.
+
+Latest23:25 UTC: sixth's public input was consumed by a competitor in active
+block322406 (native542e41); no output went to our receiver and we received0.
+The earlier successful computation remains historical, not a receipt. Its
+relay was never activated; closure9536b46f preserves the evidence. Fifth/ninth/
+tenth are still pending. The eleventh replacement started23:21:43 under bounded
+native supervision, actualtip322406/projected322414; no work success is claimed.
+A fresh native inventory at23:25 found29of45known outputs unspent, oldest45conf
+and none mature in the qualified work range. Wallet remains50371confirmed/0pending.
+No new product/release authority follows from this acquisition work.
+
+Latest23:48 UTC: fifth also CLOSED with zero received. The new native gate
+reached322408 but refused because a competing transaction had consumed its input
+in that block; native62269/14cf1f and closure16e60b29 preserve this outcome.
+No fifth relay occurred. Ninth/tenth are the remaining solved, unrelayed claims;
+eleventh still computes under its original bounded native invocation. Twelfth
+is prepared/DISABLED with6suites47refusals plus101checks81refusals and no real
+selection/job/attempt. Latest23:42 native observation found ninth/tenth/eleventh
+inputs unspent40/43/41conf at322408; wallet23:41 remained50371confirmed/0pending.
+Old watcher71396 ended143 for an unestablished reason; native node and miner
+remained live. Replacement read-only watcher17493 completed0 at the threshold.
+Neither observer outcome is a computation, capital receipt or release pass.
+
+Latest23:58 UTC: eleventh CLOSED on actual1792.137277s timeout at23:51:36,
+native mainexit1/child-15reaped/TERM/noKILL, no result/relay/receipt; zero actors
+verified7ef6d5, closure5c9ab13c. Twelfth started once23:54:57 on a new input,
+observed322410/projected322416/lead6; same bounded native supervision and exact
+work/fee/maturity requirements. All3 postwork helpers actually refuse premature
+execution62740/39547a; root9ba8e5 verifies template-only changes/unchanged relay.
+Ninth/tenth remain solved and unrelayed; native23:52 showed them unspent42/45conf,
+wallet50371/0. New read-only watcher46071 waits for tenth's322412threshold;
+its observation is not relay authority. No V3 acceptance gate is closed by this.
+
+Latest2026-09-17 00:06 UTC: tenth's actual native maturity gate passed at
+322412/47conf/unspent and root reviewed the fresh exact proof6668ec. One relay
+attempt completed0 (66002/a358b4),00:01:49–00:01:53, with transaction write and
+peer transport acknowledgement. Root submission67b765d7 binds the actual proof/
+attempt/send/result. Transport is NOT acceptance or confirmation. Native00:05
+still reports own output unknown and wallet50371confirmed/0pending; do not count
+9816sats yet or rerun any relay preparation/attempt. Native00:06 finds ninth,
+tenth and twelfth public inputs still unspent44/47/43conf with active original
+anchors. Ninth remains immature; twelfth is still computing. Observer46071 also
+ended143 while miner/Core remained live; D24 now uses short native checks between
+timed waits. No long-lived observer remains, and all V3 release gates stay open.
+
+The previous-source retained local run reached 65/75 commands before being deliberately stopped
 after the hosted run proved the deterministic final evidence defect. Its partial
 evidence and source-exact snapshot are preserved, not accepted. The correction
-changes source identity; the complete local and image checks must run on that
-new identity, without reusing the old images as final-source proof. Both final network-specific receipts
+changed source identity; the successful new hosted matrix and image checks bind
+the corrected identity without reusing the old images. Both final network-specific receipts
 and their category dossiers must still be assembled after completed local and
 public-Signet evidence; a receipt for one image cannot authorize the other.
 

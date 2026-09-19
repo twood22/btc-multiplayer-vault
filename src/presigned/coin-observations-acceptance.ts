@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { presignedObservedFeeCoin, validatePresignedCoinObservations, type PresignedCoinObservations } from './coin-observations.js';
 import { createPresignedFixture } from './fixtures.js';
-import { PRESIGNED_PROTOCOL } from './types.js';
+import { PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3 } from './types.js';
+import { presignedVersion } from './validation.js';
 
 let checks = 0;
-for (const network of ['mainnet','signet'] as const) {
-  const { graph } = createPresignedFixture({ network });
-  const report: PresignedCoinObservations = { version: 2, protocol: PRESIGNED_PROTOCOL,
+for (const protocol of [PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3]) for (const network of ['mainnet','signet'] as const) {
+  const { graph } = createPresignedFixture({ network, protocol });
+  const report: PresignedCoinObservations = { version: presignedVersion(protocol), protocol,
     format: 'presigned-private-core-observations-v1', network, genesisHash: graph.roster.genesisHash,
     tip: { network, genesisHash: graph.roster.genesisHash, hash: '55'.repeat(32), height: 100 },
     observedAt: '2026-09-07T00:00:00.000Z',
@@ -17,6 +18,10 @@ for (const network of ['mainnet','signet'] as const) {
   const coin = report.coins[0]!;
   assert.deepEqual(presignedObservedFeeCoin(report, coin.txid, coin.vout, null), coin); checks++;
   for (const mutate of [
+    (value: any) => { value.protocol = protocol === PRESIGNED_PROTOCOL ? PRESIGNED_PROTOCOL_V3 : PRESIGNED_PROTOCOL;
+      value.version = presignedVersion(value.protocol); },
+    (value: any) => { value.version = value.version === 2 ? 3 : 2; },
+    (value: any) => { value.protocol = 'presigned-graph-v4'; },
     (value: any) => { value.network = network === 'mainnet' ? 'signet' : 'mainnet'; },
     (value: any) => { value.tip.genesisHash = '66'.repeat(32); },
     (value: any) => { value.observedAt = '2026-02-30T00:00:00.000Z'; },
@@ -39,4 +44,5 @@ for (const network of ['mainnet','signet'] as const) {
   assert.throws(() => presignedObservedFeeCoin(pending, coin.txid, coin.vout, '88'.repeat(32)), /another mempool/); checks++;
   assert.deepEqual(presignedObservedFeeCoin(pending, coin.txid, coin.vout, '77'.repeat(32)), coin); checks++;
 }
-console.log(JSON.stringify({ passed: true, checks, networks: ['mainnet','signet'], actualChainEvidence: false }));
+console.log(JSON.stringify({ passed: true, checks, protocols: [PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3],
+  networks: ['mainnet','signet'], actualChainEvidence: false }));

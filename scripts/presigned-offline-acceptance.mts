@@ -14,7 +14,8 @@ import { LAST_SURVIVOR_PAYOUT_SCHEDULE } from '../src/presigned/economics.js';
 import { validatePresignedFeePackage } from '../src/presigned/fee-package.js';
 import { authorizePresignedFundingSignedPsbt, finalizePresignedFunding } from '../src/presigned/funding.js';
 import { buildPresignedGraph } from '../src/presigned/graph.js';
-import { validatePresignedOfflineExchange, validatePresignedOfflineTransaction, type PresignedOfflineTransaction } from '../src/presigned/offline.js';
+import { newPresignedOfflineExchange, validatePresignedOfflineExchange, validatePresignedOfflineTransaction, type PresignedOfflineTransaction } from '../src/presigned/offline.js';
+import { buildPresignedSpend } from '../src/presigned/spends.js';
 import { completePresignedExit } from '../src/presigned/signing.js';
 import { nativeWalletWitnessFromPsbt } from '../src/presigned/wallet.js';
 import { PARTICIPANT_IDS, PRESIGNED_PROTOCOL, PRESIGNED_PROTOCOL_V3, type ParticipantId, type PresignedProtocol,
@@ -65,6 +66,11 @@ let feeCases = 0;
 let feeChildren = 0;
 let cashoutsConfirmed = 0;
 let cashoutRefusals = 0;
+let recoveryMissingObservationRefusals = 0;
+let recoveryImmatureRefusals = 0;
+let recoveryWrongSourcePeerRefusals = 0;
+let recoveryAsyncSourceInvalidations = 0;
+let recoveryObservedSourceReviews = 0;
 const cashoutFamilies = new Set<string>();
 let failureDetail: { locations: Array<{ line: number; column: number }>; statuses: string[] } | null = null;
 type Fixture = ReturnType<typeof createPresignedFixture>;
@@ -183,7 +189,55 @@ async function cooperate(group: Actor[], source: string, exerciseLostNonce: bool
   await expect(leader.page.locator('#status')).toContainText('Exact transaction and signatures verified');
   return signedFile(leader);
 }
-async function recover(group: Actor[], source: string) {
+async function loadRecoverySource(core: PresignedRegtest, actor: Actor, source: string) {
+  const graph = actor.kit.graph;
+  const outpoint = source ? { txid: graph.exits.find(item => item.id === source)!.txid, vout: 1 }
+    : { txid: graph.fundingTxid, vout: 0 };
+  const report = await observationsFor(core, actor.kit, [outpoint]);
+  await loadPublic(actor, '#recovery-observations', report);
+  await expect(actor.page.locator('#status')).toContainText('Recovery source observations loaded');
+  const shown = JSON.parse(await actor.page.locator('#recovery-source-review').textContent() ?? '{}');
+  assert.equal(shown.sourceExitId, source || null);
+  assert.equal(shown.confirmations, report.coins[0]!.confirmations);
+  assert.equal(shown.confirmationBlockHash, report.coins[0]!.confirmationBlockHash);
+  assert.equal(shown.confirmationHeight, report.tip.height - shown.confirmations + 1);
+  assert.equal(shown.earliestCandidateSpendHeight, shown.confirmationHeight + graph.roster.economics.recoveryDelayBlocks);
+  assert.equal(shown.eligibleForNextBlock, shown.confirmations >= graph.roster.economics.recoveryDelayBlocks);
+  assert.equal(shown.blocksRemaining, Math.max(0, graph.roster.economics.recoveryDelayBlocks - shown.confirmations));
+  recoveryObservedSourceReviews++;
+}
+async function recover(core: PresignedRegtest, group: Actor[], source: string, exerciseSourceBoundaries = false) {
+  for (const actor of group) await loadRecoverySource(core, actor, source);
+  if (exerciseSourceBoundaries) {
+    const actor = group[0]!; await actor.page.locator('#spend-kind').selectOption('recovery');
+    await expect(actor.page.locator('#source option')).toHaveCount(1);
+    const wrongSource = source ? null : PARTICIPANT_IDS.find(id => id !== actor.id)!;
+    const wrong = newPresignedOfflineExchange(actor.kit.graph, buildPresignedSpend({ graph: actor.kit.graph,
+      kind: 'recovery', sourceExitId: wrongSource, proposalId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' }));
+    await loadPublic(actor, '#peer', wrong);
+    await expect(actor.page.locator('#status')).toContainText('does not use your observed current graph source');
+    assert.equal(await actor.page.locator('#reviewed').isChecked(), false); recoveryWrongSourcePeerRefusals++;
+    for (const change of ['report', 'spend-kind'] as const) {
+    await prepare(actor, 'recovery', source); await secretInput(actor);
+    // Real DOM file replacement while decryption is pending. The file handler
+    // cannot read until the action ends, but its invalidation must run now.
+    assert(await actor.page.evaluate(which => {
+      const button = document.getElementById('recovery-share') as HTMLButtonElement;
+      button.click(); const pending = button.disabled;
+      const input = document.getElementById(which === 'report' ? 'recovery-observations' : 'spend-kind')!;
+      if (which === 'spend-kind') (input as HTMLSelectElement).value = 'cooperative';
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return pending;
+    }, change));
+    await expect(actor.page.locator('#recovery-share')).toBeEnabled();
+    assert(!(await actor.page.locator('#status').textContent())?.includes('Recovery contribution verified'));
+    await actor.page.locator('#export-peer').click();
+    await expect(actor.page.locator('#status')).toContainText('no public peer exchange');
+    if (change === 'report') await expect(actor.page.locator('#source option')).toHaveCount(0);
+    assert.equal(await actor.page.locator('#reviewed').isChecked(), false); recoveryAsyncSourceInvalidations++;
+    await loadRecoverySource(core, actor, source);
+    }
+  }
   const leader = group[0]!; await prepare(leader, 'recovery', source); let exchange = await peerFile(leader);
   for (const actor of group) {
     if (actor !== leader) await importPeer(actor, exchange);
@@ -372,7 +426,7 @@ async function feeCase(core: PresignedRegtest, kind: PresignedOfflineTransaction
       await expect(actor.page.locator('#status')).toContainText('Exact transaction and signatures verified'); parent = await signedFile(actor);
     } else if (kind === 'solo' || kind === 'final-sweep') parent = await single(actor, kind, kind === 'solo' ? 'alice' : source);
     else if (kind === 'cooperative') parent = await cooperate(group, source, false);
-    else parent = await recover(group, source);
+    else parent = await recover(core, group, source);
     const parentTx = bitcoin.Transaction.fromHex(parent.transactionHex);
     const outpoints = [...parentTx.ins.map(input => ({ txid: Buffer.from(input.hash).reverse().toString('hex'), vout: input.index })),
       { txid: coins[3]!.txid, vout: coins[3]!.vout }];
@@ -485,10 +539,20 @@ try {
       const current = await fixture(source);
       const group = await Promise.all(PARTICIPANT_IDS.filter(id => id !== source && id !== omitted).map(id => createActor(current, id)));
       try {
-        const transaction = await recover(group, source ?? '');
-        const early = await core.rpc('testmempoolaccept', [[transaction.transactionHex]]);
-        assert.equal(early[0].allowed, false); assert.equal(early[0]['reject-reason'], 'non-BIP68-final');
-        await core.mine(current.graph.roster.economics.recoveryDelayBlocks - 1); await confirm(transaction);
+        const leader = group[0]!;
+        await leader.page.locator('#spend-kind').selectOption('recovery');
+        await expect(leader.page.locator('#source option')).toHaveCount(0);
+        await leader.page.locator('#prepare').click();
+        await expect(leader.page.locator('#status')).toContainText('import your independently checked recovery source observations');
+        recoveryMissingObservationRefusals++;
+        await loadRecoverySource(core, leader, source ?? ''); await prepare(leader, 'recovery', source ?? '');
+        await secretInput(leader); await leader.page.locator('#recovery-share').click();
+        await expect(leader.page.locator('#status')).toContainText('recovery source is not yet mature');
+        assert.equal((await peerFile(leader)).recoveryContributions.length, 0);
+        await leader.page.locator('#secret').fill(''); recoveryImmatureRefusals++;
+        await core.mine(current.graph.roster.economics.recoveryDelayBlocks - 1);
+        const transaction = await recover(core, group, source ?? '', source === null && omitted === 'carol');
+        await confirm(transaction);
         if (source === null && omitted === 'carol') {
           const otherVout = bitcoin.Transaction.fromHex(transaction.transactionHex).outs.findIndex(output => {
             const carol = current.roster.participants.find(item => item.id === 'carol')!;
@@ -534,6 +598,10 @@ try {
     assert.equal(signedTransactions, lifecycle ? 31 : cooperativeOnly ? 4 : cashoutsOnly ? 5 : 0);
     assert.equal(feeCases, boundaryOnly || cooperativeOnly ? 0 : cashoutsOnly ? 1 : 10); assert.equal(feeChildren, feeCases);
     assert.equal(cashoutsConfirmed, lifecycle ? 12 : feesOnly ? 8 : cashoutsOnly ? 5 : 0);
+    assert.equal(recoveryMissingObservationRefusals, lifecycle ? 9 : cashoutsOnly ? 1 : 0);
+    assert.equal(recoveryImmatureRefusals, lifecycle ? 9 : cashoutsOnly ? 1 : 0);
+    assert.equal(recoveryWrongSourcePeerRefusals, lifecycle || cashoutsOnly ? 1 : 0);
+    assert.equal(recoveryAsyncSourceInvalidations, lifecycle || cashoutsOnly ? 2 : 0);
     if (lifecycle || cashoutsOnly) assert.deepEqual([...cashoutFamilies].sort(),
       ['cooperative','cpfp-preserved-payout','final-sweep','recovery','solo']);
     verifyArtifactInputs();
@@ -545,6 +613,8 @@ try {
       feeRescueWalletAndParentCases: feeCases, feeChildrenAcceptedThenReplaced: feeCases, replacementFeeChildrenConfirmedByCore: feeChildren,
       ownedPayoutCashoutsConfirmed: cashoutsConfirmed, cashoutPayoutFamilies: [...cashoutFamilies].sort(),
       cashoutOwnerAndReviewMutationRefusals: cashoutRefusals,
+      recoveryMissingObservationRefusals, recoveryImmatureRefusals, recoveryWrongSourcePeerRefusals,
+      recoveryAsyncSourceInvalidations, recoveryObservedSourceReviews,
       completeLifecycleEvidence: lifecycle, completeFeeEvidence: lifecycle || feesOnly, completeCashoutEvidence: lifecycle || cashoutsOnly,
       publicNetworkBroadcasts: 0, chain: 'isolated-regtest', realDefaultSignetEvidence: false, checks };
     writeFileSync(`${directory}/offline-browser${boundaryOnly ? '-boundary' : feesOnly ? '-fees' : cooperativeOnly ? '-cooperative' : cashoutsOnly ? '-cashouts' : ''}-acceptance.json`, JSON.stringify(summary, null, 2), { mode: 0o600, flag: 'wx' });

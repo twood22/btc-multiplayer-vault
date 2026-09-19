@@ -4,6 +4,19 @@ Status: engineering acceptance is in progress. No V3 deployment or mainnet
 activation has occurred. This runbook complements, rather than rewrites, the
 historical V2 operator/evidence record.
 
+2026-09-19: offline review fixes change the candidate source and expand the
+fixed local matrix to78 commands. The old source-pinned seed/full-run and
+assembly packages must remain disabled until replaced by a reviewed package
+bound to new actual evidence. Never substitute new source hashes into old
+receipts or treat focused regression passes as complete release acceptance.
+
+The historical private final-assembly handoff is
+`live-run/v3-final-assembly-handoff.q9LGFayf/README.md`. Its artifact map comes
+from an actual fresh revalidation of the75-command LOCAL run and both retained
+image profiles, not from a new Signet or deployment run. It records the exact
+input paths and ordered follow/assembly/clean-stop/deployment boundaries. Do not
+upload that private directory or use its map as a replacement acceptance receipt.
+
 ## Release identity
 
 Freeze the complete source inventory only after implementation, operations and
@@ -131,3 +144,38 @@ invitation through an authorized channel. Do not send invitations or contact
 friends without explicit communication authority. Physical-device checks and
 a purchased human audit remain unperformed launch limitations, not falsely
 completed engineering tests.
+
+## Create one new V3 vault and its three private invitations
+
+Only after installation and onboarding are separately authorized, use the
+existing `web:create-invite` command with the reviewed private environment for
+that installation. It writes the selected database and prints a secret-bearing
+invitation URL. Use a private, unrecorded operator session: never CI, public logs,
+screenshots or support messages. This section does not create or send invitations.
+
+Before running it, verify the database and app origin, matching browser/runtime
+network, and explicitly configured `VAULT_DEPOSIT_SATS` and
+`RECOVERY_DELAY_BLOCKS`; do not inherit their defaults. Review the funding/base
+fees and choose the explicit maximum child-fee limit from the installation's
+approved settings. The amounts, delay and fee policy are fixed for this vault.
+These templates require replacing `REVIEWED_CHILD_FEE_CAP_SATS` with that
+positive integer and `RETURNED_VAULT_ID` with the actual first result:
+
+```text
+npm run web:create-invite -- --protocol presigned-graph-v3 --vault-name "Three-person vault" --participant alice --max-child-fee-sats REVIEWED_CHILD_FEE_CAP_SATS
+npm run web:create-invite -- --protocol presigned-graph-v3 --vault-id RETURNED_VAULT_ID --participant bob
+npm run web:create-invite -- --protocol presigned-graph-v3 --vault-id RETURNED_VAULT_ID --participant carol
+```
+
+Create the vault only once. Check that all three results identify the same
+vault and `presigned-graph-v3`; repeating creation without `--vault-id` would
+create another vault. Existing-vault invitations must not infer replacement settings or change
+protocol. Invitations expire after 48 hours by default; an explicit
+`--expires-hours` may select 1–168 hours. Do not repeatedly issue new invitations
+after an uncertain result without first reviewing the existing private state.
+
+Each person receives only their own invitation through an explicitly authorized
+private channel, then follows the participant guide: independent roster/hash
+comparison, two working passkeys, all 21 setup approvals, actual portable
+restoration and separate external-wallet funding review. Invitation creation
+does not satisfy release gates, authorize mainnet deposits or migrate an old vault.

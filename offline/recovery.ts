@@ -11,6 +11,7 @@ import { authorizePresignedFundingFeeWalletPsbt, type PresignedFundingFeeSignatu
 import { finalizePresignedOfflineExchange, mergePresignedOfflineExchanges, newPresignedOfflineExchange,
   parsePresignedOfflinePublicJson, validatePresignedOfflineExchange, validatePresignedOfflineTransaction,
   type PresignedOfflineExchange, type PresignedOfflineTransaction } from '../src/presigned/offline.js';
+import { selectPresignedOfflineSource } from '../src/presigned/offline-source.js';
 import { clearPresignedParticipantKeys, derivePresignedParticipantKeys } from '../src/presigned/roster.js';
 import { completePresignedExit } from '../src/presigned/signing.js';
 import { signPresignedSpendFeePayout } from '../src/presigned/spend-fees.js';
@@ -26,6 +27,7 @@ const value = (id: string) => field(id).value.trim();
 const select = (id: string) => element<HTMLSelectElement>(id);
 const show = (id: string, data: unknown) => { element(id).textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2); };
 let busy = false;
+let refreshSourceChoices = false;
 let envelope: PresignedOfflineBackup | null = null;
 let binding: PresignedBackupBinding | null = null;
 let kit: PresignedPublicKit | null = null;
@@ -36,8 +38,13 @@ let exchange: PresignedOfflineExchange | null = null;
 let secretNonce: ReturnType<typeof createPresignedCooperativeNonce> | null = null;
 let nonceAttempted = false;
 let transaction: PresignedOfflineTransaction | null = null;
+let recoveryObservations: PresignedCoinObservations | null = null;
+let recoveryReviewDigest: string | null = null;
+let spendRevision = 0;
 let observations: PresignedCoinObservations | null = null;
 let feeDraft: PresignedFeeDraft | null = null;
+let feeReviewDigest: string | null = null;
+let feeRevision = 0;
 let payoutSignatureHex = '';
 let sponsorSignedPsbtBase64 = '';
 let fundingFeeSignatures: PresignedFundingFeeSignature[] = [];
@@ -56,18 +63,27 @@ function requireKit(): PresignedPublicKit {
 }
 function requireReview() {
   requireKit(); assert(field('reviewed').checked, 'review and explicitly approve this exact source, payouts, age and fee first');
+  if (proposal?.kind === 'recovery') checkedRecoveryReview(proposal, true);
+  return spendRevision;
 }
 function requireFeeReview() {
-  requireKit(); assert(feeDraft && field('fee-reviewed').checked, 'rebuild, review and explicitly approve this exact fee child first');
+  const reviewed = checkedFeeDraft();
+  assert(field('fee-reviewed').checked, 'rebuild, review and explicitly approve this exact fee child first');
+  return reviewed;
 }
 function burnNonce() { secretNonce?.secretNonce.fill(0); secretNonce = null; }
 function resetSpend() {
+  spendRevision++; recoveryReviewDigest = null;
   burnNonce(); nonceAttempted = false; proposal = null; soloExitId = null; exchange = null;
   field('reviewed').checked = false; show('review', 'Rebuild and independently review the selected spend.'); updatePeer();
 }
+function clearFeeSignatures() {
+  feeRevision++;
+  payoutSignatureHex = ''; sponsorSignedPsbtBase64 = ''; fundingFeeSignatures = []; field('wallet-fee-psbt').value = '';
+}
 function resetFee() {
-  feeDraft = null; payoutSignatureHex = ''; sponsorSignedPsbtBase64 = ''; fundingFeeSignatures = [];
-  field('fee-reviewed').checked = false; field('wallet-fee-psbt').value = ''; show('fee-review', 'No fee draft.');
+  feeDraft = null; feeReviewDigest = null; clearFeeSignatures();
+  field('fee-reviewed').checked = false; show('fee-review', 'No fee draft.');
 }
 function resetCashout() {
   cashoutRequest = null; cashout = null; cashoutSigned = null;
@@ -76,7 +92,7 @@ function resetCashout() {
 }
 function forget() {
   resetSpend(); resetFee(); resetCashout(); kit = null; binding = null; participant = null; envelope = null;
-  transaction = null; observations = null; cashoutObservations = null;
+  transaction = null; observations = null; cashoutObservations = null; recoveryObservations = null;
   for (const input of document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input,textarea')) {
     if (input instanceof HTMLInputElement && input.type === 'checkbox') input.checked = false;
     else input.value = '';
@@ -89,6 +105,7 @@ function forget() {
     field(id).value = field(id).defaultValue;
   for (const id of ['spending','transactions','fees','cashouts']) element(id).hidden = true;
   show('binding', 'No file selected.'); show('transaction-review', 'No finalized transaction.');
+  show('recovery-source-review', 'No recovery source observations.');
 }
 async function run(action: () => void | Promise<void>) {
   if (busy) return;
@@ -102,6 +119,7 @@ async function run(action: () => void | Promise<void>) {
   } finally {
     busy = false;
     document.querySelectorAll<HTMLButtonElement>('button').forEach(button => { button.disabled = false; });
+    if (refreshSourceChoices) { refreshSourceChoices = false; void run(updateSources); }
   }
 }
 function click(id: string, action: () => void | Promise<void>) { element(id).addEventListener('click', () => { void run(action); }); }
@@ -136,9 +154,43 @@ function updateSources() {
   resetSpend(); const publicKit = requireKit(); const graph = publicKit.graph; const kind = value('spend-kind');
   const choices = kind === 'solo' ? graph.exits.filter(exit => exit.leaver === participant).map(exit => [exit.id, `Exit order ${exit.id}`])
     : kind === 'final-sweep' ? graph.exits.filter(exit => exit.finalParticipant === participant).map(exit => [exit.id, `Final payout after ${exit.id}`])
+      : kind === 'recovery' ? recoveryObservations ? (() => {
+        const selected = recoverySource();
+        return [[selected.sourceExitId ?? '', selected.sourceExitId ? `Observed remaining pair after ${selected.sourceExitId}` : 'Observed original three-person vault']];
+      })() : []
       : [['', 'Original three-person vault'], ...graph.exits.filter(exit => exit.parentExitId === null && exit.leaver !== participant)
         .map(exit => [exit.id, `Remaining pair after ${exit.id}`])];
   select('source').replaceChildren(...choices.map(([id, name]) => new Option(name, id)));
+}
+function recoverySource(spend?: PresignedSpendProposal) {
+  const graph = requireKit().graph;
+  assert(recoveryObservations, 'import your independently checked recovery source observations first');
+  const selected = selectPresignedOfflineSource({ graph, participantId: participant!, observations: recoveryObservations });
+  if (spend) {
+    assert(spend.kind === 'recovery' && spend.sourceExitId === selected.sourceExitId,
+      'recovery proposal does not use your observed current graph source');
+    sameCanonical(spend.source, selected.source, 'observed recovery source');
+  }
+  return selected;
+}
+function checkedRecoveryReview(spend: PresignedSpendProposal, requireMaturity: boolean) {
+  const selected = recoverySource(spend);
+  assert(recoveryReviewDigest === selected.reportDigest, 'recovery source changed after review; rebuild before continuing');
+  if (requireMaturity) assert(selected.eligibleForNextBlock, 'recovery source is not yet mature; import a new observation after the required blocks');
+  return selected;
+}
+function showRecoverySource() {
+  const selected = recoverySource();
+  show('recovery-source-review', { ...selected,
+    warning: 'These are your imported Core observations, not proof of current chain state. Recheck the active block and exact unspent coin before broadcast. A pending spend may win the race; the chain decides.' });
+}
+function invalidateRecoverySource() {
+  recoveryObservations = null; resetSpend();
+  if (value('spend-kind') === 'recovery') select('source').replaceChildren();
+  if (transaction?.kind === 'recovery') {
+    transaction = null; resetFee(); show('transaction-review', 'Recovery source changed. Reimport observations and review again.');
+  }
+  show('recovery-source-review', 'No recovery source observations.');
 }
 function reviewSpend() {
   resetSpend(); const publicKit = requireKit(); const graph = publicKit.graph;
@@ -150,14 +202,16 @@ function reviewSpend() {
       source: `${exit.inputTxid}:${exit.inputVout}`, feeSats: exit.feeSats, outputs: txOutputs(exit.unsignedTxHex) });
   } else {
     assert(['cooperative','recovery','final-sweep'].includes(kind), 'unknown spend kind');
-    proposal = buildPresignedSpend({ graph, proposalId: crypto.randomUUID(),
+    const next = buildPresignedSpend({ graph, proposalId: crypto.randomUUID(),
       kind: kind as PresignedSpendProposal['kind'], sourceExitId: source || null });
-    assert(proposal.participantIds.includes(participant!), 'you are not a participant in this exact source');
+    assert(next.participantIds.includes(participant!), 'you are not a participant in this exact source');
+    const selected = kind === 'recovery' ? recoverySource(next) : null;
+    proposal = next; recoveryReviewDigest = selected?.reportDigest ?? null;
     if (kind !== 'final-sweep') exchange = newPresignedOfflineExchange(graph, proposal);
     show('review', { kind, proposalId: proposal.proposalId, proposalDigest: proposal.digest, graphDigest: graph.digest,
       txid: proposal.txid, source: proposal.source, threshold: proposal.threshold, feeSats: proposal.feeSats,
       minimumSourceConfirmations: kind === 'recovery' ? graph.roster.economics.recoveryDelayBlocks : 1,
-      ...(kind === 'recovery' ? { recoveryPolicy: recoveryNotice(publicKit) } : {}),
+      ...(kind === 'recovery' ? { recoveryPolicy: recoveryNotice(publicKit), recoverySourceObservation: selected } : {}),
       outputs: txOutputs(proposal.unsignedTxHex) });
   }
   updatePeer(); show('status', 'Fixed transaction rebuilt. Check the source and outputs independently before signing.');
@@ -219,53 +273,70 @@ click('verify', async () => {
     + 'Select only the spend you intend to release.');
 });
 click('forget', () => { forget(); show('status', 'Session forgotten. No secrets or nonces were stored.'); });
-select('spend-kind').addEventListener('change', () => { void run(updateSources); });
-select('source').addEventListener('change', () => { void run(resetSpend); });
+field('reviewed').addEventListener('change', () => { spendRevision++; });
+field('recovery-observations').addEventListener('change', invalidateRecoverySource);
+file('recovery-observations', raw => {
+  const report = validatePresignedCoinObservations(requireKit().graph, parsePresignedOfflinePublicJson(raw));
+  selectPresignedOfflineSource({ graph: requireKit().graph, participantId: participant!, observations: report });
+  recoveryObservations = report; updateSources(); showRecoverySource();
+  show('status', 'Recovery source observations loaded. Review the exact source, confirmations, eligibility and any pending conflict.');
+});
+select('spend-kind').addEventListener('change', () => {
+  resetSpend();
+  if (busy) { refreshSourceChoices = true; select('source').replaceChildren(); }
+  else void run(updateSources);
+});
+select('source').addEventListener('change', resetSpend);
 click('prepare', reviewSpend);
 click('sign-single', async () => {
-  requireReview(); const publicKit = requireKit(); const graph = publicKit.graph;
+  const revision = requireReview(); const publicKit = requireKit(); const graph = publicKit.graph;
   if (soloExitId) {
     const exit = graph.exits.find(item => item.id === soloExitId)!;
     const signed = await privateAction(keys => completePresignedExit({ graph, preauthorizations: publicKit.preauthorizations,
       exitId: exit.id, participantId: participant!, privateKey: keys.soloPrivateKeys[exit.roundId]!, approvedGraphDigest: graph.digest }));
+    assert(requireReview() === revision && soloExitId === exit.id, 'spend review changed during signing; rebuild before continuing');
     publicTransaction('solo', signed, null, exit.id);
   } else {
     assert(proposal?.kind === 'final-sweep', 'select your solo exit or final-owner sweep');
     const spend = proposal;
     const signed = await privateAction(keys => signPresignedFinalSweep({ graph, proposal: spend, participantId: participant!,
       payoutPrivateKey: keys.payoutPrivateKey, approvedProposalDigest: spend.digest }));
+    assert(requireReview() === revision && proposal === spend, 'spend review changed during signing; rebuild before continuing');
     publicTransaction('final-sweep', signed, spend);
   }
 });
+field('peer').addEventListener('change', () => { field('reviewed').checked = false; spendRevision++; });
 file('peer', raw => {
   const publicKit = requireKit(); const incoming = parsePresignedOfflinePublicJson(raw);
   const next = exchange ? mergePresignedOfflineExchanges(publicKit, exchange, incoming)
     : validatePresignedOfflineExchange(publicKit, incoming);
   assert(next.proposal.participantIds.includes(participant!), 'this peer proposal belongs to another round');
+  const selected = next.proposal.kind === 'recovery' ? recoverySource(next.proposal) : null;
   if (!exchange) resetSpend();
-  exchange = next; proposal = next.proposal;
+  exchange = next; proposal = next.proposal; recoveryReviewDigest = selected?.reportDigest ?? null;
   // A peer file can add only append-only public contributions. Still require
   // the user to review the exact proposal again before any private-key action.
   field('reviewed').checked = false;
   show('review', { proposalId: proposal.proposalId, proposalDigest: proposal.digest, kind: proposal.kind,
     source: proposal.source, txid: proposal.txid, feeSats: proposal.feeSats, threshold: proposal.threshold,
     minimumSourceConfirmations: proposal.kind === 'recovery' ? publicKit.graph.roster.economics.recoveryDelayBlocks : 1,
-    ...(proposal.kind === 'recovery' ? { recoveryPolicy: recoveryNotice(publicKit) } : {}),
+    ...(proposal.kind === 'recovery' ? { recoveryPolicy: recoveryNotice(publicKit), recoverySourceObservation: selected } : {}),
     outputs: txOutputs(proposal.unsignedTxHex) }); updatePeer(); show('status', 'Public peer contributions verified. Compare the exact proposal ID and digest with the other signers.');
 });
 click('nonce', async () => {
-  requireReview(); assert(exchange?.proposal.kind === 'cooperative' && !nonceAttempted && !secretNonce &&
+  const revision = requireReview(); assert(exchange?.proposal.kind === 'cooperative' && !nonceAttempted && !secretNonce &&
     !exchange.publicNonces.some(item => item.participantId === participant), 'this proposal already has your nonce; continue it or start a fresh proposal');
-  const spend = exchange.proposal; nonceAttempted = true;
+  const current = exchange; const spend = current.proposal; nonceAttempted = true;
   try {
     secretNonce = await privateAction(keys => createPresignedCooperativeNonce({ graph: requireKit().graph,
       proposal: spend, participantId: participant!, personalPrivateKey: keys.personalPrivateKey, approvedProposalDigest: spend.digest }));
+    assert(requireReview() === revision && exchange === current, 'spend review changed during nonce creation; start a fresh proposal');
     addToExchange({ publicNonces: [...exchange.publicNonces, secretNonce.publicNonce] });
   } catch (error) { burnNonce(); throw error; }
   show('status', 'Public nonce added. Save and exchange the public peer file. Keep this page open; its secret nonce cannot be restored.');
 });
 click('partial', async () => {
-  requireReview(); assert(exchange?.proposal.kind === 'cooperative' && secretNonce, 'this page has no unconsumed secret nonce; begin a fresh proposal if it was lost');
+  const revision = requireReview(); assert(exchange?.proposal.kind === 'cooperative' && secretNonce, 'this page has no unconsumed secret nonce; begin a fresh proposal if it was lost');
   validatePresignedCooperativeNonces({ graph: requireKit().graph, proposal: exchange.proposal, publicNonces: exchange.publicNonces });
   // Remove the sole live reference BEFORE decrypting the participant key. It
   // never went to disk or browser storage, and no file can restore it.
@@ -275,14 +346,16 @@ click('partial', async () => {
     const partial = await privateAction(keys => signPresignedCooperativePartial({ graph: requireKit().graph, proposal: current.proposal,
       participantId: participant!, personalPrivateKey: keys.personalPrivateKey, approvedProposalDigest: current.proposal.digest,
       publicNonces: current.publicNonces, nonceBinding: consumed.binding, consumedSecretNonce: consumed.secretNonce }));
+    assert(requireReview() === revision && exchange === current, 'spend review changed during signing; begin a fresh proposal');
     addToExchange({ partials: [...current.partials, partial] });
   } finally { consumed.secretNonce.fill(0); updatePeer(); }
   show('status', 'Nonce consumed and partial verified. Save the updated public peer file. Do not restart this same nonce from any snapshot.');
 });
 click('recovery-share', async () => {
-  requireReview(); assert(exchange?.proposal.kind === 'recovery', 'prepare or import a timelocked recovery proposal');
+  const revision = requireReview(); assert(exchange?.proposal.kind === 'recovery', 'prepare or import a timelocked recovery proposal');
   assert(!exchange.recoveryContributions.some(item => item.participantId === participant), 'your recovery contribution is already present');
   const current = exchange;
+  const selected = checkedRecoveryReview(current.proposal, true);
   assert(current.recoveryContributions.length < current.proposal.threshold, 'the selected recovery quorum is already complete');
   const contribution = await privateAction(keys => {
     const graph = requireKit().graph;
@@ -290,11 +363,15 @@ click('recovery-share', async () => {
       ...(graph.version === 3 ? { recoveryTriggerPrivateKey: keys.recoveryTriggerPrivateKeys![current.proposal.source.roundId!]! }
         : { personalPrivateKey: keys.personalPrivateKey }), approvedProposalDigest: current.proposal.digest });
   });
+  assert(requireReview() === revision && exchange === current &&
+    checkedRecoveryReview(current.proposal, true).reportDigest === selected.reportDigest,
+  'recovery source or approval changed during signing; rebuild before continuing');
   addToExchange({ recoveryContributions: [...current.recoveryContributions, contribution] });
   show('status', 'Recovery contribution verified. Save and exchange the public peer file; Core still enforces CSV maturity.');
 });
 click('export-peer', () => {
   assert(exchange, 'no public peer exchange to save'); validatePresignedOfflineExchange(requireKit(), exchange);
+  if (exchange.proposal.kind === 'recovery') checkedRecoveryReview(exchange.proposal, exchange.recoveryContributions.length > 0);
   save(`presigned-peer-${exchange.proposal.proposalId}-${participant}.json`, exchange);
 });
 click('finalize-peer', () => {
@@ -314,12 +391,17 @@ click('save-hex', () => { assert(transaction, 'no finalized transaction to save'
 
 // Fee actions below are all local. Imported observation truth is the user's
 // independent-Core responsibility; signatures bind the exact immutable economics.
+field('fee-reviewed').addEventListener('change', clearFeeSignatures);
+field('fee-observations').addEventListener('change', () => { observations = null; resetFee(); });
 file('fee-observations', raw => {
   observations = null; resetFee();
   observations = validatePresignedCoinObservations(requireKit().graph, parsePresignedOfflinePublicJson(raw));
   show('status', `Loaded ${observations.coins.length} public coin observations at height ${observations.tip.height}, observed ${observations.observedAt}. This offline file cannot prove that their blocks remain active or coins remain spendable.`);
 });
+for (const id of ['sponsor-txid','sponsor-vout','child-fee','fee-cap','target-rate','relay-rate','previous-child','incremental-rate'])
+  element(id).addEventListener('input', resetFee);
 click('build-fee', () => {
+  resetFee();
   const publicKit = requireKit(); assert(transaction, 'sign or import the exact parent transaction first');
   validatePresignedOfflineTransaction(publicKit, transaction);
   const graph = publicKit.graph;
@@ -339,63 +421,89 @@ click('build-fee', () => {
   // no arbitrary destination field and no implicit consume-the-whole-coin fee.
   const base = { version: graph.version, protocol: graph.protocol, epochId: graph.funding.epochId,
     ownerParticipantId: participant!, parentAuthorityDigest: commitmentDigest(`vault/${graph.protocol}/offline-parent`, transaction) };
-  resetFee();
-  if (transaction.kind === 'funding') feeDraft = { ...base, mode: 'funding', proposalId: null,
+  let draft: PresignedFeeDraft;
+  if (transaction.kind === 'funding') draft = { ...base, mode: 'funding', proposalId: null,
     request: { graph, fundingTransactionHex: transaction.transactionHex, changeParticipantId: participant!,
       fundingInputObservations: graph.funding.inputs.map(coin => find(coin.txid, coin.vout)), sponsorInput, approval } };
   else if (transaction.kind === 'solo') {
     const exit = graph.exits.find(item => item.id === transaction!.exitId)!;
-    feeDraft = { ...base, mode: 'solo', proposalId: crypto.randomUUID(), request: { graph, exitId: exit.id,
+    draft = { ...base, mode: 'solo', proposalId: crypto.randomUUID(), request: { graph, exitId: exit.id,
       parentTransactionHex: transaction.transactionHex, roundInputObservation: find(exit.inputTxid, exit.inputVout), sponsorInput, approval } };
-  } else feeDraft = { ...base, mode: 'spend', proposalId: transaction.proposal.proposalId,
+  } else draft = { ...base, mode: 'spend', proposalId: transaction.proposal.proposalId,
     request: { graph, parentSpendProposal: transaction.proposal, parentTransactionHex: transaction.transactionHex,
       payoutParticipantId: participant!, sourceObservation: find(transaction.proposal.source.txid, transaction.proposal.source.vout), sponsorInput, approval } };
-  reviewFee();
+  reviewFee(draft);
 });
-function reviewFee() {
-  const publicKit = requireKit(); assert(feeDraft, 'no fee draft');
-  sameCanonical(feeDraft.request.graph, publicKit.graph, 'offline fee graph');
-  assert(feeDraft.ownerParticipantId === participant, 'fee draft uses another payout owner');
-  assert(feeDraft.request.approval.sponsorChangeScriptPubKeyHex === feeDraft.request.sponsorInput.scriptPubKeyHex &&
-    feeDraft.request.approval.approveExactNoChangeFee === false, 'this offline utility requires preserved same-wallet sponsor change');
-  const built = buildPresignedFeeDraft(feeDraft);
-  show('fee-review', { mode: feeDraft.mode, approvalDigest: built.approvalDigest, parentTxid: built.parentTxid,
+function validateFeeDraft(draft: PresignedFeeDraft) {
+  const publicKit = requireKit();
+  sameCanonical(draft.request.graph, publicKit.graph, 'offline fee graph');
+  assert(draft.ownerParticipantId === participant, 'fee draft uses another payout owner');
+  assert(draft.request.approval.sponsorChangeScriptPubKeyHex === draft.request.sponsorInput.scriptPubKeyHex &&
+    draft.request.approval.approveExactNoChangeFee === false, 'this offline utility requires preserved same-wallet sponsor change');
+  return buildPresignedFeeDraft(draft);
+}
+function draftReviewDigest(draft: PresignedFeeDraft) {
+  return commitmentDigest(`vault/${requireKit().graph.protocol}/offline-fee-review`, draft);
+}
+function checkedFeeDraft() {
+  assert(feeDraft && feeReviewDigest, 'rebuild, review and explicitly approve this exact fee child first');
+  const built = validateFeeDraft(feeDraft);
+  assert(draftReviewDigest(feeDraft) === feeReviewDigest, 'fee draft changed after review; rebuild before continuing');
+  return { draft: feeDraft, built, reviewDigest: feeReviewDigest, revision: feeRevision };
+}
+function reviewFee(draft: PresignedFeeDraft) {
+  resetFee();
+  // Do not publish imported or newly built state until every local-context
+  // check and the complete transaction reconstruction has succeeded.
+  const built = validateFeeDraft(draft);
+  const reviewDigest = draftReviewDigest(draft);
+  show('fee-review', { mode: draft.mode, reviewDigest, approvalDigest: built.approvalDigest, parentTxid: built.parentTxid,
     childTxid: built.unsignedTxid, preservedPayoutOrRefundSats: 'payoutSats' in built ? built.payoutSats : built.changeSats,
     childFeeSats: built.childFeeSats, sponsorChangeSats: built.sponsorChangeSats,
-    maximumChildVsize: built.maximumChildVsize, approval: feeDraft.request.approval, outputs: txOutputs(feeUnsignedHex(built.psbtBase64)) });
+    maximumChildVsize: built.maximumChildVsize, approval: draft.request.approval, outputs: txOutputs(feeUnsignedHex(built.psbtBase64)) });
+  feeDraft = draft; feeReviewDigest = reviewDigest;
   show('status', 'Exact fee child rebuilt. Save the public draft and inspect its coins, outputs and fee before signing.');
 }
 function feeUnsignedHex(psbtBase64: string) { return Buffer.from(bitcoin.Psbt.fromBase64(psbtBase64).data.globalMap.unsignedTx.toBuffer()).toString('hex'); }
+// Invalidate before file-size/read checks too, including a change while an
+// earlier private-key action is awaiting decryption.
+field('fee-draft-file').addEventListener('change', resetFee);
 file('fee-draft-file', raw => {
-  resetFee(); feeDraft = parsePresignedOfflinePublicJson(raw) as PresignedFeeDraft; reviewFee();
+  resetFee(); reviewFee(parsePresignedOfflinePublicJson(raw) as PresignedFeeDraft);
 });
-click('save-fee-draft', () => { assert(feeDraft, 'no fee draft'); reviewFee(); save('presigned-offline-fee-draft.json', feeDraft); });
+click('save-fee-draft', () => { const { draft } = checkedFeeDraft(); save('presigned-offline-fee-draft.json', draft); });
 click('save-fee-psbt', () => {
-  assert(feeDraft, 'no fee draft'); reviewFee(); const built = buildPresignedFeeDraft(feeDraft);
+  const { draft, built } = checkedFeeDraft();
   const psbt = bitcoin.Psbt.fromBase64(built.psbtBase64);
-  const parent = feeDraft.mode === 'funding' ? feeDraft.request.fundingTransactionHex : feeDraft.request.parentTransactionHex;
+  const parent = draft.mode === 'funding' ? draft.request.fundingTransactionHex : draft.request.parentTransactionHex;
   psbt.updateInput(0, { nonWitnessUtxo: Buffer.from(parent, 'hex') });
   save('presigned-offline-fee-unsigned.psbt.txt', psbt.toBase64(), true);
 });
 click('sign-fee', async () => {
-  requireFeeReview(); const draft = feeDraft!; assert(draft.mode !== 'funding', 'a funding refund requires its original external wallet, never a participant key');
-  const built = buildPresignedFeeDraft(draft);
-  payoutSignatureHex = (await privateAction(keys => draft.mode === 'solo'
+  const { draft, built, reviewDigest, revision } = requireFeeReview();
+  assert(draft.mode !== 'funding', 'a funding refund requires its original external wallet, never a participant key');
+  const signed = await privateAction(keys => draft.mode === 'solo'
     ? signPresignedFeePayout({ request: draft.request, psbtBase64: built.psbtBase64, approvalDigest: built.approvalDigest, keys })
-    : signPresignedSpendFeePayout({ request: draft.request, psbtBase64: built.psbtBase64, approvalDigest: built.approvalDigest, keys }))).payoutSignatureHex;
+    : signPresignedSpendFeePayout({ request: draft.request, psbtBase64: built.psbtBase64, approvalDigest: built.approvalDigest, keys }));
+  const current = requireFeeReview();
+  assert(current.draft === draft && current.reviewDigest === reviewDigest && current.revision === revision,
+    'fee review changed during signing; rebuild before exporting');
+  payoutSignatureHex = signed.payoutSignatureHex;
   show('status', 'Your detached payout signature is ready. Import the external sponsor wallet’s signed PSBT to finalize.');
 });
 click('import-fee-wallet', () => {
-  requireFeeReview(); const draft = feeDraft!; const built = buildPresignedFeeDraft(draft); const signed = value('wallet-fee-psbt');
+  const { draft, built } = requireFeeReview(); const signed = value('wallet-fee-psbt');
   assert(signed.length > 0 && signed.length <= 200_000, 'wallet PSBT is missing or too large');
   if (draft.mode === 'funding') {
     const contributions = authorizePresignedFundingFeeWalletPsbt({ request: draft.request,
       roles: value('funding-roles').split(',') as PresignedFundingFeeRole[], signedPsbtBase64: signed, approvalDigest: built.approvalDigest });
+    const next = [...fundingFeeSignatures];
     for (const item of contributions) {
-      const previous = fundingFeeSignatures.find(other => other.role === item.role);
+      const previous = next.find(other => other.role === item.role);
       if (previous) sameCanonical(previous, item, 'retained funding fee wallet contribution');
-      else fundingFeeSignatures.push(item);
+      else next.push(item);
     }
+    fundingFeeSignatures = next;
   } else {
     assert(payoutSignatureHex, 'sign your payout portion before verifying the sponsor wallet PSBT');
     validatePresignedFeePackage({ ...draft, signatures: { payoutSignatureHex, sponsorSignedPsbtBase64: signed } });
@@ -404,7 +512,7 @@ click('import-fee-wallet', () => {
   field('wallet-fee-psbt').value = ''; show('status', 'External wallet signature(s) verified against the exact child and explicit roles.');
 });
 click('finalize-fee', () => {
-  requireFeeReview(); const draft = feeDraft!;
+  const { draft } = requireFeeReview();
   const packageValue = { ...draft, signatures: draft.mode === 'funding' ? fundingFeeSignatures :
     { payoutSignatureHex, sponsorSignedPsbtBase64 } } as PresignedFeePackage;
   const checked = validatePresignedFeePackage(packageValue);
