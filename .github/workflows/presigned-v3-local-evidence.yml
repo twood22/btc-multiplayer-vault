@@ -34,11 +34,11 @@ jobs:
           persist-credentials: false
       - name: Inspect fixed local retention pins
         working-directory: .
-        run: node scripts/presigned-local-ci.mjs check-pins
+        run: node scripts/presigned-local78-ci.mjs check-pins
       - name: Check out the immutable candidate separately
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: d907d42b49acb440394d703fca1e31d4e575f577
+          ref: 94dc1046a29d2b027fc8186baa5932c1b1ab236a
           path: candidate
           persist-credentials: false
       - name: Select the reviewed runtime without dependency caching
@@ -49,19 +49,19 @@ jobs:
         run: npm ci
       - name: Test source-grounded output and hostile archive boundaries
         run: |
-          node --import tsx ../scripts/test-presigned-local-evidence.mjs
-          python3 ../scripts/test-presigned-local-archive.py
+          node --import tsx ../scripts/test-presigned-local78-evidence.mjs
+          python3 ../scripts/test-presigned-local78-archive.py
       - name: Prepare checksum-pinned Core and PostgreSQL
         run: bash scripts/setup-presigned-ci.sh
       - name: Install Chromium on this disposable runner
         run: npx playwright install --with-deps chromium
-      - name: Execute all 75 unchanged candidate commands and retain exact bytes
+      - name: Execute all 78 unchanged candidate commands and retain exact bytes
         id: evidence
-        run: node --import tsx ../scripts/presigned-local-ci.mjs run
+        run: node --import tsx ../scripts/presigned-local78-ci.mjs run
       - name: Inspect all original transcript bytes and repeat candidate validation
-        run: node --import tsx ../scripts/presigned-local-public-evidence.mjs '${{ steps.evidence.outputs.directory }}'
+        run: node --import tsx ../scripts/presigned-local78-public-evidence.mjs '${{ steps.evidence.outputs.directory }}'
       - name: Upload only the three reviewed files to the existing test-only draft
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: node ../scripts/presigned-local-ci.mjs upload '${{ steps.evidence.outputs.directory }}'
+        run: node ../scripts/presigned-local78-ci.mjs upload '${{ steps.evidence.outputs.directory }}'
