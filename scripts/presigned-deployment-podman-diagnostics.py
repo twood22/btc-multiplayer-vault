@@ -47,6 +47,50 @@ UUID = re.compile(r'^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$')
 USER = re.compile(r'^[1-9][0-9]{0,9}:(?:0|[1-9][0-9]{0,9})$')
 PROBE_SHA = '3ad0901449aadb85471bccd1643d4dc79b9459445024188d43d81ec6a4b84a99'
 DIAGNOSTIC_LIMIT = 65536
+FRAME_BOUNDS_SHA256 = '5052a02a3945a626abcb0d516a0b60014a458b14abaa3b0c527ac73562c32b22'
+NODE_CLASSES = frozenset(['Error', 'AssertionError', 'TypeError', 'RangeError', 'SyntaxError',
+    'ReferenceError', 'URIError', 'AbortError', 'AggregateError'])
+NODE_CODES = frozenset(['ERR_ASSERTION', 'ERR_INVALID_ARG_TYPE', 'ERR_INVALID_ARG_VALUE', 'ERR_OUT_OF_RANGE',
+    'ERR_MODULE_NOT_FOUND', 'ERR_PACKAGE_PATH_NOT_EXPORTED', 'ERR_UNKNOWN_FILE_EXTENSION', 'ERR_INVALID_URL',
+    'ERR_UNHANDLED_ERROR', 'ERR_WORKER_OUT_OF_MEMORY', 'ABORT_ERR', 'ENOENT', 'EACCES', 'EPERM', 'EADDRINUSE',
+    'ECONNREFUSED', 'ETIMEDOUT', 'ENOBUFS', 'ENOMEM'])
+
+
+def child_exception(stderr, bounds):
+    """Only fixed Node classes/codes and exact pinned /app file:line pairs."""
+    empty = lambda: {'class': None, 'code': None, 'frames': []}
+    if type(stderr) is not bytes or len(stderr) > DIAGNOSTIC_LIMIT or b'\0' in stderr or b'\r' in stderr:
+        return empty()
+    lines = stderr.decode('utf8', errors='replace').split('\n')
+    headers = []
+    for index, line in enumerate(lines):
+        if len(line) > 2048:
+            continue
+        match = re.match(r'^([A-Za-z]+)(?: \[([A-Z][A-Z0-9_]{0,63})\])?:', line)
+        if match and match[1] in NODE_CLASSES:
+            headers.append((index, match[1], match[2] if match[2] in NODE_CODES else None))
+    if len(headers) != 1:
+        return empty()
+    index, kind, code = headers[0]
+    frames = []
+    for line in lines[index+1:]:
+        if len(line) > 2048:
+            break
+        match = re.fullmatch(r' {4}at (?:[A-Za-z0-9_$.\[\]<> ]{1,160} \(([^()]{1,2048})\)|([^()]{1,2048}))', line)
+        if not match:
+            break
+        location = re.fullmatch(r'(.+):([1-9][0-9]{0,5}):([1-9][0-9]{0,5})', match[1] or match[2])
+        if not location:
+            break
+        path, number, column = location[1], int(location[2]), int(location[3])
+        for file, caps in bounds.items():
+            if path not in ('/app/'+file, 'file:///app/'+file) or number > len(caps) or column > caps[number-1]:
+                continue
+            frame = {'file': file, 'line': number}
+            if frame not in frames and len(frames) < 4:
+                frames.append(frame)
+            break
+    return {'class': kind, 'code': code, 'frames': frames}
 
 
 def operation(args):
@@ -161,7 +205,7 @@ def private_dir(path):
         raise ValueError('private directory refused')
 
 
-def private_json(path, maximum=8192):
+def private_bytes(path, maximum=8192):
     private_dir(os.path.dirname(path))
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
@@ -172,9 +216,13 @@ def private_json(path, maximum=8192):
         after = os.fstat(fd)
         if (s.st_size, s.st_mtime_ns, s.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns) or len(data) != s.st_size:
             raise ValueError('private read changed')
-        return json.loads(data)
+        return data
     finally:
         os.close(fd)
+
+
+def private_json(path, maximum=8192):
+    return json.loads(private_bytes(path, maximum))
 
 
 def write_record(directory, name, record):
@@ -193,7 +241,7 @@ def run_passthrough(args):
     started = time.monotonic_ns()
     private_dir(os.path.dirname(os.path.realpath(__file__)))
     config = private_json(os.path.dirname(__file__)+'/diagnostic-config.json')
-    if set(config) != {'version', 'realBinarySha256', 'originalPath', 'wrapperDirectory', 'diagnosticDirectory'} or config['version'] != 1:
+    if set(config) != {'version', 'realBinarySha256', 'originalPath', 'wrapperDirectory', 'diagnosticDirectory', 'childFrameBoundsSha256'} or config['version'] != 1:
         raise ValueError('diagnostic configuration refused')
     if not HEX.fullmatch(config['realBinarySha256']) or config['wrapperDirectory'] != os.path.dirname(__file__) or \
             os.path.realpath(__file__) != __file__ or os.environ.get('PATH') != config['wrapperDirectory']+':'+config['originalPath']:
@@ -201,6 +249,14 @@ def run_passthrough(args):
     if os.path.basename(config['wrapperDirectory']) != 'podman-bin' or config['diagnosticDirectory'] != os.path.dirname(config['wrapperDirectory'])+'/podman-diagnostics':
         raise ValueError('diagnostic destination refused')
     private_dir(config['diagnosticDirectory'])
+    frame_bytes = private_bytes(os.path.dirname(__file__)+'/child-frame-bounds.json', 256*1024)
+    if config['childFrameBoundsSha256'] != FRAME_BOUNDS_SHA256 or hashlib.sha256(frame_bytes).hexdigest() != FRAME_BOUNDS_SHA256:
+        raise ValueError('child source bounds changed')
+    frame_bounds = json.loads(frame_bytes)
+    if set(frame_bounds) != {'version', 'candidateCommit', 'sourceDigest', 'files'} or frame_bounds['version'] != 1 or \
+            frame_bounds['candidateCommit'] != '94dc1046a29d2b027fc8186baa5932c1b1ab236a' or \
+            frame_bounds['sourceDigest'] != '83e9001523b7029a0da6e945be5e6258d5f50ed6f4f529cab9e70413cf7127bc':
+        raise ValueError('child source identity changed')
     fd = os.open('/usr/bin/podman', os.O_RDONLY | os.O_NOFOLLOW)
     pidfd = None
     try:
@@ -280,7 +336,9 @@ def run_passthrough(args):
         record = {'version': 1, 'operation': operation(args), **terminal(actual),
             'elapsedMs': elapsed_ms,
             'stdoutBytes': stdout_bytes, 'stderrBytes': stderr_bytes,
-            'classifications': classifications(bytes(retained)), 'realBinarySha256': config['realBinarySha256']}
+            'classifications': classifications(bytes(retained)), 'realBinarySha256': config['realBinarySha256'],
+            'exception': child_exception(bytes(retained), frame_bounds['files']) if stderr_bytes <= DIAGNOSTIC_LIMIT else
+                {'class': None, 'code': None, 'frames': []}}
         # A record is diagnostic only; its existence never substitutes for the
         # real terminal or the unchanged candidate's independent success gates.
         # Preserve the genuine terminal even if diagnostics cannot be written.
@@ -391,6 +449,35 @@ def self_test():
             checks += 1
         else:
             raise AssertionError('synthetic invalid terminal accepted')
+    bounds = {'web/lib/server/config.ts': [80]*76, 'web/lib/server/vault-runtime-store.ts': [80]*900,
+        'web/scripts/watch-chain.ts': [80]*41}
+    source = b'Error: '+secret+b' postgresql://synthetic:password@private.invalid/db\n'+\
+        b'    at required (/app/web/lib/server/config.ts:76:21)\n'+\
+        b'    at chainConfirmationsRequired (file:///app/web/lib/server/config.ts:48:15)\n'+\
+        b'    at pollVaultChain (/app/web/lib/server/vault-runtime-store.ts:648:28)\n'
+    expected = {'class': 'Error', 'code': None, 'frames': [
+        {'file': 'web/lib/server/config.ts', 'line': 76}, {'file': 'web/lib/server/config.ts', 'line': 48},
+        {'file': 'web/lib/server/vault-runtime-store.ts', 'line': 648}]}
+    check(child_exception(source, bounds) == expected)
+    check(secret not in json.dumps(child_exception(source, bounds)).encode())
+    check(child_exception(source.replace(b'Error:', b'AssertionError [ERR_ASSERTION]:'), bounds) ==
+        {**expected, 'class': 'AssertionError', 'code': 'ERR_ASSERTION'})
+    check(child_exception(source.replace(b'Error:', b'Error [PRIVATE_CODE]:'), bounds) == expected)
+    empty = {'class': None, 'code': None, 'frames': []}
+    for invalid in [source+b'Error: ambiguous\n', source+b'\0', source.replace(b'\n', b'\r\n'), b'A'*65537,
+            source.replace(b'Error:', secret+b':')]:
+        check(child_exception(invalid, bounds) == empty)
+    for location in [b'/outside/web/lib/server/config.ts:76:21', b'/app/../app/web/lib/server/config.ts:76:21',
+            b'/app/web/./lib/server/config.ts:76:21', b'/app/web/lib/server/config.ts:77:21',
+            b'/app/web/lib/server/config.ts:76:81', b'/app/web/lib/server/config.ts:999999:1',
+            b'/app/web/lib/server/config.ts:76:999999', b'/app/private.ts:1:1',
+            b'web/lib/server/config.ts:76:21', b'file:///app/web/%2e%2e/lib/server/config.ts:76:21',
+            b'/app/web/lib/server/config.ts:076:21', b'/app/web/lib/server/config.ts:76:021']:
+        check(child_exception(b'Error: '+secret+b'\n    at f ('+location+b')\n', bounds) ==
+            {'class': 'Error', 'code': None, 'frames': []})
+    check(child_exception(b'Error: '+secret+b'\nprivate SQL\n    at f (/app/web/lib/server/config.ts:76:21)\n', bounds) ==
+        {'class': 'Error', 'code': None, 'frames': []})
+    check(len(child_exception(b'Error: '+secret+b'\n'+b'    at f (/app/web/lib/server/config.ts:76:21)\n'*20, bounds)['frames']) == 1)
     print(json.dumps({'passed': True, 'kind': 'pure-podman-diagnostic-boundaries', 'checks': checks, 'nativeCommandsExecuted': 0}))
 
 

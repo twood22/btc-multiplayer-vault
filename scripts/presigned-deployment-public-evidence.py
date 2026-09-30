@@ -35,6 +35,72 @@ FINAL_CHECKS = ('exact-graph-and-nine-exits-both-network-formats',
     'legacy-protocol-boundary-and-funding-intent-restart', 'real-default-signet-lifecycle',
     'fixed-refund-four-rounds-all-nine-trigger-quorums', 'fresh-colluder-signatures-no-unrestricted-tree-bypass',
     'twenty-one-setup-signatures-before-funding-and-restoration', 'v3-server-independent-missing-participant-recovery')
+DRILL_FIXTURE = {'profile': 'configured-disposable-fixture-v1',
+    'originalSha256': 'a25b3fa6226d63b20a506d13b255d617cdaf9b25bee6c7a6828c331736e00983',
+    'configuredSha256': 'fe931a29997ed8b053ef973ac4b656a2b6f40aa8170da36998b67a78a1113aa0',
+    'configurationCorrection': 'VAULT_CONFIRMATIONS_REQUIRED=1', 'importResolution': 'private-owned-exact-candidate-alias',
+    'applicationSourceUnchanged': True, 'stockAssertionsUnchanged': True, 'originalUnconfiguredFixturePassed': False}
+DEPLOYMENT_HASHES = ('sourceDigest', 'offlineUtilityDigest', 'acceptanceReceiptDigest', 'firstPlanDigest',
+    'upgradePlanDigest', 'journalDigest', 'nativeRestoreReceiptDigest', 'nativeDumpSha256', 'receiptDigest')
+DEPLOYMENT_FLAGS = {'actualRootlessContainerExecution': True, 'actualNativePostgresqlRestore': True,
+    'databaseHistoryPreserved': True, 'sameCompatibleImageAcrossReleases': True, 'databaseDowngraded': False,
+    'historicalContainersDeleted': False, 'codeMounts': False, 'readonlyRootFilesystem': True,
+    'operationalDatabaseAccess': False, 'publicListener': False, 'realDefaultSignetVerified': False,
+    'productionDeploymentClaimed': False, 'fundingAuthorized': False, 'cleanServiceShutdownVerified': True}
+DEPLOYMENT_COUNTS = {'coreVersion': 310100, 'successfulInstallations': 2, 'successfulExactPreviousContainerRollbacks': 1,
+    'idempotentInstallReconciliations': 1, 'idempotentRollbackReconciliations': 1, 'successfulWatcherHealthIterations': 2,
+    'databaseInstanceSubstitutionRefusals': 3, 'schemaSubstitutionRefusals': 2, 'publicNetworkBroadcasts': 0}
+TRANSPORT_FIELDS = {'version', 'protocol', 'kind', 'createdAt', 'candidateCommit', 'sourceDigest', 'toolingCommit', 'workflowRunId',
+    'inputs', 'proof', 'imageManifestDigest', 'imageConfigDigest', 'offlineUtilityDigest', 'acceptanceReceiptDigest',
+    'runnerSha256', 'boundaryHelperSha256', 'imageScannerSha256', 'actualDrillCompleted', 'cleanServiceShutdownVerified',
+    'scope', 'privateDirectoryUploads', 'productionDeploymentClaimed', 'fundingAuthorized', 'drillFixture'}
+
+
+def validate_drill_fixture(value):
+    require(type(value) is dict and set(value) == set(DRILL_FIXTURE), 'required exact configured fixture disclosure missing')
+    require(all(type(value[key]) is type(expected) and value[key] == expected for key, expected in DRILL_FIXTURE.items()),
+            'configured fixture differs from reviewed hashes or correction')
+
+
+def validate_deployment_retention(pins, proof, record, context, proof_bytes):
+    """Bind only exact public records; never infer execution from a fixture profile."""
+    proof_fields = {'version', 'protocol', 'kind', 'createdAt', 'imageManifestDigest', 'imageConfigDigest',
+        'actualCoreChain', 'migrationCount', 'listener', *DEPLOYMENT_HASHES, *DEPLOYMENT_FLAGS, *DEPLOYMENT_COUNTS}
+    require(type(proof) is dict and set(proof) == proof_fields and type(record) is dict and set(record) == TRANSPORT_FIELDS,
+            'unexpected deployment public schema')
+    validate_drill_fixture(record['drillFixture'])
+    canonical_timestamp(proof['createdAt']); canonical_timestamp(record['createdAt'])
+    require(type(proof['version']) is int and proof['version'] == 1 and proof['protocol'] == 'presigned-graph-v3' and
+            proof['kind'] == 'actual-private-loopback-deployment-rollback' and proof['actualCoreChain'] == 'isolated-regtest' and
+            proof['listener'] == '127.0.0.1' and type(proof['migrationCount']) is int and proof['migrationCount'] == pins['migrationCount'],
+            'deployment proof scope changed')
+    require(all(type(proof[key]) is type(expected) and proof[key] == expected
+                for key, expected in {**DEPLOYMENT_FLAGS, **DEPLOYMENT_COUNTS}.items()), 'deployment acceptance conditions changed')
+    require(all(type(proof[key]) is str and HEX.fullmatch(proof[key]) for key in DEPLOYMENT_HASHES) and
+            proof['firstPlanDigest'] != proof['upgradePlanDigest'], 'invalid deployment commitments')
+    for key in ('sourceDigest', 'imageManifestDigest', 'imageConfigDigest', 'offlineUtilityDigest', 'acceptanceReceiptDigest'):
+        require(proof[key] == pins[key] and record[key] == pins[key], 'deployment proof and transport differ from reviewed image/source')
+    body = {key: value for key, value in proof.items() if key != 'receiptDigest'}
+    commitment = 'vault/presigned-graph-v3/deployment-rollback-acceptance\n'+json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+    require(hashlib.sha256(commitment.encode()).hexdigest() == proof['receiptDigest'], 'deployment proof commitment changed')
+    require(type(record['version']) is int and record['version'] == 1 and record['protocol'] == 'presigned-graph-v3' and
+            record['kind'] == 'presigned-v3-public-deployment-test-retention' and record['candidateCommit'] == pins['candidateCommit'] and
+            record['toolingCommit'] == context['toolingCommit'] and record['workflowRunId'] == context['workflowRunId'] and
+            type(record['toolingCommit']) is str and re.fullmatch(r'[0-9a-f]{40}', record['toolingCommit']) and
+            type(record['workflowRunId']) is str and re.fullmatch(r'[1-9][0-9]*', record['workflowRunId']) and
+            record['actualDrillCompleted'] is True and record['cleanServiceShutdownVerified'] is True and
+            record['scope'] == 'isolated-regtest-same-image-rollback' and record['privateDirectoryUploads'] is False and
+            record['productionDeploymentClaimed'] is False and record['fundingAuthorized'] is False,
+            'deployment transport scope or execution identity changed')
+    require(json.dumps(record['inputs'], sort_keys=True) == json.dumps(pins['inputs'], sort_keys=True) and
+            record['imageScannerSha256'] == pins['imageScannerSha256'], 'deployment transport input custody changed')
+    for key in ('runnerSha256', 'boundaryHelperSha256'):
+        require(type(record[key]) is str and HEX.fullmatch(record[key]) and record[key] == context[key], 'deployment tooling custody changed')
+    require(type(proof_bytes) is bytes and 0 < len(proof_bytes) <= 65536 and type(record['proof']) is dict and
+            set(record['proof']) == {'name', 'sha256', 'bytes', 'receiptDigest'} and record['proof']['name'] == OUTPUT_NAMES[0] and
+            record['proof']['sha256'] == hashlib.sha256(proof_bytes).hexdigest() and type(record['proof']['bytes']) is int and
+            record['proof']['bytes'] == len(proof_bytes) and record['proof']['receiptDigest'] == proof['receiptDigest'],
+            'deployment transport proof bytes differ')
 
 
 def owned_directory(path):
@@ -263,9 +329,14 @@ def inspect_outputs(root):
     directory = root / 'outputs'
     owned_directory(directory)
     require(set(path.name for path in directory.iterdir()) == set(OUTPUT_NAMES), 'only two exact public output files may be retained')
+    records = []
     for name in OUTPUT_NAMES:
         owned_file(directory / name, 65536)
-        scan_public_json(directory / name)
+        records.append(scan_public_json(directory / name))
+    context = {'toolingCommit': os.environ.get('GITHUB_SHA'), 'workflowRunId': os.environ.get('GITHUB_RUN_ID'),
+        'runnerSha256': byte_hash(Path(__file__).with_name('presigned-deployment-ci.mjs')),
+        'boundaryHelperSha256': byte_hash(Path(__file__))}
+    validate_deployment_retention(read_json(root / 'pins.json'), *records, context, (directory / OUTPUT_NAMES[0]).read_bytes())
     print(json.dumps({'publicMetadataScanned': True, 'files': 2, 'privateDirectoryUploads': False}))
 
 

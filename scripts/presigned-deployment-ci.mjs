@@ -9,6 +9,9 @@ import { appendFileSync, chmodSync, closeSync, constants, createReadStream, fsta
   openSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { DRILL_FIXTURE, prepareConfiguredFixture, validateDrillFixture, verifyPreparedFixture } from './presigned-deployment-fixture.mjs';
+import { CHILD_FRAME_BOUNDS_FILE, CHILD_FRAME_BOUNDS_SHA256, validateChildBoundsBytes, validateChildException } from './presigned-deployment-child-exception.mjs';
+export { DRILL_FIXTURE };
 
 const PROTOCOL = 'presigned-graph-v3';
 const REPOSITORY = 'twood22/btc-multiplayer-vault'; // Exact existing authorized repository; never caller-selected.
@@ -94,7 +97,7 @@ export function validatePublicProof(proof, pins) {
 const TRANSPORT_KEYS = ['version','protocol','kind','createdAt','candidateCommit','sourceDigest','toolingCommit','workflowRunId',
   'inputs','proof','imageManifestDigest','imageConfigDigest','offlineUtilityDigest','acceptanceReceiptDigest',
   'runnerSha256','boundaryHelperSha256','imageScannerSha256','actualDrillCompleted','cleanServiceShutdownVerified',
-  'scope','privateDirectoryUploads','productionDeploymentClaimed','fundingAuthorized'];
+  'scope','privateDirectoryUploads','productionDeploymentClaimed','fundingAuthorized','drillFixture'];
 export function validateTransport(record, pins, context) {
   validatePins(pins); exact(record,TRANSPORT_KEYS); timestamp(record.createdAt);
   assert(record.version === 1 && record.protocol === PROTOCOL && record.kind === 'presigned-v3-public-deployment-test-retention' &&
@@ -109,6 +112,7 @@ export function validateTransport(record, pins, context) {
   exact(record.proof,['name','sha256','bytes','receiptDigest']); assert(record.proof.name === OUTPUT_NAMES[0]);
   hex(record.proof.sha256);hex(record.proof.receiptDigest);
   assert(Number.isSafeInteger(record.proof.bytes) && record.proof.bytes > 0 && record.proof.bytes <= 65536);
+  validateDrillFixture(record.drillFixture);
   return record;
 }
 function ownedDirectory(path) {
@@ -282,7 +286,7 @@ export function assertDrillCompleted(record) {
 export function publicPodmanDiagnostics(records,realBinarySha256) {
   hex(realBinarySha256);assert(Array.isArray(records)&&records.length<=512);
   const checked=records.map(record=>{
-    exact(record,['version','operation','nativeClosed','exitCode','signal','elapsedMs','stdoutBytes','stderrBytes','classifications','realBinarySha256']);
+    exact(record,['version','operation','nativeClosed','exitCode','signal','elapsedMs','stdoutBytes','stderrBytes','classifications','realBinarySha256','exception']);
     assert(record.version===1&&PODMAN_OPERATIONS.has(record.operation)&&record.nativeClosed===true&&record.realBinarySha256===realBinarySha256);
     assert(record.exitCode===null||Number.isSafeInteger(record.exitCode)&&record.exitCode>=0&&record.exitCode<=255);
     assert(record.signal===null||SIGNALS.has(record.signal)||['SIGRTMIN','SIGRTMAX'].includes(record.signal));
@@ -290,8 +294,9 @@ export function publicPodmanDiagnostics(records,realBinarySha256) {
     for(const key of ['elapsedMs','stdoutBytes','stderrBytes'])assert(Number.isSafeInteger(record[key])&&record[key]>=0);
     assert(Array.isArray(record.classifications)&&record.classifications.length<=8&&new Set(record.classifications).size===record.classifications.length&&
       record.classifications.every(item=>PODMAN_CLASSIFICATIONS.has(item)));
+    const exception=validateChildException(record.exception);
     const {version:_version,realBinarySha256:_sha,...publicRecord}=record;
-    return Object.freeze({...publicRecord,classifications:Object.freeze([...record.classifications])});
+    return Object.freeze({...publicRecord,classifications:Object.freeze([...record.classifications]),exception});
   });
   const failures=checked.filter(record=>record.exitCode!==0||record.signal!==null);
   const summary=Object.freeze({recordSetValid:true,capturedCommands:records.length,failedCommands:failures.length,
@@ -308,7 +313,10 @@ function preparePodmanDiagnostics(root) {
   } finally {closeSync(fd);}
   const wrapperDirectory=join(root,'podman-bin'),diagnosticDirectory=join(root,'podman-diagnostics');
   mkdirSync(wrapperDirectory,{mode:0o700});mkdirSync(diagnosticDirectory,{mode:0o700});
-  writeExclusive(join(wrapperDirectory,'diagnostic-config.json'),Buffer.from(JSON.stringify({version:1,realBinarySha256,originalPath,wrapperDirectory,diagnosticDirectory})));
+  const frameBytes=readFileSync(CHILD_FRAME_BOUNDS_FILE);validateChildBoundsBytes(frameBytes);
+  writeExclusive(join(wrapperDirectory,'child-frame-bounds.json'),frameBytes);
+  writeExclusive(join(wrapperDirectory,'diagnostic-config.json'),Buffer.from(JSON.stringify({version:1,realBinarySha256,originalPath,wrapperDirectory,diagnosticDirectory,
+    childFrameBoundsSha256:CHILD_FRAME_BOUNDS_SHA256})));
   const source=readFileSync(join(TOOLING,'presigned-deployment-podman-diagnostics.py'));
   assert(source.length>0&&source.length<=128*1024);
   const wrapper=join(wrapperDirectory,'podman');writeExclusive(wrapper,Buffer.concat([Buffer.from('#!/usr/bin/python3\n'),source]));chmodSync(wrapper,0o700);
@@ -341,11 +349,12 @@ export function publicFailureReport(error,stage,candidateRoot) {
     ...(drill?{drill}:{exception:exceptionFromError(error,candidateRoot)}),
     releasePublished:false,privateDirectoryUploads:false,productionDeploymentClaimed:false,fundingAuthorized:false};
 }
-async function boundedDrill(root, args) {
+async function boundedDrill(root, args, fixture) {
   const podman=preparePodmanDiagnostics(root);
   const log=join(root,'drill.stdout.log'),err=join(root,'drill.stderr.log');
   const descriptors=[log,err].map(path=>openSync(path,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600));
   const started=process.hrtime.bigint();
+  verifyPreparedFixture(fixture,process.cwd());
   const child=spawn(process.execPath,args,{env:{...hostEnvironment(),PATH:podman.path,PRESIGNED_ACCEPTANCE_PROTOCOL:PROTOCOL,PRESIGNED_BUILD_PROTOCOL:PROTOCOL},
     detached:true,stdio:['ignore','pipe','pipe']});
   let stdoutBytes=0,stderrBytes=0,termination='none',killTimer,diagnosticBytes=0;const chunks=[],diagnosticChunks=[];
@@ -397,6 +406,7 @@ async function main() {
     progress('candidate-verification');
     const load=path=>import(pathToFileURL(resolve(path)).href);
     const {presignedSourceDigest}=await load('scripts/presigned-build-identity.mjs');assert(presignedSourceDigest()===PINS.sourceDigest);
+    const fixture=prepareConfiguredFixture(root,process.cwd());
     const {validatePresignedAcceptanceReceipt}=await load('src/presigned/release.ts');
     const receipt=validatePresignedAcceptanceReceipt(JSON.parse(readOwned(join(root,'downloads',INPUT_NAMES[3]))));
     assert(receipt.version===3&&receipt.protocol===PROTOCOL&&receipt.receiptDigest===PINS.acceptanceReceiptDigest&&
@@ -412,8 +422,9 @@ async function main() {
     const loaded=JSON.parse(privateCommand('podman',['--remote=false','image','inspect',PINS.imageConfigDigest]));assert(loaded.length===1);assertOciRuntimeImage(oci,loaded[0]);
     const scratch=join(root,'scratch');mkdirSync(scratch,{mode:0o700});
     progress('actual-isolated-drill');
-    const stdout=await boundedDrill(root,['--import','tsx','scripts/presigned-deployment-image-acceptance.mts',
-      '--execute-disposable-loopback','--image-evidence',imageDirectory,'--acceptance-receipt',join(root,'downloads',INPUT_NAMES[3]),'--scratch-root',scratch]);
+    const stdout=await boundedDrill(root,['--import','tsx',fixture.entry,
+      '--execute-disposable-loopback','--image-evidence',imageDirectory,'--acceptance-receipt',join(root,'downloads',INPUT_NAMES[3]),'--scratch-root',scratch],fixture);
+    verifyPreparedFixture(fixture,process.cwd());
     const summary=JSON.parse(stdout.trim());assert(summary.passed===true&&typeof summary.evidenceDirectory==='string');
     assert(dirname(summary.evidenceDirectory)===scratch&&/^presigned-deployment-drill\.[A-Za-z0-9]{6}$/u.test(summary.evidenceDirectory.split('/').at(-1)));
     ownedDirectory(summary.evidenceDirectory);
@@ -430,16 +441,18 @@ async function main() {
       inputs:PINS.inputs,proof:{name:OUTPUT_NAMES[0],sha256:sha(proofBytes),bytes:proofBytes.length,receiptDigest:proof.receiptDigest},
       ...expected,runnerSha256:ctx.runnerSha256,boundaryHelperSha256:ctx.boundaryHelperSha256,imageScannerSha256:PINS.imageScannerSha256,
       actualDrillCompleted:true,cleanServiceShutdownVerified:true,scope:'isolated-regtest-same-image-rollback',
-      privateDirectoryUploads:false,productionDeploymentClaimed:false,fundingAuthorized:false};
+      privateDirectoryUploads:false,productionDeploymentClaimed:false,fundingAuthorized:false,drillFixture:DRILL_FIXTURE};
     validateTransport(transport,PINS,ctx);writeExclusive(join(root,'outputs',OUTPUT_NAMES[1]),Buffer.from(`${JSON.stringify(transport,null,2)}\n`));
-    privateCommand('python3',[join(TOOLING,'presigned-deployment-public-evidence.py'),'inspect-outputs',root]);
+    privateCommand('python3',[join(TOOLING,'presigned-deployment-public-evidence.py'),'inspect-outputs',root],
+      {...hostEnvironment(),GITHUB_SHA:ctx.toolingCommit,GITHUB_RUN_ID:ctx.workflowRunId});
     console.log(JSON.stringify({passed:true,actualDrillCompleted:true,receiptDigest:proof.receiptDigest,filesRetained:2,
       privateDirectoryUploads:false,productionDeploymentClaimed:false,fundingAuthorized:false}));return;
   }
   // Upload imports no candidate modules and never passes GH_TOKEN to a candidate
   // process or the privacy scanner. Only these two metadata files are eligible.
   progress('proof-review');
-  privateCommand('python3',[join(TOOLING,'presigned-deployment-public-evidence.py'),'inspect-outputs',root]);
+  privateCommand('python3',[join(TOOLING,'presigned-deployment-public-evidence.py'),'inspect-outputs',root],
+    {...hostEnvironment(),GITHUB_SHA:ctx.toolingCommit,GITHUB_RUN_ID:ctx.workflowRunId});
   const proof=validatePublicProof(JSON.parse(readOwned(join(root,'outputs',OUTPUT_NAMES[0]))),PINS);
   const transport=validateTransport(JSON.parse(readOwned(join(root,'outputs',OUTPUT_NAMES[1]))),PINS,ctx);
   assert(transport.proof.receiptDigest===proof.receiptDigest);

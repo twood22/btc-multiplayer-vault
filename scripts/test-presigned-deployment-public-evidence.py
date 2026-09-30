@@ -41,6 +41,61 @@ def archive_bytes(members):
 
 
 class DeploymentEvidenceBoundaryTests(unittest.TestCase):
+    def deployment_metadata_fixture(self):
+        pins = {'candidateCommit': '1'*40, 'sourceDigest': '2'*64, 'imageManifestDigest': 'sha256:'+'3'*64,
+            'imageConfigDigest': 'sha256:'+'4'*64, 'offlineUtilityDigest': '5'*64, 'acceptanceReceiptDigest': '6'*64,
+            'imageScannerSha256': '7'*64, 'migrationCount': 23,
+            'inputs': [{'name': name, 'sha256': '8'*64, 'bytes': 123} for name in boundary.INPUT_NAMES]}
+        proof = {**boundary.DEPLOYMENT_FLAGS, **boundary.DEPLOYMENT_COUNTS, 'version': 1, 'protocol': 'presigned-graph-v3',
+            'kind': 'actual-private-loopback-deployment-rollback', 'createdAt': '2026-09-14T00:00:00.000Z',
+            'actualCoreChain': 'isolated-regtest', 'listener': '127.0.0.1', 'migrationCount': 23,
+            **{key: pins[key] for key in ('sourceDigest', 'imageManifestDigest', 'imageConfigDigest', 'offlineUtilityDigest', 'acceptanceReceiptDigest')},
+            'firstPlanDigest': '9'*64, 'upgradePlanDigest': 'a'*64, 'journalDigest': 'b'*64,
+            'nativeRestoreReceiptDigest': 'c'*64, 'nativeDumpSha256': 'd'*64}
+        proof['receiptDigest'] = hashlib.sha256(('vault/presigned-graph-v3/deployment-rollback-acceptance\n'+
+            json.dumps(proof, sort_keys=True, separators=(',', ':'), ensure_ascii=False)).encode()).hexdigest()
+        raw = json.dumps(proof, sort_keys=True, separators=(',', ':')).encode()
+        context = {'toolingCommit': 'e'*40, 'workflowRunId': '123', 'runnerSha256': 'f'*64, 'boundaryHelperSha256': '1'*64}
+        record = {'version': 1, 'protocol': 'presigned-graph-v3', 'kind': 'presigned-v3-public-deployment-test-retention',
+            'createdAt': proof['createdAt'], 'candidateCommit': pins['candidateCommit'], 'inputs': pins['inputs'],
+            'imageScannerSha256': pins['imageScannerSha256'], **context,
+            **{key: pins[key] for key in ('sourceDigest', 'imageManifestDigest', 'imageConfigDigest', 'offlineUtilityDigest', 'acceptanceReceiptDigest')},
+            'proof': {'name': boundary.OUTPUT_NAMES[0], 'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw), 'receiptDigest': proof['receiptDigest']},
+            'actualDrillCompleted': True, 'cleanServiceShutdownVerified': True, 'scope': 'isolated-regtest-same-image-rollback',
+            'privateDirectoryUploads': False, 'productionDeploymentClaimed': False, 'fundingAuthorized': False,
+            'drillFixture': dict(boundary.DRILL_FIXTURE)}
+        return pins, proof, record, context, raw
+
+    def test_configured_fixture_disclosure_is_required_exact_and_not_an_original_stock_pass(self):
+        boundary.validate_deployment_retention(*self.deployment_metadata_fixture())
+        for key, original in boundary.DRILL_FIXTURE.items():
+            with self.subTest(field=key):
+                value = dict(boundary.DRILL_FIXTURE); value[key] = not original if type(original) is bool else 'UNAPPROVED'
+                with self.assertRaises(boundary.ReviewError): boundary.validate_drill_fixture(value)
+                value = dict(boundary.DRILL_FIXTURE); del value[key]
+                with self.assertRaises(boundary.ReviewError): boundary.validate_drill_fixture(value)
+        for value in [None, {}, {**boundary.DRILL_FIXTURE, 'privatePath': '/private/custody'},
+                {**boundary.DRILL_FIXTURE, 'applicationSourceUnchanged': 1}]:
+            with self.assertRaises(boundary.ReviewError): boundary.validate_drill_fixture(value)
+
+    def test_deployment_transport_binds_fixture_source_image_actual_proof_bytes_and_current_tooling(self):
+        for target, key, value in [(2, 'drillFixture', None), (2, 'sourceDigest', 'e'*64), (2, 'runnerSha256', 'e'*64),
+                (2, 'boundaryHelperSha256', 'e'*64), (2, 'imageManifestDigest', 'sha256:'+'e'*64),
+                (2, 'acceptanceReceiptDigest', 'e'*64), (2, 'candidateCommit', 'e'*40), (2, 'workflowRunId', '456'),
+                (2, 'actualDrillCompleted', False), (1, 'successfulWatcherHealthIterations', 1),
+                (1, 'cleanServiceShutdownVerified', False), (1, 'codeMounts', True), (1, 'version', True)]:
+            with self.subTest(field=key):
+                data = list(self.deployment_metadata_fixture()); data[target][key] = value
+                with self.assertRaises(boundary.ReviewError): boundary.validate_deployment_retention(*data)
+        for key in ['name', 'sha256', 'bytes', 'receiptDigest']:
+            data = list(self.deployment_metadata_fixture()); data[2]['proof'][key] = 1 if key == 'bytes' else 'UNAPPROVED'
+            with self.assertRaises(boundary.ReviewError): boundary.validate_deployment_retention(*data)
+        for target in [1, 2]:
+            data = list(self.deployment_metadata_fixture()); data[target]['privatePath'] = '/private/custody'
+            with self.assertRaises(boundary.ReviewError): boundary.validate_deployment_retention(*data)
+        data = list(self.deployment_metadata_fixture()); data[4] += b'\n'
+        with self.assertRaises(boundary.ReviewError): boundary.validate_deployment_retention(*data)
+
     def test_reusable_workflow_preserves_manual_public_branch_guard(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/presigned-v3-deployment-evidence.yml').read_text()
         # Exact source assertions, not a substitute YAML parser. No dependency
@@ -251,7 +306,7 @@ class DeploymentEvidenceBoundaryTests(unittest.TestCase):
         # Test the pure validator below rather than requiring mutable defaults.
         module = Path(__file__).with_name('presigned-deployment-ci.mjs').resolve().as_uri()
         program = '''import assert from 'node:assert/strict';
-import {PINS,INPUT_NAMES,OUTPUT_NAMES,validatePins,validatePublicProof,validateTransport} from MODULE;
+import {PINS,DRILL_FIXTURE,INPUT_NAMES,OUTPUT_NAMES,validatePins,validatePublicProof,validateTransport} from MODULE;
 const canonical=v=>v===null||typeof v!=='object'?JSON.stringify(v):Array.isArray(v)?'['+v.map(canonical).join(',')+']':'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';
 const {createHash}=await import('node:crypto');const hash=s=>createHash('sha256').update(s).digest('hex');
 const pins={candidateCommit:'1'.repeat(40),sourceDigest:'2'.repeat(64),draftTag:'presigned-v3-test-evidence-22222222-20260914',draftReleaseId:392238195,
@@ -282,9 +337,11 @@ const record={version:1,protocol:'presigned-graph-v3',kind:'presigned-v3-public-
  imageManifestDigest:pins.imageManifestDigest,imageConfigDigest:pins.imageConfigDigest,offlineUtilityDigest:pins.offlineUtilityDigest,
  acceptanceReceiptDigest:pins.acceptanceReceiptDigest,runnerSha256:ctx.runnerSha256,boundaryHelperSha256:ctx.boundaryHelperSha256,imageScannerSha256:pins.imageScannerSha256,
  actualDrillCompleted:true,cleanServiceShutdownVerified:true,scope:'isolated-regtest-same-image-rollback',privateDirectoryUploads:false,
- productionDeploymentClaimed:false,fundingAuthorized:false};validateTransport(record,pins,ctx);
+ productionDeploymentClaimed:false,fundingAuthorized:false,drillFixture:DRILL_FIXTURE};validateTransport(record,pins,ctx);
 for(const field of Object.keys(record)){const value=structuredClone(record);value[field]=typeof value[field]==='boolean'?!value[field]:typeof value[field]==='number'?value[field]+1:'UNAPPROVED';denied(()=>validateTransport(value,pins,ctx));}
 denied(()=>validateTransport({...record,privatePath:'/private/custody'},pins,ctx));
+for(const field of Object.keys(DRILL_FIXTURE)){const value=structuredClone(record);value.drillFixture[field]=typeof value.drillFixture[field]==='boolean'?!value.drillFixture[field]:'UNAPPROVED';denied(()=>validateTransport(value,pins,ctx));}
+denied(()=>validateTransport({...record,drillFixture:{...DRILL_FIXTURE,privatePath:'/private/custody'}},pins,ctx));
 assert(refusals>=80);console.log(JSON.stringify({passed:true,refusals,syntheticParserFixturesOnly:true,actualDeploymentExecuted:false}));
 '''.replace('MODULE', json.dumps(module))
         result = subprocess.run(['node', '--input-type=module', '-'], input=program, text=True, capture_output=True, timeout=15, check=False)
