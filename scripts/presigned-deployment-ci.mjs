@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
-import { appendFileSync, closeSync, constants, createReadStream, fstatSync, fsyncSync, lstatSync, mkdirSync,
+import { appendFileSync, chmodSync, closeSync, constants, createReadStream, fstatSync, fsyncSync, lstatSync, mkdirSync,
   openSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -212,6 +212,13 @@ const NODE_FRAMES = new Map(Object.entries({'node:internal/process/promises':498
   'node:internal/modules/esm/loader':1082,'node:internal/modules/run_main':188,
   'node:internal/child_process':1136,'node:events':1223,'node:fs':3383}));
 const drillFailures = new WeakMap();
+const PODMAN_OPERATIONS = new Set(['unknown','info','image-inspect','image-probe','list-owned','container-inspect',
+  'start-owned','stop-owned','remove-transient','run-web','run-migration','run-watcher']);
+const PODMAN_CLASSIFICATIONS = new Set(['usernamespace-clone-denied','rootless-reexec-failed','uid-map-denied','gid-map-denied',
+  'subordinate-ids-missing','cgroup-denied','resource-limit-denied','mount-denied','seccomp-denied','confinement-denied',
+  'keep-id-unsupported','unsupported-option','oci-runtime-unavailable','oci-executable-missing','filesystem-read-only',
+  'disk-space-exhausted','memory-allocation-failed','operation-not-permitted','permission-denied']);
+const podmanSummaries = new WeakSet();
 const nativeStackGetter=Object.getOwnPropertyDescriptor(new Error(),'stack')?.get;
 const nativeErrorPrototypes=new Set([Error,assert.AssertionError,TypeError,RangeError,SyntaxError,ReferenceError,URIError,AggregateError].map(type=>type.prototype));
 export function publicExceptionMetadata(text, candidateRoot) {
@@ -272,13 +279,59 @@ export function assertDrillCompleted(record) {
   assert(record.exitCode===0&&record.signal===null&&!record.spawnErrorObserved&&record.termination==='none'&&
     record.stdoutBytes+record.stderrBytes<=DRILL_OUTPUT_LIMIT,'actual drill did not complete; no proof may be retained');
 }
-export function makeDrillFailure(record,stderr,candidateRoot) {
+export function publicPodmanDiagnostics(records,realBinarySha256) {
+  hex(realBinarySha256);assert(Array.isArray(records)&&records.length<=512);
+  const checked=records.map(record=>{
+    exact(record,['version','operation','nativeClosed','exitCode','signal','elapsedMs','stdoutBytes','stderrBytes','classifications','realBinarySha256']);
+    assert(record.version===1&&PODMAN_OPERATIONS.has(record.operation)&&record.nativeClosed===true&&record.realBinarySha256===realBinarySha256);
+    assert(record.exitCode===null||Number.isSafeInteger(record.exitCode)&&record.exitCode>=0&&record.exitCode<=255);
+    assert(record.signal===null||SIGNALS.has(record.signal)||['SIGRTMIN','SIGRTMAX'].includes(record.signal));
+    assert((record.exitCode===null)!==(record.signal===null));
+    for(const key of ['elapsedMs','stdoutBytes','stderrBytes'])assert(Number.isSafeInteger(record[key])&&record[key]>=0);
+    assert(Array.isArray(record.classifications)&&record.classifications.length<=8&&new Set(record.classifications).size===record.classifications.length&&
+      record.classifications.every(item=>PODMAN_CLASSIFICATIONS.has(item)));
+    const {version:_version,realBinarySha256:_sha,...publicRecord}=record;
+    return Object.freeze({...publicRecord,classifications:Object.freeze([...record.classifications])});
+  });
+  const failures=checked.filter(record=>record.exitCode!==0||record.signal!==null);
+  const summary=Object.freeze({recordSetValid:true,capturedCommands:records.length,failedCommands:failures.length,
+    firstFailures:Object.freeze(failures.slice(0,4)),failuresTruncated:failures.length>4});podmanSummaries.add(summary);return summary;
+}
+function preparePodmanDiagnostics(root) {
+  ownedDirectory(root);const originalPath=hostEnvironment().PATH;
+  assert(typeof originalPath==='string'&&originalPath.length>0&&originalPath.length<4096&&!/[\x00-\x1f]/u.test(originalPath));
+  const real='/usr/bin/podman';assert(realpathSync(real)===real);
+  const fd=openSync(real,constants.O_RDONLY|constants.O_NOFOLLOW);let realBinarySha256;
+  try {const before=fstatSync(fd);assert(before.isFile()&&before.uid===0&&(before.mode&0o6022)===0&&before.size>0&&before.size<=64*1024*1024);
+    realBinarySha256=sha(readFileSync(fd));const after=fstatSync(fd);
+    assert(before.dev===after.dev&&before.ino===after.ino&&before.size===after.size&&before.mtimeMs===after.mtimeMs&&before.ctimeMs===after.ctimeMs);
+  } finally {closeSync(fd);}
+  const wrapperDirectory=join(root,'podman-bin'),diagnosticDirectory=join(root,'podman-diagnostics');
+  mkdirSync(wrapperDirectory,{mode:0o700});mkdirSync(diagnosticDirectory,{mode:0o700});
+  writeExclusive(join(wrapperDirectory,'diagnostic-config.json'),Buffer.from(JSON.stringify({version:1,realBinarySha256,originalPath,wrapperDirectory,diagnosticDirectory})));
+  const source=readFileSync(join(TOOLING,'presigned-deployment-podman-diagnostics.py'));
+  assert(source.length>0&&source.length<=128*1024);
+  const wrapper=join(wrapperDirectory,'podman');writeExclusive(wrapper,Buffer.concat([Buffer.from('#!/usr/bin/python3\n'),source]));chmodSync(wrapper,0o700);
+  return {path:wrapperDirectory+':'+originalPath,diagnosticDirectory,realBinarySha256};
+}
+function readPodmanDiagnostics(configuration) {
+  try {
+    ownedDirectory(configuration.diagnosticDirectory);const files=readdirSync(configuration.diagnosticDirectory);assert(files.length<=512);
+    for(const name of files)assert(/^[1-9][0-9]{0,21}-[1-9][0-9]{0,9}\.json$/u.test(name));
+    files.sort((left,right)=>{const a=BigInt(left.split('-')[0]),b=BigInt(right.split('-')[0]);return a<b?-1:a>b?1:left.localeCompare(right);});
+    const records=files.map(name=>JSON.parse(readOwned(join(configuration.diagnosticDirectory,name),4096)));
+    return publicPodmanDiagnostics(records,configuration.realBinarySha256);
+  } catch {const unavailable=Object.freeze({recordSetValid:false,capturedCommands:null,failedCommands:null,firstFailures:Object.freeze([]),failuresTruncated:false});
+    podmanSummaries.add(unavailable);return unavailable;}
+}
+export function makeDrillFailure(record,stderr,candidateRoot,podman) {
   validateDrillTerminal(record);
   assert.throws(()=>assertDrillCompleted(record),'a successful child cannot be classified as failed');
   const error=new Error('actual drill did not complete; no proof may be retained');
   const exception=publicExceptionMetadata(stderr,candidateRoot);
   exception.frames.forEach(Object.freeze);Object.freeze(exception.frames);Object.freeze(exception);
-  drillFailures.set(error,Object.freeze({childClosed:true,...record,exception}));
+  if(podman)assert(podmanSummaries.has(podman));
+  drillFailures.set(error,Object.freeze({childClosed:true,...record,exception,...(podman?{podman}: {})}));
   return error;
 }
 export function publicFailureReport(error,stage,candidateRoot) {
@@ -289,10 +342,11 @@ export function publicFailureReport(error,stage,candidateRoot) {
     releasePublished:false,privateDirectoryUploads:false,productionDeploymentClaimed:false,fundingAuthorized:false};
 }
 async function boundedDrill(root, args) {
+  const podman=preparePodmanDiagnostics(root);
   const log=join(root,'drill.stdout.log'),err=join(root,'drill.stderr.log');
   const descriptors=[log,err].map(path=>openSync(path,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600));
   const started=process.hrtime.bigint();
-  const child=spawn(process.execPath,args,{env:{...hostEnvironment(),PRESIGNED_ACCEPTANCE_PROTOCOL:PROTOCOL,PRESIGNED_BUILD_PROTOCOL:PROTOCOL},
+  const child=spawn(process.execPath,args,{env:{...hostEnvironment(),PATH:podman.path,PRESIGNED_ACCEPTANCE_PROTOCOL:PROTOCOL,PRESIGNED_BUILD_PROTOCOL:PROTOCOL},
     detached:true,stdio:['ignore','pipe','pipe']});
   let stdoutBytes=0,stderrBytes=0,termination='none',killTimer,diagnosticBytes=0;const chunks=[],diagnosticChunks=[];
   const stop=reason=>{if(termination==='none')termination=reason;try{process.kill(-child.pid,'SIGTERM');}catch{}
@@ -314,7 +368,7 @@ async function boundedDrill(root, args) {
     });
     const record={...terminal,spawnErrorObserved,spawnErrorCode,elapsedMs:Number((process.hrtime.bigint()-started)/1000000n),
       stdoutBytes,stderrBytes,termination};
-    try {assertDrillCompleted(record);}catch {throw makeDrillFailure(record,Buffer.concat(diagnosticChunks).toString(),process.cwd());}
+    try {assertDrillCompleted(record);}catch {throw makeDrillFailure(record,Buffer.concat(diagnosticChunks).toString(),process.cwd(),readPodmanDiagnostics(podman));}
     return Buffer.concat(chunks).toString();
   } finally {clearTimeout(timer);clearTimeout(killTimer);for(const fd of descriptors){fsyncSync(fd);closeSync(fd);}}
 }

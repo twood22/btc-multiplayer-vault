@@ -1,8 +1,10 @@
-/** Pure draft-ID and failure-diagnostic boundaries; no processes, GitHub or operations. */
+/** Pure boundaries plus a synthetic Python subprocess; no Podman, GitHub or custody operations. */
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { assertDrillCompleted, checkedDraft, INPUT_NAMES, makeDrillFailure, PINS,
-  publicExceptionMetadata, publicFailureReport, validateDrillTerminal, validatePins } from './presigned-deployment-ci.mjs';
+  publicExceptionMetadata, publicFailureReport, publicPodmanDiagnostics, validateDrillTerminal, validatePins } from './presigned-deployment-ci.mjs';
 
 const pins={
   ...PINS,candidateCommit:'1'.repeat(40),sourceDigest:'2'.repeat(64),
@@ -220,4 +222,45 @@ test('generic parent exceptions expose no message, properties or getter values',
   const nativeHostile=new Error(secret);Object.defineProperty(nativeHostile,'message',{get(){getters++;throw new Error(secret);}});
   assert.deepEqual(publicFailureReport(nativeHostile,'pins',candidateRoot).exception,emptyException);assert.equal(getters,0);
   for(const error of [null,undefined,secret,42]){const projection=publicFailureReport(error,'pins',candidateRoot);assert.deepEqual(projection.exception,emptyException);privateFree(projection);}
+});
+
+const realBinarySha256='a'.repeat(64);
+const podmanRecord={version:1,operation:'image-probe',nativeClosed:true,exitCode:125,signal:null,elapsedMs:110,
+  stdoutBytes:0,stderrBytes:117,classifications:['uid-map-denied','operation-not-permitted'],realBinarySha256};
+
+test('genuine Podman failure diagnostics remain fixed enums and actual terminals, never a success authorization',()=>{
+  const summary=publicPodmanDiagnostics([{...podmanRecord,operation:'info',exitCode:0,classifications:[]},podmanRecord],realBinarySha256);
+  assert.deepEqual(summary,{recordSetValid:true,capturedCommands:2,failedCommands:1,
+    firstFailures:[{operation:'image-probe',nativeClosed:true,exitCode:125,signal:null,elapsedMs:110,stdoutBytes:0,
+      stderrBytes:117,classifications:['uid-map-denied','operation-not-permitted']}],failuresTruncated:false});
+  const report=publicFailureReport(makeDrillFailure(terminal,stack,candidateRoot,summary),'actual-isolated-drill',candidateRoot);
+  assert.equal(report.passed,false);assert.equal(report.drill.podman.failedCommands,1);privateFree(report);
+  assert(Object.isFrozen(summary)&&Object.isFrozen(summary.firstFailures)&&Object.isFrozen(summary.firstFailures[0].classifications));
+  assert.throws(()=>{summary.firstFailures[0].classifications[0]=secret;});
+  const empty=publicPodmanDiagnostics([],realBinarySha256);
+  assert.equal(publicFailureReport(makeDrillFailure(terminal,stack,candidateRoot,empty),'actual-isolated-drill',candidateRoot).passed,false);
+  assert.throws(()=>makeDrillFailure({...terminal,exitCode:0},stack,candidateRoot,summary));
+});
+
+test('private Podman records refuse injected identifiers, fields, classifications and invented or absent native terminals',()=>{
+  for(const change of [{operation:secret},{operation:'run-with-privileges'},{nativeClosed:false},{nativeClosed:'true'},
+    {exitCode:null,signal:null},{exitCode:0,signal:'SIGKILL'},{exitCode:256},{exitCode:'0'},{signal:secret},
+    {stdoutBytes:-1},{stderrBytes:1.5},{elapsedMs:Infinity},{classifications:[secret]},{classifications:['uid-map-denied','uid-map-denied']},
+    {classifications:'permission-denied'},{argv:[secret]},{stderr:secret},{env:{TOKEN:secret}},{realBinarySha256:'b'.repeat(64)}]){
+    assert.throws(()=>publicPodmanDiagnostics([{...podmanRecord,...change}],realBinarySha256));
+  }
+  assert.throws(()=>publicPodmanDiagnostics(Array(513).fill(podmanRecord),realBinarySha256));
+  assert.throws(()=>makeDrillFailure(terminal,stack,candidateRoot,{recordSetValid:true,firstFailures:[{message:secret}]}));
+  const many=publicPodmanDiagnostics(Array(8).fill(podmanRecord),realBinarySha256);
+  assert.equal(many.firstFailures.length,4);assert.equal(many.failedCommands,8);assert.equal(many.failuresTruncated,true);privateFree(many);
+  const signaled=publicPodmanDiagnostics([{...podmanRecord,exitCode:null,signal:'SIGKILL'}],realBinarySha256);
+  assert.equal(signaled.firstFailures[0].signal,'SIGKILL');assert.equal(signaled.firstFailures[0].exitCode,null);
+});
+
+test('Python operation/cause/terminal/signal boundaries run synthetically without Podman or native children',()=>{
+  const result=spawnSync('/usr/bin/python3',['-B',fileURLToPath(new URL('./presigned-deployment-podman-diagnostics.py',import.meta.url)),'--self-test-pure'],
+    {env:{PATH:'/usr/bin:/bin',LANG:'C.UTF-8',LC_ALL:'C.UTF-8'},encoding:'utf8',timeout:10000,maxBuffer:65536,stdio:['ignore','pipe','pipe']});
+  assert(result.status===0&&!result.error,'pure Python diagnostic boundary tests failed; private output omitted');
+  assert(result.stderr.length===0);
+  assert.deepEqual(JSON.parse(result.stdout),{passed:true,kind:'pure-podman-diagnostic-boundaries',checks:120,nativeCommandsExecuted:0});
 });
