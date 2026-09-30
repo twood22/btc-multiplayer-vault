@@ -57,6 +57,7 @@ jobs:
 
       - name: Test synthetic archive and metadata refusal boundaries
         run: |
+          node --test ../scripts/test-presigned-deployment-ci.mjs
           python3 ../scripts/test-presigned-public-evidence.py
           python3 ../scripts/test-presigned-deployment-public-evidence.py
 

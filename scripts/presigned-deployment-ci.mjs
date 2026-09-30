@@ -23,18 +23,18 @@ export const INPUT_NAMES = ['presigned-v3-signet-test-evidence.tar.gz', 'presign
   'presigned-v3-signet-content-review.json', 'presigned-v3-signet-executable-acceptance.json'];
 export const OUTPUT_NAMES = ['presigned-v3-signet-deployment-acceptance.json', 'presigned-v3-signet-deployment-retention.json'];
 export const PINS = {
-  candidateCommit: 'UNSET_GENUINE_FINAL_CANDIDATE_COMMIT', sourceDigest: 'UNSET_GENUINE_FINAL_SOURCE_DIGEST',
-  draftTag: 'UNSET_PREAPPROVED_FINAL_TEST_ONLY_DRAFT_TAG',
-  imageManifestDigest: 'UNSET_RETAINED_SIGNET_IMAGE_MANIFEST', imageConfigDigest: 'UNSET_RETAINED_SIGNET_IMAGE_CONFIG',
-  offlineUtilityDigest: 'UNSET_EXACT_TESTED_OFFLINE_UTILITY', acceptanceReceiptDigest: 'UNSET_GENUINE_FINAL_ACCEPTANCE_RECEIPT',
-  imageReceiptDigest: 'UNSET_RETAINED_IMAGE_EXECUTION_RECEIPT', imageToolingCommit: 'UNSET_RETAINED_IMAGE_TOOLING_COMMIT',
-  imageWorkflowRunId: 'UNSET_RETAINED_IMAGE_WORKFLOW_RUN', imageScannerSha256: 'UNSET_RETAINED_IMAGE_SCANNER_SHA256',
-  migrationCount: 0,
+  candidateCommit: '94dc1046a29d2b027fc8186baa5932c1b1ab236a', sourceDigest: '83e9001523b7029a0da6e945be5e6258d5f50ed6f4f529cab9e70413cf7127bc',
+  draftTag: 'presigned-v3-test-evidence-83e90015-20260919', draftReleaseId: 392238195,
+  imageManifestDigest: 'sha256:961b777c3b18c706cc855abe159f57414957bd68839650544d0c71c81d93f39f', imageConfigDigest: 'sha256:033df0088f6625356330d64ad8900b99c1d19869f0c0a7fcb72f2a12412b8644',
+  offlineUtilityDigest: '4b135ee6ac1ba1a02b4a5722a00ca703a7f3cbac23b6643467ebe9da4ab6db38', acceptanceReceiptDigest: '238fa6e550d27f3555d2efe944511e9a1e61b9fb6dd57a4402131c3ea065030a',
+  imageReceiptDigest: 'a60084c71aad4bd908ca6da85ae6ce08617c68bce5917699204f0270d83118ca', imageToolingCommit: '749ba3dffd65912b62cdfd13dd0e3d200d5e2fdd',
+  imageWorkflowRunId: '35473374308', imageScannerSha256: '815b768c09085f859266479a3dfb4707273f925e4680760f224cae85e508b1fd',
+  migrationCount: 23,
   inputs: [
-    {name:INPUT_NAMES[0],sha256:'UNSET_EXACT_SIGNET_ARCHIVE_FILE_SHA256',bytes:0},
-    {name:INPUT_NAMES[1],sha256:'UNSET_EXACT_IMAGE_RETENTION_FILE_SHA256',bytes:0},
-    {name:INPUT_NAMES[2],sha256:'UNSET_EXACT_IMAGE_CONTENT_REVIEW_FILE_SHA256',bytes:0},
-    {name:INPUT_NAMES[3],sha256:'UNSET_GENUINE_FINAL_ACCEPTANCE_FILE_SHA256',bytes:0},
+    {name:INPUT_NAMES[0],sha256:'2f333b3dd59e999ead3d5a079f3c27cd806d4a706af0fc6ecddf9f87e54663d4',bytes:258803763},
+    {name:INPUT_NAMES[1],sha256:'d5656834f41f5cd5db6d7549d6fc946b998d6427a86f8bbfa13a9ab2e76cfecf',bytes:884},
+    {name:INPUT_NAMES[2],sha256:'ff188973fd5be3aa9b93b8a8438fd43d00f5c1e17f84d33d79638d694dc971c7',bytes:1364},
+    {name:INPUT_NAMES[3],sha256:'e252e6e9ab444141343d2e0c4e2c5c10b9334cf89a61f23ce097c3e9f1d00315',bytes:2931},
   ],
 };
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -56,6 +56,7 @@ export function validatePins(pins = PINS) {
   for (const key of ['sourceDigest','offlineUtilityDigest','acceptanceReceiptDigest','imageReceiptDigest','imageScannerSha256']) hex(pins[key]);
   for (const key of ['imageManifestDigest','imageConfigDigest']) assert(/^sha256:[0-9a-f]{64}$/u.test(pins[key]));
   assert(new RegExp(`^presigned-v3-test-evidence-${pins.sourceDigest.slice(0,8)}-[0-9]{8}$`, 'u').test(pins.draftTag));
+  assert(Number.isSafeInteger(pins.draftReleaseId) && pins.draftReleaseId > 0);
   assert(typeof pins.imageWorkflowRunId === 'string' && /^[1-9][0-9]*$/u.test(pins.imageWorkflowRunId));
   assert(Number.isSafeInteger(pins.migrationCount) && pins.migrationCount > 0 && pins.migrationCount <= 200);
   assert(Array.isArray(pins.inputs) && pins.inputs.length === INPUT_NAMES.length);
@@ -156,10 +157,13 @@ function github(args) {
   assert(process.env.GH_TOKEN&&process.env.GH_REPO===REPOSITORY);
   return privateCommand('gh',args,{...hostEnvironment(),GH_TOKEN:process.env.GH_TOKEN,GH_REPO:REPOSITORY});
 }
-function checkedDraft() {
-  const api=JSON.parse(github(['api',`repos/${REPOSITORY}/releases/tags/${PINS.draftTag}`]));
+export function checkedDraft(pins=PINS, readGithub=github) {
+  validatePins(pins);
+  // GitHub's tag lookup omits draft releases. Resolve the exact reviewed ID,
+  // then recheck its full identity before every download and upload boundary.
+  const api=JSON.parse(readGithub(['api',`repos/${REPOSITORY}/releases/${pins.draftReleaseId}`]));
   const draft={tagName:api.tag_name,isDraft:api.draft,isPrerelease:api.prerelease,targetCommitish:api.target_commitish,assets:api.assets};
-  assert(draft.tagName===PINS.draftTag&&draft.isDraft===true&&draft.isPrerelease===true&&draft.targetCommitish===PINS.candidateCommit&&Array.isArray(draft.assets));
+  assert(api.id===pins.draftReleaseId&&draft.tagName===pins.draftTag&&draft.isDraft===true&&draft.isPrerelease===true&&draft.targetCommitish===pins.candidateCommit&&Array.isArray(draft.assets));
   return draft;
 }
 async function downloadAsset(asset, item, directory) {

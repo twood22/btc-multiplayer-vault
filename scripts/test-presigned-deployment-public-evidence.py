@@ -254,7 +254,7 @@ class DeploymentEvidenceBoundaryTests(unittest.TestCase):
 import {PINS,INPUT_NAMES,OUTPUT_NAMES,validatePins,validatePublicProof,validateTransport} from MODULE;
 const canonical=v=>v===null||typeof v!=='object'?JSON.stringify(v):Array.isArray(v)?'['+v.map(canonical).join(',')+']':'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';
 const {createHash}=await import('node:crypto');const hash=s=>createHash('sha256').update(s).digest('hex');
-const pins={candidateCommit:'1'.repeat(40),sourceDigest:'2'.repeat(64),draftTag:'presigned-v3-test-evidence-22222222-20260914',
+const pins={candidateCommit:'1'.repeat(40),sourceDigest:'2'.repeat(64),draftTag:'presigned-v3-test-evidence-22222222-20260914',draftReleaseId:392238195,
  imageManifestDigest:'sha256:'+'3'.repeat(64),imageConfigDigest:'sha256:'+'4'.repeat(64),offlineUtilityDigest:'5'.repeat(64),
  acceptanceReceiptDigest:'6'.repeat(64),imageReceiptDigest:'7'.repeat(64),imageToolingCommit:'8'.repeat(40),
  imageWorkflowRunId:'123',imageScannerSha256:'9'.repeat(64),migrationCount:23,
