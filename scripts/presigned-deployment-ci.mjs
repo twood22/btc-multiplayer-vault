@@ -14,9 +14,10 @@ const PROTOCOL = 'presigned-graph-v3';
 const REPOSITORY = 'twood22/btc-multiplayer-vault'; // Exact existing authorized repository; never caller-selected.
 const REF = 'refs/heads/codex/presigned-v3-test-evidence';
 const TOOLING = dirname(fileURLToPath(import.meta.url));
+const STAGES = ['pins','download','input-review','candidate-verification','load-retained-image','actual-isolated-drill','proof-review','draft-upload'];
 let phase = 'pins';
 function progress(stage) {
-  assert(['download','input-review','candidate-verification','load-retained-image','actual-isolated-drill','proof-review','draft-upload'].includes(stage));
+  assert(STAGES.includes(stage)&&stage!=='pins');
   phase=stage;console.log(JSON.stringify({stage,scope:'post-assembly-isolated-deployment-test'}));
 }
 export const INPUT_NAMES = ['presigned-v3-signet-test-evidence.tar.gz', 'presigned-v3-signet-retention.json',
@@ -184,20 +185,136 @@ async function verifyInputFiles(root) {
   const directory=join(root,'downloads');ownedDirectory(directory);assert.deepEqual(readdirSync(directory).sort(),[...INPUT_NAMES].sort());
   for(const item of PINS.inputs)assert.deepEqual(await hashOwned(join(directory,item.name)),{sha256:item.sha256,bytes:item.bytes});
 }
+const DRILL_OUTPUT_LIMIT = 4*1024*1024;
+const DIAGNOSTIC_LIMIT = 65536;
+const EXCEPTION_CLASSES = new Set(['Error','AssertionError','TypeError','RangeError','SyntaxError','ReferenceError','URIError','AbortError','AggregateError']);
+const EXCEPTION_CODES = new Set(['ERR_ASSERTION','ERR_INVALID_ARG_TYPE','ERR_INVALID_ARG_VALUE','ERR_OUT_OF_RANGE',
+  'ERR_MODULE_NOT_FOUND','ERR_PACKAGE_PATH_NOT_EXPORTED','ERR_UNKNOWN_FILE_EXTENSION','ERR_INVALID_URL',
+  'ERR_UNHANDLED_ERROR','ERR_WORKER_OUT_OF_MEMORY','ABORT_ERR','ENOENT','EACCES','EPERM','EADDRINUSE','ECONNREFUSED','ETIMEDOUT','ENOBUFS','ENOMEM']);
+const SIGNALS = new Set(['SIGHUP','SIGINT','SIGQUIT','SIGILL','SIGTRAP','SIGABRT','SIGBUS','SIGFPE','SIGKILL','SIGUSR1','SIGSEGV',
+  'SIGUSR2','SIGPIPE','SIGALRM','SIGTERM','SIGSTKFLT','SIGCHLD','SIGCONT','SIGSTOP','SIGTSTP','SIGTTIN','SIGTTOU',
+  'SIGURG','SIGXCPU','SIGXFSZ','SIGVTALRM','SIGPROF','SIGWINCH','SIGIO','SIGPWR','SIGSYS']);
+// Only public source files in the already-pinned candidate, with their exact
+// maximum line numbers. Neither arbitrary paths nor function names are emitted.
+const CANDIDATE_FRAMES = new Map(Object.entries({
+  'scripts/presigned-deployment-image-acceptance.mts':184,'scripts/lib/presigned-deployment-runtime.ts':444,
+  'scripts/lib/presigned-deployment-plan.ts':202,'scripts/lib/presigned-deployment-evidence.ts':41,
+  'scripts/lib/presigned-image-evidence.ts':72,'scripts/lib/presigned-oci.ts':148,
+  'scripts/lib/presigned-durable-journal.ts':340,'scripts/lib/presigned-lifecycle-lock.ts':28,
+  'scripts/lib/presigned-acceptance-run.ts':529,'scripts/presigned-build-identity.mjs':42,
+  'src/presigned/release.ts':142,'src/presigned/validation.ts':105,'src/database-restore-receipt.ts':260,
+  'web/lib/database-snapshot.ts':225,'web/lib/database-config.ts':63,'web/lib/migrations.ts':28,
+}));
+// Exact public Node22.23.2 module lengths also bound frame numbers; arbitrary
+// large numeric values in untrusted stderr are not diagnostic identifiers.
+const NODE_FRAMES = new Map(Object.entries({'node:internal/process/promises':498,'node:internal/errors':1925,
+  'node:internal/assert/assertion_error':423,'node:internal/modules/esm/module_job':467,
+  'node:internal/modules/esm/loader':1082,'node:internal/modules/run_main':188,
+  'node:internal/child_process':1136,'node:events':1223,'node:fs':3383}));
+const drillFailures = new WeakMap();
+const nativeStackGetter=Object.getOwnPropertyDescriptor(new Error(),'stack')?.get;
+const nativeErrorPrototypes=new Set([Error,assert.AssertionError,TypeError,RangeError,SyntaxError,ReferenceError,URIError,AggregateError].map(type=>type.prototype));
+export function publicExceptionMetadata(text, candidateRoot) {
+  const empty = () => ({class:null,code:null,frames:[]});
+  if(typeof text!=='string'||Buffer.byteLength(text)>DIAGNOSTIC_LIMIT||text.includes('\0')||text.includes('\r')||
+    typeof candidateRoot!=='string'||candidateRoot!==resolve(candidateRoot)||candidateRoot==='/'||/[\x00-\x1f]/u.test(candidateRoot))return empty();
+  const lines=text.split('\n');
+  // Accept one anchored, allowlisted Node exception header only. Its message
+  // and all object properties, SQL, native diagnostics and other text are ignored.
+  const headers=lines.flatMap((line,index)=>{
+    if(line.length>2048)return [];
+    const match=/^([A-Za-z]+)(?: \[([A-Z][A-Z0-9_]{0,63})\])?:/u.exec(line);
+    return match&&EXCEPTION_CLASSES.has(match[1])?[{index,kind:match[1],code:EXCEPTION_CODES.has(match[2])?match[2]:null}]:[];
+  });
+  if(headers.length!==1)return empty();
+  const header=headers[0],frames=[];
+  // Frames must be adjacent stack lines immediately after the header. A
+  // multiline message cannot provide a frame after intervening private text.
+  for(const line of lines.slice(header.index+1)) {
+    if(line.length>2048)break;
+    const match=/^ {4}at (?:[A-Za-z0-9_$.[\]<> ]{1,160} \(([^()]{1,2048})\)|([^()]{1,2048}))$/u.exec(line);
+    if(!match)break;
+    const location=/^(.+):([1-9][0-9]{0,5}):([1-9][0-9]{0,5})$/u.exec(match[1]??match[2]);
+    if(!location)break;
+    const path=location[1],lineNumber=Number(location[2]);
+    const candidate=[...CANDIDATE_FRAMES].find(([file,maximum])=>lineNumber<=maximum&&
+      (path===join(candidateRoot,file)||path===pathToFileURL(join(candidateRoot,file)).href));
+    const file=candidate?.[0]??(NODE_FRAMES.has(path)&&lineNumber<=NODE_FRAMES.get(path)?path:null);
+    if(file&&!frames.some(frame=>frame.file===file&&frame.line===lineNumber)&&frames.length<4)frames.push({file,line:lineNumber});
+  }
+  return {class:header.kind,code:header.code,frames};
+}
+function exceptionFromError(error,candidateRoot) {
+  try {
+    const stack=Object.getOwnPropertyDescriptor(error,'stack');
+    let value=typeof stack?.value==='string'?stack.value:'';
+    // Node 22 uses a built-in lazy stack accessor. Never invoke a caller's
+    // replacement stack/name/message getters or an unknown error prototype.
+    if(!value&&nativeStackGetter&&stack?.get===nativeStackGetter&&nativeErrorPrototypes.has(Object.getPrototypeOf(error))&&
+      ['name','message'].every(key=>!Object.getOwnPropertyDescriptor(error,key)?.get))value=nativeStackGetter.call(error);
+    return publicExceptionMetadata(value,candidateRoot);
+  } catch {return {class:null,code:null,frames:[]};}
+}
+export function validateDrillTerminal(record) {
+  exact(record,['exitCode','signal','spawnErrorObserved','spawnErrorCode','elapsedMs','stdoutBytes','stderrBytes','termination']);
+  assert(record.exitCode===null||Number.isSafeInteger(record.exitCode)&&record.exitCode>=-4095&&record.exitCode<=255);
+  assert(record.signal===null||SIGNALS.has(record.signal));
+  assert(record.signal===null||record.exitCode===null);
+  assert(typeof record.spawnErrorObserved==='boolean'&&(record.spawnErrorCode===null||EXCEPTION_CODES.has(record.spawnErrorCode)));
+  assert(record.spawnErrorObserved||record.spawnErrorCode===null);
+  for(const key of ['elapsedMs','stdoutBytes','stderrBytes'])assert(Number.isSafeInteger(record[key])&&record[key]>=0);
+  assert(Number.isSafeInteger(record.stdoutBytes+record.stderrBytes));
+  assert(['none','timeout','output-limit'].includes(record.termination));
+  return record;
+}
+export function assertDrillCompleted(record) {
+  validateDrillTerminal(record);
+  assert(record.exitCode===0&&record.signal===null&&!record.spawnErrorObserved&&record.termination==='none'&&
+    record.stdoutBytes+record.stderrBytes<=DRILL_OUTPUT_LIMIT,'actual drill did not complete; no proof may be retained');
+}
+export function makeDrillFailure(record,stderr,candidateRoot) {
+  validateDrillTerminal(record);
+  assert.throws(()=>assertDrillCompleted(record),'a successful child cannot be classified as failed');
+  const error=new Error('actual drill did not complete; no proof may be retained');
+  const exception=publicExceptionMetadata(stderr,candidateRoot);
+  exception.frames.forEach(Object.freeze);Object.freeze(exception.frames);Object.freeze(exception);
+  drillFailures.set(error,Object.freeze({childClosed:true,...record,exception}));
+  return error;
+}
+export function publicFailureReport(error,stage,candidateRoot) {
+  assert(STAGES.includes(stage));
+  const drill=drillFailures.get(error);
+  return {passed:false,stage,reason:'post-assembly test evidence refused; private failure details omitted',
+    ...(drill?{drill}:{exception:exceptionFromError(error,candidateRoot)}),
+    releasePublished:false,privateDirectoryUploads:false,productionDeploymentClaimed:false,fundingAuthorized:false};
+}
 async function boundedDrill(root, args) {
   const log=join(root,'drill.stdout.log'),err=join(root,'drill.stderr.log');
   const descriptors=[log,err].map(path=>openSync(path,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600));
+  const started=process.hrtime.bigint();
   const child=spawn(process.execPath,args,{env:{...hostEnvironment(),PRESIGNED_ACCEPTANCE_PROTOCOL:PROTOCOL,PRESIGNED_BUILD_PROTOCOL:PROTOCOL},
     detached:true,stdio:['ignore','pipe','pipe']});
-  let bytes=0,failed=false,killTimer;const chunks=[];
-  const stop=()=>{failed=true;try{process.kill(-child.pid,'SIGTERM');}catch{}
+  let stdoutBytes=0,stderrBytes=0,termination='none',killTimer,diagnosticBytes=0;const chunks=[],diagnosticChunks=[];
+  const stop=reason=>{if(termination==='none')termination=reason;try{process.kill(-child.pid,'SIGTERM');}catch{}
     if(!killTimer)killTimer=setTimeout(()=>{try{process.kill(-child.pid,'SIGKILL');}catch{}},10000);};
-  const timer=setTimeout(stop,45*60*1000);
-  [child.stdout,child.stderr].forEach((stream,index)=>stream.on('data',chunk=>{bytes+=chunk.length;if(bytes>4*1024*1024){stop();return;}
-    writeFileSync(descriptors[index],chunk);if(index===0)chunks.push(chunk);}));
+  const timer=setTimeout(()=>stop('timeout'),45*60*1000);
+  [child.stdout,child.stderr].forEach((stream,index)=>stream.on('data',chunk=>{
+    if(index===0)stdoutBytes+=chunk.length;else stderrBytes+=chunk.length;
+    if(stdoutBytes+stderrBytes>DRILL_OUTPUT_LIMIT){stop('output-limit');return;}
+    writeFileSync(descriptors[index],chunk);
+    if(index===0)chunks.push(chunk);
+    else if(diagnosticBytes<DIAGNOSTIC_LIMIT){const retained=chunk.subarray(0,DIAGNOSTIC_LIMIT-diagnosticBytes);diagnosticBytes+=retained.length;diagnosticChunks.push(retained);}
+  }));
   try {
-    const code=await new Promise((done,fail)=>{child.once('error',fail);child.once('close',done);});
-    assert(code===0&&!failed&&bytes<=4*1024*1024,'actual drill did not complete; no proof may be retained');
+    let spawnErrorObserved=false,spawnErrorCode=null;
+    const terminal=await new Promise(done=>{
+      child.once('error',error=>{spawnErrorObserved=true;const code=Object.getOwnPropertyDescriptor(error,'code')?.value;
+        spawnErrorCode=EXCEPTION_CODES.has(code)?code:null;});
+      child.once('close',(exitCode,signal)=>done({exitCode,signal}));
+    });
+    const record={...terminal,spawnErrorObserved,spawnErrorCode,elapsedMs:Number((process.hrtime.bigint()-started)/1000000n),
+      stdoutBytes,stderrBytes,termination};
+    try {assertDrillCompleted(record);}catch {throw makeDrillFailure(record,Buffer.concat(diagnosticChunks).toString(),process.cwd());}
     return Buffer.concat(chunks).toString();
   } finally {clearTimeout(timer);clearTimeout(killTimer);for(const fd of descriptors){fsyncSync(fd);closeSync(fd);}}
 }
@@ -280,8 +397,7 @@ async function main() {
     productionDeploymentClaimed:false,fundingAuthorized:false}));
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href) {
-  try {await main();} catch {
-    console.error(JSON.stringify({passed:false,stage:phase,reason:'post-assembly test evidence refused; unset pins or private failure details omitted',
-      releasePublished:false,privateDirectoryUploads:false,productionDeploymentClaimed:false,fundingAuthorized:false}));process.exitCode=1;
+  try {await main();} catch(error) {
+    console.error(JSON.stringify(publicFailureReport(error,phase,process.cwd())));process.exitCode=1;
   }
 }
